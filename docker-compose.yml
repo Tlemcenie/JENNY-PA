@@ -1,0 +1,115 @@
+# ──────────────────────────────────────────────
+# Jenny — Docker Compose (développement local)
+# Usage : make up  ou  docker compose up -d
+# ──────────────────────────────────────────────
+
+services:
+  # ── PostgreSQL + pgvector ──
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: jenny-postgres
+    environment:
+      POSTGRES_USER: jenny
+      POSTGRES_PASSWORD: jenny_secret
+      POSTGRES_DB: jenny
+    ports:
+      - "5432:5432"
+    volumes:
+      - jenny_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jenny"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ──
+  redis:
+    image: redis:7-alpine
+    container_name: jenny-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - jenny_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Mailhog (capture des emails sortants en dev) ──
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: jenny-mailhog
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # UI
+
+  # ── API FastAPI ──
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    container_name: jenny-api
+    env_file:
+      - .env
+    environment:
+      JENNY_DB_HOST: postgres
+      JENNY_DB_PORT: "5432"
+      JENNY_DATABASE_URL: postgresql+asyncpg://jenny:jenny_secret@postgres:5432/jenny
+      JENNY_REDIS_URL: redis://redis:6379/0
+      JENNY_AUTO_SEED: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./migrations:/app/migrations
+      - ./alembic.ini:/app/alembic.ini
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Worker ARQ ──
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    container_name: jenny-worker
+    env_file:
+      - .env
+    environment:
+      JENNY_DB_HOST: postgres
+      JENNY_DB_PORT: "5432"
+      JENNY_DATABASE_URL: postgresql+asyncpg://jenny:jenny_secret@postgres:5432/jenny
+      JENNY_REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ── MLflow Tracking Server ──
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.19.0
+    container_name: jenny-mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:///mlflow.db
+      --default-artifact-root /mlartifacts
+    ports:
+      - "5000:5000"
+    volumes:
+      - jenny_mlflow:/mlartifacts
+
+volumes:
+  jenny_pgdata:
+  jenny_redis:
+  jenny_mlflow:

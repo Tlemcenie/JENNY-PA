@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "jenny-frontend",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd frontend && exec npm run dev"],
+      "autoPort": true,
+      "port": 3000
+    }
+  ]
+}

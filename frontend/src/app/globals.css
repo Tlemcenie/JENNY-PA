@@ -1,0 +1,243 @@
+@import "tailwindcss";
+
+/* Active la variante `dark:` à partir d'une classe .dark sur <html> */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  /* Police éditoriale (titres hero) + mono (badges/labels) — DA Jenny Front */
+  --font-display: "Instrument Serif", "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* JENNY Color Palette */
+  --color-jenny-coral: #FF7F6A;
+  --color-jenny-coral-light: #FCBFB7;
+  --color-jenny-coral-dark: #E5674F;
+  --color-jenny-coral-tint: #FFF1ED;
+  --color-jenny-slate: #7284A8;
+  --color-jenny-bg: #FAFAFA;
+  --color-jenny-bg-tint: #F5F4F0;
+  --color-jenny-mint: #E8F3EE;
+  --color-jenny-mint-dark: #C5E3D4;
+  /* Nuit profonde — surfaces sombres (landing, produit) */
+  --color-jenny-night: #0E0B14;
+  --color-jenny-night-soft: #171320;
+  --color-jenny-night-card: #1C1827;
+  --color-jenny-text: #1A1D26;
+  --color-jenny-text-secondary: #6B7280;
+  --color-jenny-sidebar: #111318;
+  --color-jenny-sidebar-active: #1E2130;
+  --color-jenny-surface: #FFFFFF;
+  --color-jenny-divider: #E5E7EB;
+  --color-jenny-success: #10B981;
+  --color-jenny-error: #EF4444;
+  --color-jenny-warning: #F59E0B;
+  --color-jenny-whatsapp: #25D366;
+  --color-jenny-instagram: #E4405F;
+  --color-jenny-email: #3B82F6;
+  --color-jenny-twitter: #1DA1F2;
+}
+
+/* ── Thème sombre : on ne réécrit que les variables, tout le reste suit ── */
+.dark {
+  --color-jenny-bg: #0E1014;
+  --color-jenny-surface: #181B21;
+  --color-jenny-text: #ECEDEF;
+  --color-jenny-text-secondary: #9BA1AC;
+  --color-jenny-sidebar: #090B0E;
+  --color-jenny-sidebar-active: #181C28;
+  --color-jenny-divider: #282C34;
+  --color-jenny-mint: #15241D;
+  --color-jenny-mint-dark: #25453686;
+  /* coral, success, error, warning et les couleurs de canaux restent vives */
+}
+
+/* Transition douce lors du basculement clair/sombre */
+html {
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #3A3F4A;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #4B515E;
+}
+.dark * {
+  scrollbar-color: #3A3F4A transparent;
+}
+
+/* Base resets & element defaults live in @layer base so Tailwind utilities
+   (in @layer utilities) always win over them. An unlayered reset here would
+   override every padding/margin/max-width utility across the app. */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    height: 100%;
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* Densité d'affichage : « compact » met à l'échelle toute l'UI (rem). */
+  html[data-density="compact"] {
+    font-size: 14.5px;
+  }
+
+  body {
+    background: var(--color-jenny-bg);
+    color: var(--color-jenny-text);
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    letter-spacing: -0.011em;
+    height: 100%;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  /* Better text rendering */
+  h1, h2, h3, h4, h5, h6 {
+    letter-spacing: -0.025em;
+    line-height: 1.2;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #D1D5DB;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9CA3AF;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #D1D5DB transparent;
+}
+
+/* Focus styles */
+:focus-visible {
+  outline: 2px solid var(--color-jenny-coral);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Selection */
+::selection {
+  background: var(--color-jenny-coral-light);
+  color: var(--color-jenny-text);
+}
+
+/* Animations */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.25s ease-out both;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.35s ease-out both;
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, #F3F4F6 25%, #FAFAFA 50%, #F3F4F6 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* ── Effets « premium » : aurora, float, texte dégradé, glow ── */
+
+@keyframes aurora {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.9; }
+  33%      { transform: translate(4%, -5%) scale(1.12); opacity: 1; }
+  66%      { transform: translate(-4%, 4%) scale(0.94); opacity: 0.8; }
+}
+.animate-aurora { animation: aurora 20s ease-in-out infinite; }
+.animate-aurora-slow { animation: aurora 28s ease-in-out infinite reverse; }
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-7px); }
+}
+.animate-float { animation: float 6s ease-in-out infinite; }
+
+@keyframes gradient-pan {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+
+/* Texte en dégradé coral animé (titres d'accroche) */
+.text-gradient-coral {
+  background: linear-gradient(120deg, #FF9580 0%, #FF7F6A 40%, #E5674F 70%, #FF7F6A 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: gradient-pan 8s ease infinite;
+}
+
+/* Dégradé de marque pour le badge « J » et les accents */
+.bg-brand-gradient {
+  background: linear-gradient(140deg, #FF9883 0%, #FF7F6A 48%, #E5674F 100%);
+}
+
+/* Halo doux derrière un élément (cartes, CTA) */
+.glow-coral {
+  box-shadow: 0 8px 30px -8px rgba(255, 127, 106, 0.35);
+}
+
+/* Surface verre (overlays sombres) */
+.glass {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Respecte la préférence « réduire les animations » */
+@media (prefers-reduced-motion: reduce) {
+  .animate-aurora, .animate-aurora-slow, .animate-float, .text-gradient-coral {
+    animation: none;
+  }
+}
+
+/* Responsive font sizes */
+@media (max-width: 640px) {
+  html {
+    font-size: 15px;
+  }
+}
