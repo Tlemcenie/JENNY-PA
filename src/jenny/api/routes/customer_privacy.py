@@ -10,12 +10,12 @@ Tout est scopé au business du JWT (jamais un id arbitraire), et journalisé (au
 from __future__ import annotations
 
 import json
-from uuid import UUID
+from uuid import UUID  # noqa: TC003
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from jenny.api.dependencies import CurrentUser, DbSession
+from jenny.api.dependencies import CurrentUser, DbSession  # noqa: TC001
 from jenny.core.logging import get_logger
 from jenny.services.audit_service import record_audit
 from jenny.services.privacy_service import anonymize_customer, export_customer_data

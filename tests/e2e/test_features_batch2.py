@@ -27,7 +27,7 @@ _SEQ = {"n": 0}
 
 
 @compiles(ARRAY, "sqlite")
-def _array_as_json_sqlite(element, compiler, **kw):  # noqa: ANN001, ANN201
+def _array_as_json_sqlite(element, compiler, **kw):
     return "JSON"
 
 
@@ -392,7 +392,7 @@ class TestApiKeys:
     async def test_create_list_revoke(
         self, client: AsyncClient, db_tables: None
     ) -> None:
-        headers, bid = await _auth(client, "keys@x.com")
+        headers, _bid = await _auth(client, "keys@x.com")
 
         created = await client.post(
             "/api/v1/api-keys",
@@ -426,7 +426,7 @@ class TestSlaRules:
     async def test_sla_rules_roundtrip(
         self, client: AsyncClient, db_tables: None
     ) -> None:
-        headers, bid = await _auth(client, "sla@x.com")
+        headers, _bid = await _auth(client, "sla@x.com")
         r = await client.patch(
             "/api/v1/business/me",
             json={"sla_rules": {"priority": {"high": 5}, "channel": {"whatsapp": 10}}},

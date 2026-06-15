@@ -4,7 +4,7 @@ capture du nom (#85), client de retour (#86)."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
@@ -155,6 +155,55 @@ class TestNameCaptureFlow:
         async with async_session_factory() as s:
             cust = await s.get(Customer, cid)
         assert cust.full_name == "Marie"
+
+
+class TestRobustBooking:
+    """Robustesse découverte en live (LLM+ML+PG réels) : la réservation ne doit
+    dépendre ni du modèle ML (fallback catalogue) ni d'un customer_id valide."""
+
+    @pytest.mark.asyncio
+    async def test_books_without_ml_via_catalog(self, db_tables: None) -> None:
+        # ML désactivé en test → pas de NER. Le fallback catalogue capte « coupe ».
+        from jenny.engine.conversation_engine import EngineRequest
+        from jenny.engine.factory import build_engine
+        from jenny.engine.state_manager import StateManager
+
+        biz = await _seed()
+        async with async_session_factory() as s, s.begin():
+            cust = Customer(business_id=biz.id, full_name="Léa")
+            s.add(cust)
+            await s.flush()
+            cid = cust.id
+
+        sm = StateManager()
+        eng = build_engine(state_manager=sm)
+        eng.response_generator = None
+        r = await eng.process(EngineRequest(
+            conversation_id=uuid4(), business_id=biz.id, customer_id=cid,
+            message_text="je veux réserver une coupe demain à 14h", channel="chat",
+            catalog_services=["Coupe", "Couleur"],
+        ))
+        assert (r.action_result or {}).get("success") is True
+        async with async_session_factory() as s:
+            appt = (
+                await s.execute(select(Appointment).where(Appointment.business_id == biz.id))
+            ).scalar_one()
+        assert appt.title == "Coupe" and str(appt.customer_id) == str(cid)
+
+    @pytest.mark.asyncio
+    async def test_unknown_customer_books_anonymous(self, db_tables: None) -> None:
+        # customer_id inexistant → réservation sans rattachement plutôt que crash FK.
+        biz = await _seed()
+        res = await BookAppointmentDBAction().execute({
+            "business_id": str(biz.id), "customer_id": str(uuid4()),
+            "service": "Coupe", "date": "demain", "time": "10h",
+        })
+        assert res["success"] is True
+        async with async_session_factory() as s:
+            appt = (
+                await s.execute(select(Appointment).where(Appointment.business_id == biz.id))
+            ).scalar_one()
+        assert appt.customer_id is None
 
 
 class TestReturningCustomerContext:

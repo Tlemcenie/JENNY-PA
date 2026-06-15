@@ -17,7 +17,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
-from jenny.api.dependencies import CurrentUser, DbSession
+from jenny.api.dependencies import CurrentUser, DbSession  # noqa: TC001
 from jenny.core.logging import get_logger
 from jenny.domain.models.appointment import Appointment
 from jenny.domain.models.business import Business

@@ -88,3 +88,9 @@ var/pgdata/
 var/emails/
 var/eval/
 *.tsbuildinfo
+
+# Bases SQLite de test (éphémères)
+test.db
+*.db-journal
+*.sqlite
+*.sqlite3

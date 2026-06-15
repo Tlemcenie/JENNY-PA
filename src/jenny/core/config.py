@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     email_preview_dir: str = "var/emails"
     # URL publique du front (liens dans les emails, ex. confirmation).
     app_base_url: str = "http://localhost:3000"
+    # Origines CORS autorisées : "*" en dev ; en prod, l'URL du frontend
+    # (plusieurs séparées par des virgules), ce qui active aussi les credentials.
+    cors_origins: str = "*"
     # Durée de validité du code de confirmation email (minutes).
     email_verification_ttl_minutes: int = 15
 

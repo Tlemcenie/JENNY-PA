@@ -41,7 +41,11 @@ _META_LEAK_RE = re.compile(
     # Aveux d'ignorance directs : la persona « membre de l'équipe » ne dit jamais
     # « je ne sais pas » — elle propose de vérifier (le prompt gère la déflexion).
     r"je ne sais pas|j['’]ignore|je l['’]ignore|aucune id[ée]e|je n['’]en sais rien|"  # noqa: RUF001
-    r"je ne peux pas (?:vous )?(?:dire|r[ée]pondre|aider)|je ne suis pas (?:s[ûu]re?|certaine?)",
+    r"je ne peux pas (?:vous )?(?:dire|r[ée]pondre|aider)|je ne suis pas (?:s[ûu]re?|certaine?)|"
+    # Non-réponse explicite (« je ne fournis pas d'informations sur… ») → à déflechir.
+    # NB : on NE strippe PAS « en tant que » ici (la phrase contient souvent une info
+    # utile, ex. un prix) — c'est traité côté prompt à la place.
+    r"je\s+ne\s+fournis\s+pas\s+(?:d['’]|de\s+)?info",  # noqa: RUF001
     re.IGNORECASE,
 )
 _IDENTITY_FALLBACK = (

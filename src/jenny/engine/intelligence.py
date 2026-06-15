@@ -235,7 +235,10 @@ _DEFLECTION_RE = re.compile(
     r"je\s+v[ée]rifie|je\s+me\s+renseigne|je\s+reviens\s+vers\s+(?:vous|toi)|"
     r"v[ée]rifier\s+aupr[èe]s|mettre\s+en\s+relation|je\s+vous\s+recontacte|"
     r"transmets?\s+(?:votre|ta|la)\s+(?:demande|question)|on\s+revient\s+vers\s+(?:vous|toi)|"
-    r"l['’]?[ée]quipe\s+(?:vous|te|pourra|reviendra|saura)|je\s+me\s+rapproche",  # noqa: RUF001
+    r"l['’]?[ée]quipe\s+(?:vous|te|pourra|reviendra|saura)|je\s+me\s+rapproche|"  # noqa: RUF001
+    # Renvoyer vers l'équipe / son numéro est aussi une déflexion (= je n'ai pas l'info).
+    r"contact\w*\s+(?:l['’]\s*|la\s+|notre\s+|directement\s+)*[ée]quipe|"  # noqa: RUF001
+    r"(?:leur|son)\s+num[ée]ro|num[ée]ro\s+de\s+t[ée]l[ée]phone",
     re.I,
 )
 

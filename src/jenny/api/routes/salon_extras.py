@@ -9,14 +9,14 @@ Tout est scopé au business du JWT.
 
 from __future__ import annotations
 
-from datetime import date
-from uuid import UUID
+from datetime import date  # noqa: TC003
+from uuid import UUID  # noqa: TC003
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from jenny.api.dependencies import CurrentUser, DbSession
+from jenny.api.dependencies import CurrentUser, DbSession  # noqa: TC001
 from jenny.core.logging import get_logger
 from jenny.domain.models.business import Business
 from jenny.domain.models.business_closure import BusinessClosure

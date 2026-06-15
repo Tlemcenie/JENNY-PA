@@ -16,13 +16,13 @@ images:
   - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/frontend:latest"
 
 steps:
-  # ── API ──
+  # ── API (image PROD optimisée : torch CPU, $PORT, non-root) ──
   - id: build-api
     name: gcr.io/cloud-builders/docker
     args:
       - build
       - -f
-      - docker/api.Dockerfile
+      - docker/api.prod.Dockerfile
       - -t
       - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/api:latest"
       - .

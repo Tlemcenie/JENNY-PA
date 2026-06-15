@@ -179,7 +179,8 @@ async def _run_engine_chat(
 
     persona, business_name = await load_business_persona(db, body.business_id)
     customer_facts = await load_customer_context(db, body.business_id, body.customer_id)
-    catalog = format_catalog(await load_active_prestations(db, body.business_id))
+    prestations = await load_active_prestations(db, body.business_id)
+    catalog = format_catalog(prestations)
 
     result: EngineResponse = await engine.process(
         EngineRequest(
@@ -193,6 +194,7 @@ async def _run_engine_chat(
             business_name=business_name,
             customer_facts=customer_facts,
             catalog=catalog or None,
+            catalog_services=[p.name for p in prestations] or None,
         )
     )
     await _persist_chat(db, body, result)

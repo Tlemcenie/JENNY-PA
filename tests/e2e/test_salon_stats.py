@@ -15,7 +15,6 @@ from jenny.api.main import create_app
 from jenny.db.base import Base
 from jenny.db.session import async_session_factory, engine
 from jenny.domain.models.appointment import Appointment
-from jenny.domain.models.business import Business
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.prestation import Prestation
 from jenny.domain.models.waitlist_entry import WaitlistEntry
@@ -110,7 +109,7 @@ async def test_stats_aggregates(client: AsyncClient, db_tables: None) -> None:
     assert d["cancelled"] == 1
     assert d["clients_total"] == 2 and d["loyal_clients"] == 1 and d["new_clients"] == 1
     assert d["top_prestations"][0]["name"] == "Coupe"
-    assert d["revenue_upcoming_eur"] == 80.0  # 2 RDV Coupe à venir × 40€
+    assert d["revenue_upcoming_eur"] == 80.0  # 2 RDV Coupe à venir x 40€
     assert d["deposits"]["paid"] == 1 and d["deposits"]["pending"] == 1
     assert d["deposits"]["collected_eur"] == 12.0
     assert d["waitlist"]["waiting"] == 1

@@ -18,10 +18,13 @@ async def test_health_check(async_client: AsyncClient) -> None:
 async def test_readiness_check(async_client: AsyncClient) -> None:
     """GET /ready retourne les infos de readiness."""
     response = await async_client.get("/ready")
-    assert response.status_code == 200
+    # 200 si prêt, 503 si une dépendance critique (DB/Redis) est indisponible
+    # (probe de readiness Cloud Run/K8s). En CI sans DB/Redis joignables → 503.
+    assert response.status_code in (200, 503)
     data = response.json()
-    # "ready" si DB+Redis dispo, "degraded" sinon (normal en local sans Docker)
     assert data["status"] in ("ready", "degraded")
+    # Le code HTTP doit être cohérent avec l'état : 200 ⟺ ready, 503 ⟺ degraded.
+    assert (response.status_code == 200) == (data["status"] == "ready")
     assert "checks" in data
     assert "database" in data["checks"]
     assert "redis" in data["checks"]

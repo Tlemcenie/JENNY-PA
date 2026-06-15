@@ -125,12 +125,17 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Pas de allow_credentials=True avec origin "*" : les navigateurs bloquent (Failed to fetch).
-    # L'app Flutter envoie le JWT en header Authorization, pas en cookie (credentials inutiles).
+    # CORS configurable (JENNY_CORS_ORIGINS) : "*" en dev. En prod, on renseigne
+    # l'origine du frontend (ex. https://app.salon.fr) → on peut alors activer les
+    # credentials. Avec "*", credentials DOIT rester False (les navigateurs bloquent).
+    _cors_raw = (get_settings().cors_origins or "*").strip()
+    _cors_origins = (
+        ["*"] if _cors_raw == "*" else [o.strip() for o in _cors_raw.split(",") if o.strip()]
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
+        allow_origins=_cors_origins,
+        allow_credentials=_cors_origins != ["*"],
         allow_methods=["*"],
         allow_headers=["*"],
     )

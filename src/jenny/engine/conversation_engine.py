@@ -54,6 +54,9 @@ _INTERRUPTING_INTENTS = frozenset({"escalation", "complaint"})
 _CONTINUABLE_INTENTS = frozenset(
     {"general", "greeting", "small_talk", "planning", "faq", "appointment", "closing"}
 )
+# Demandes d'information à honorer même au milieu d'une prise de RDV (on répond au
+# prix/devis/paiement plutôt que de happer le message dans le slot-filling).
+_INFO_REQUEST_INTENTS = frozenset({"pricing", "quote", "payment", "payment_question"})
 _CLOSING_RE = re.compile(
     r"\b(merci|au\s*revoir|bonne\s+journ[ée]e|[àa]\s+bient[ôo]t|[àa]\s+plus|"
     r"au\s+plaisir|bye|ciao|c['’]est\s+(?:bon|tout|parfait|gentil))\b",  # noqa: RUF001
@@ -78,6 +81,17 @@ _AFFIRM_RE = re.compile(
     re.I,
 )
 
+# Signaux de PRISE de RDV non ambigus. Le petit modèle d'intention (qwen-class)
+# classe souvent mal ces tournures FR (« réserver une coupe demain » → greeting
+# 0.96 !), donc on force « appointment » par règle haute précision, quelle que soit
+# la confiance ML. La gestion (annuler/déplacer) reste prioritaire et bascule
+# ensuite vers manage_appointment (cf. detect_appointment_mgmt).
+_STRONG_APPOINTMENT_RE = re.compile(
+    r"\b(rendez[\s-]?vous|rdv|r[ée]serv\w+|prendre\s+(?:un\s+)?(?:rendez|rdv|cr[ée]neau)|"
+    r"booker|je\s+veux\s+(?:un\s+)?(?:rdv|rendez))\b",
+    re.I,
+)
+
 
 # Capture du nom : un message qui ressemble à un nom propre (pas une commande,
 # pas une question, pas un numéro) quand Jenny vient de demander « c'est à quel nom ? ».
@@ -93,6 +107,28 @@ def looks_like_name(text: str) -> bool:
         return False
     words = t.split()
     return 1 <= len(words) <= 3 and bool(_NAME_RE.match(t))
+
+
+def _norm_txt(s: str) -> str:
+    """Minuscule sans accents (pour matcher une prestation dans un message)."""
+    import unicodedata
+
+    t = unicodedata.normalize("NFKD", (s or "").lower())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def match_catalog_services(message: str, services: list[str]) -> str | None:
+    """Repère les prestations du catalogue citées dans le message (NER-indépendant).
+
+    « je veux une coupe et une couleur » + [Coupe, Couleur] → « Coupe et Couleur »
+    (l'action de réservation re-découpe sur « et » pour gérer le multi-prestations).
+    Renvoie None si rien trouvé.
+    """
+    if not message or not services:
+        return None
+    m = _norm_txt(message)
+    found = [svc for svc in services if (n := _norm_txt(svc)) and len(n) > 2 and n in m]
+    return " et ".join(found) if found else None
 
 
 def detect_appointment_mgmt(message: str, awaiting_confirmation: bool) -> str | None:
@@ -152,6 +188,9 @@ class EngineRequest:
     customer_facts: list[str] | None = None
     # Catalogue de prestations formaté (prix/durée réels) — pour des réponses fondées.
     catalog: str | None = None
+    # Noms des prestations (liste) — pour capter la prestation dans le message même
+    # si le modèle NER est indisponible (réservation robuste, sans dépendre du ML).
+    catalog_services: list[str] | None = None
 
 
 @dataclass
@@ -239,6 +278,24 @@ class ConversationEngine:
 
         # ── 2. Détecter l'intention (multi-label) ──
         intent_result = await self._detect_intent(request.message_text, state)
+
+        # Override haute précision : un signal de RDV explicite (« rendez-vous »,
+        # « réserver », « rdv ») force « appointment » même si le petit modèle est
+        # (sur)confiant sur autre chose. Indispensable pour un app coiffeur : la
+        # prise de RDV est le cœur du métier et le modèle s'y trompe souvent.
+        if _STRONG_APPOINTMENT_RE.search(request.message_text or "") and intent_result[
+            "intent"
+        ] not in ("appointment", "manage_appointment", "escalation", "complaint"):
+            logger.info(
+                "engine.intent.appointment_override", was=intent_result["intent"]
+            )
+            intent_result = {
+                **intent_result,
+                "intent": "appointment",
+                "confidence": max(intent_result.get("confidence", 0.0), 0.85),
+                "needs_clarification": False,
+            }
+
         intent = intent_result["intent"]
         intent_confidence = intent_result["confidence"]
         detected_intents = intent_result.get("detected_intents", [])
@@ -259,7 +316,12 @@ class ConversationEngine:
             provides_appt_info = state.pending_intent == "appointment" and bool(
                 parse_fr_date(msg_l) or parse_fr_time(msg_l)
             )
-            if not hard_interrupt and (
+            # Une question d'INFO (prix, devis, paiement) au milieu d'une prise de RDV
+            # mérite une vraie réponse : on ne la « happe » pas dans le slot-filling
+            # (sauf si elle apporte aussi un jour/une heure). La prise de RDV reste
+            # en attente (pending_intent) et pourra reprendre au message suivant.
+            info_interrupt = intent in _INFO_REQUEST_INTENTS and not provides_appt_info
+            if not hard_interrupt and not info_interrupt and (
                 provides_appt_info
                 or intent_confidence < 0.85
                 or intent in _CONTINUABLE_INTENTS
@@ -335,6 +397,14 @@ class ConversationEngine:
                 state.set_slot("date", msg, entity_type="DATE")
             if parse_fr_time(msg):
                 state.set_slot("time", msg, entity_type="TIME")
+            # Fallback prestation : si le NER n'a pas rempli « service », on cherche
+            # la prestation dans le catalogue du salon. La réservation ne dépend
+            # alors PLUS du modèle ML (robuste même si le NER est indisponible).
+            svc_slot = state.slots.get("service")
+            if not (svc_slot and svc_slot.filled) and request.catalog_services:
+                matched_svc = match_catalog_services(msg, request.catalog_services)
+                if matched_svc:
+                    state.set_slot("service", matched_svc, entity_type="SERVICE")
 
         # ── 4. Router vers l'agent (exécute l'action métier) ──
         state.phase = ConversationPhase.PROCESSING

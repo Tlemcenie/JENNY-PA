@@ -154,18 +154,32 @@ class BookAppointmentDBAction(BaseAction):
                     "message": "Ce créneau est déjà pris.",
                 }
 
-            customer_id = params.get("customer_id")
+            # Résolution SÛRE du client : un customer_id qui ne correspond à aucun
+            # client réel (id éphémère du chat, etc.) ne doit JAMAIS faire échouer la
+            # réservation sur une violation de clé étrangère (Postgres l'applique,
+            # SQLite non — d'où le bug invisible en test). Si le client n'existe pas,
+            # on réserve sans le rattacher plutôt que de planter.
+            raw_customer_id = params.get("customer_id")
+            customer_id: UUID | None = None
+            if raw_customer_id:
+                try:
+                    cand = UUID(str(raw_customer_id))
+                    if await db.get(Customer, cand) is not None:
+                        customer_id = cand
+                    else:
+                        logger.warning("action.book_db.customer_missing", customer_id=str(cand))
+                except (ValueError, TypeError):
+                    pass
 
             # ── Anti-double-réservation : le client a-t-il déjà un RDV à venir ? ──
             also_has = None
             if customer_id and not params.get("allow_double"):
-                cuid = UUID(str(customer_id))
                 existing = (
                     await db.execute(
                         select(Appointment)
                         .where(
                             Appointment.business_id == bid,
-                            Appointment.customer_id == cuid,
+                            Appointment.customer_id == customer_id,
                             Appointment.status.notin_(["cancelled", "blocked"]),
                             Appointment.start_at >= datetime.now(UTC),
                         )
@@ -194,7 +208,7 @@ class BookAppointmentDBAction(BaseAction):
 
             appt = Appointment(
                 business_id=bid,
-                customer_id=UUID(str(customer_id)) if customer_id else None,
+                customer_id=customer_id,
                 title=f"{service_name}",
                 description=f"Réservé via Jenny ({params['date']} {params.get('time', '')})".strip(),
                 channel="chat",
@@ -219,7 +233,7 @@ class BookAppointmentDBAction(BaseAction):
                     await db.execute(
                         select(func.count(Appointment.id)).where(
                             Appointment.business_id == bid,
-                            Appointment.customer_id == UUID(str(customer_id)),
+                            Appointment.customer_id == customer_id,
                             Appointment.status == "no_show",
                         )
                     )
@@ -257,7 +271,7 @@ class BookAppointmentDBAction(BaseAction):
             # ── Nom manquant (ex. WhatsApp sans nom de profil) → on le demandera ──
             ask_name = False
             if customer_id:
-                cust = await db.get(Customer, UUID(str(customer_id)))
+                cust = await db.get(Customer, customer_id)
                 if cust is not None and not (cust.full_name or "").strip():
                     ask_name = True
 

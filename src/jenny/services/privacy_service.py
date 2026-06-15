@@ -54,11 +54,7 @@ def _row(obj: object, fields: tuple[str, ...]) -> dict:
     out: dict[str, Any] = {}
     for f in fields:
         val = getattr(obj, f, None)
-        if isinstance(val, UUID):
-            val = str(val)
-        else:
-            val = _iso(val)
-        out[f] = val
+        out[f] = str(val) if isinstance(val, UUID) else _iso(val)
     return out
 
 

@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
@@ -74,7 +75,7 @@ async def health_check() -> dict[str, str]:
 
 
 @router.get("/ready")
-async def readiness_check() -> dict[str, object]:
+async def readiness_check() -> JSONResponse:
     """Vérifie que toutes les dépendances sont prêtes (readiness probe).
 
     Effectue des checks réels sur :
@@ -102,9 +103,14 @@ async def readiness_check() -> dict[str, object]:
     )
     all_ok = critical_ok
 
-    return {
-        "status": "ready" if all_ok else "degraded",
-        "env": settings.env,
-        "timestamp": datetime.now(UTC).isoformat(),
-        "checks": checks,
-    }
+    # IMPORTANT pour Cloud Run / K8s : une readiness « degraded » doit renvoyer un
+    # code NON-200 (503) pour que l'orchestrateur cesse d'y router le trafic.
+    return JSONResponse(
+        status_code=200 if all_ok else 503,
+        content={
+            "status": "ready" if all_ok else "degraded",
+            "env": settings.env,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "checks": checks,
+        },
+    )

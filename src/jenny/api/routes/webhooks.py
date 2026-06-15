@@ -105,11 +105,12 @@ async def _engine_context(business_id, customer_id):
     try:
         async with async_session_factory() as session:
             facts = await load_customer_context(session, business_id, customer_id)
-            catalog = format_catalog(await load_active_prestations(session, business_id))
-        return facts, (catalog or None)
+            prestations = await load_active_prestations(session, business_id)
+            catalog = format_catalog(prestations)
+        return facts, (catalog or None), ([p.name for p in prestations] or None)
     except Exception as e:  # pragma: no cover - best-effort
         logger.warning("webhook.engine_context_failed", error=str(e))
-        return None, None
+        return None, None, None
 
 
 async def _persist_engine_signals_safe(
@@ -201,7 +202,7 @@ async def _ingest_and_reply(
         message_in.business_id, conversation_id=conv_id, kind="processing", channel=channel
     )
     persona, business_name = await load_business_persona_fresh(message_in.business_id)
-    facts, catalog = await _engine_context(message_in.business_id, customer_id)
+    facts, catalog, services = await _engine_context(message_in.business_id, customer_id)
     try:
         out = await _get_engine().process(
             EngineRequest(
@@ -214,6 +215,7 @@ async def _ingest_and_reply(
                 business_name=business_name,
                 customer_facts=facts,
                 catalog=catalog,
+                catalog_services=services,
             )
         )
         sent = await send_reply(reply_recipient, out.response_text)
@@ -411,7 +413,7 @@ async def _whatsapp_ingest_and_reply(
     )
     engine = _get_engine()
     persona, business_name = await load_business_persona_fresh(business_id)
-    facts, catalog = await _engine_context(business_id, customer_id)
+    facts, catalog, services = await _engine_context(business_id, customer_id)
     req = EngineRequest(
         conversation_id=conv_id,
         business_id=business_id,
@@ -422,6 +424,7 @@ async def _whatsapp_ingest_and_reply(
         business_name=business_name,
         customer_facts=facts,
         catalog=catalog,
+        catalog_services=services,
     )
     try:
         out = await engine.process(req)
@@ -498,7 +501,7 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
     )
     engine = _get_engine()
     persona, business_name = await load_business_persona_fresh(business_id)
-    facts, catalog = await _engine_context(business_id, customer_id)
+    facts, catalog, services = await _engine_context(business_id, customer_id)
     req = EngineRequest(
         conversation_id=conv_id,
         business_id=business_id,
@@ -509,6 +512,7 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
         business_name=business_name,
         customer_facts=facts,
         catalog=catalog,
+        catalog_services=services,
     )
     try:
         out = await engine.process(req)

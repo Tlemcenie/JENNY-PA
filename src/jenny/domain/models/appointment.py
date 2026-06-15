@@ -8,7 +8,7 @@ et peut être créé par l'agent de planification de Jenny ou manuellement.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,6 +17,16 @@ from jenny.db.base import Base, TimestampMixin
 
 class Appointment(Base, TimestampMixin):
     __tablename__ = "appointments"
+
+    # Index composites pour les requêtes chaudes (à l'échelle = beaucoup de RDV) :
+    # disponibilités/agenda/stats/rappels filtrent (business_id + plage start_at) ;
+    # historique client + anti-doublon filtrent (business_id + customer_id) ;
+    # stats/no-show filtrent (business_id + status).
+    __table_args__ = (
+        Index("ix_appointments_business_start", "business_id", "start_at"),
+        Index("ix_appointments_business_customer", "business_id", "customer_id"),
+        Index("ix_appointments_business_status", "business_id", "status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

@@ -115,7 +115,7 @@ gcloud run jobs execute jenny-migrate --region=$REGION --wait
 DBURL='postgresql+asyncpg://postgres:UN_MDP_FORT@/jenny?host=/cloudsql/'$PROJECT_ID:$REGION:jenny-pg
 gcloud run deploy jenny-api \
   --image=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/api:latest \
-  --region=$REGION --port=8000 --allow-unauthenticated \
+  --region=$REGION --port=8080 --allow-unauthenticated \
   --set-cloudsql-instances=$PROJECT_ID:$REGION:jenny-pg \
   --vpc-connector=jenny-conn \
   --set-env-vars=JENNY_ENV=prod,JENNY_REQUIRE_AUTH=true,RUN_MIGRATIONS=0,JENNY_AUTO_SEED=0 \
@@ -125,10 +125,12 @@ gcloud run deploy jenny-api \
   --set-secrets=JENNY_JWT_SECRET=JENNY_JWT_SECRET:latest,JENNY_GROQ_API_KEY=JENNY_GROQ_API_KEY:latest,JENNY_STRIPE_SECRET_KEY=JENNY_STRIPE_SECRET_KEY:latest \
   --cpu=2 --memory=4Gi --min-instances=0 --max-instances=4 --timeout=120
 ```
-- `--port=8000` : le conteneur API écoute sur 8000 (cf. `docker/api.Dockerfile`).
-- `--memory=4Gi` : PyTorch + modèles. ⚠️ L'image est lourde (torch) → cold start lent ;
-  pour la réduire, installez torch CPU (`--index-url https://download.pytorch.org/whl/cpu`)
-  et retirez `mlflow`/`datasets` (uniquement utiles à l'entraînement).
+- `--port=8080` : l'image PROD (`docker/api.prod.Dockerfile`, utilisée par `cloudbuild.yaml`)
+  écoute sur `$PORT` (8080). Elle embarque **torch CPU** (image bien plus légère que le wheel
+  CUDA) et les seules dépendances de prod. `RUN_MIGRATIONS=0` (les migrations passent par le
+  Job §6). L'image de dev `docker/api.Dockerfile` écoute, elle, sur 8000.
+- `--memory=4Gi` : PyTorch + modèles (intent/NER, CPU). `--readiness` : sonde `/ready`
+  (renvoie 503 si Postgres/Redis KO).
 
 ## 8. Déployer le frontend
 
