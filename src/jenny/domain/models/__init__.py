@@ -27,6 +27,7 @@ from jenny.domain.models.order import Order
 from jenny.domain.models.payment_record import PaymentRecord
 from jenny.domain.models.pending_question import PendingQuestion
 from jenny.domain.models.prestation import Prestation
+from jenny.domain.models.quote import Quote
 from jenny.domain.models.review import Review
 from jenny.domain.models.support_ticket import SupportTicket
 from jenny.domain.models.transaction_type import TransactionType
@@ -58,6 +59,7 @@ __all__ = [
     "PaymentRecord",
     "PendingQuestion",
     "Prestation",
+    "Quote",
     "Review",
     "SupportTicket",
     "TransactionType",

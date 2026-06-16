@@ -43,60 +43,55 @@ class QuoteAgent:
         """
         logger.info("quote_agent.handling", intent=state.current_intent)
 
-        # Collecter les infos disponibles
-        collected_info: dict[str, str | None] = {}
+        # Collecter les infos disponibles + injecter le CONTEXTE (comme ActionAgent)
+        # pour que l'action puisse persister un VRAI devis (business, client).
+        params: dict[str, str] = {}
         for slot_name, slot in state.slots.items():
             if slot.filled and slot.value:
-                collected_info[slot_name] = slot.value
+                params[slot_name] = slot.value
+        if state.business_id is not None:
+            params["business_id"] = str(state.business_id)
+        if state.customer_id is not None:
+            params["customer_id"] = str(state.customer_id)
+        if state.conversation_id is not None:
+            params["conversation_id"] = str(state.conversation_id)
 
-        # Exécuter via le registre si disponible
+        # Prestation demandée : slot service/product, sinon dernier message client.
+        if not params.get("service") and not params.get("product"):
+            last_user = next(
+                (
+                    m.get("content", "")
+                    for m in reversed(state.message_history)
+                    if m.get("role") == "user"
+                ),
+                "",
+            )
+            if last_user:
+                params["service"] = last_user
+
+        # Exécuter le VRAI devis via le registre.
         if self.registry is not None:
             action = self.registry.get_action("quote")
             if action is not None:
                 try:
-                    result = await action.execute(collected_info)
+                    result = await action.execute(params)
+                    if not result.get("success") and result.get("needs_service"):
+                        cat = result.get("catalogue")
+                        resp = "Avec plaisir ! Pour quel service souhaitez-vous un devis ?"
+                        if cat:
+                            resp += f"\n\n{cat}"
+                        return {"response": resp, "documents": [], "action_result": result}
                     return {
-                        "response": result.get("message", "Devis en cours de création."),
+                        "response": result.get("message", "Votre devis est en préparation."),
                         "documents": [],
                         "action_result": result,
                     }
                 except Exception as e:
                     logger.error("quote_agent.action_error", error=str(e))
 
-        # Vérifier quelles infos manquent
-        has_email = "email" in collected_info
-        has_name = "name" in collected_info
-        has_product = "product" in collected_info
-
-        if not has_product and not has_name:
-            response = (
-                "Je peux vous préparer un devis personnalisé ! "
-                "Pour cela, j'aurais besoin de :\n"
-                "• La prestation ou le produit souhaité\n"
-                "• Votre nom\n"
-                "• Votre email pour l'envoi du devis\n\n"
-                "Quel service vous intéresse ?"
-            )
-        elif has_product and not has_email:
-            product = collected_info.get("product", "votre demande")
-            response = (
-                f"Parfait, je prépare un devis pour {product}. "
-                "À quelle adresse email souhaitez-vous le recevoir ?"
-            )
-        else:
-            email = collected_info.get("email", "votre email")
-            response = (
-                "Votre demande de devis a été enregistrée. "
-                f"Vous recevrez le devis à {email} sous 24h. "
-                "Un conseiller vous contactera si besoin."
-            )
-
+        # Repli (registre indisponible) : on demande la prestation.
         return {
-            "response": response,
+            "response": "Je peux vous préparer un devis. Quel service vous intéresse ?",
             "documents": [],
-            "action_result": {
-                "success": True,
-                "type": "quote_request",
-                "collected_info": collected_info,
-            },
+            "action_result": {"success": False, "type": "quote_request"},
         }

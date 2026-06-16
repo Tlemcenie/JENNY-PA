@@ -84,12 +84,20 @@ class PlanningAgent:
         ]
         is_urgent = any(kw in last_msg for kw in urgency_keywords)
 
-        # Exécuter via le registre si disponible
+        # Exécuter via le registre si disponible. On injecte le CONTEXTE (business,
+        # client) pour que l'action lise les vraies dispos en base (pas de simulé).
         if self.registry is not None:
             action = self.registry.get_action("planning")
             if action is not None:
                 try:
-                    result = await action.execute({"date": requested_date})
+                    action_params: dict[str, str] = {}
+                    if requested_date:
+                        action_params["date"] = str(requested_date)
+                    if state.business_id is not None:
+                        action_params["business_id"] = str(state.business_id)
+                    if state.customer_id is not None:
+                        action_params["customer_id"] = str(state.customer_id)
+                    result = await action.execute(action_params)
                     return {
                         "response": result.get("message", "Planning consulté."),
                         "documents": [],

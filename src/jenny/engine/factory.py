@@ -92,10 +92,11 @@ def build_action_registry(
 ) -> ActionRegistry:
     """Enregistre toutes les actions métier disponibles."""
     registry = ActionRegistry()
-    cal = calendar or GoogleCalendarService()
 
     registry.register(CheckOrderAction(), intents=["order_status"])
-    registry.register(CheckPlanningAction(calendar_service=cal), intents=["planning"])
+    # Planning = disponibilités RÉELLES (agenda DB via availability_service),
+    # plus de Google Calendar simulé.
+    registry.register(CheckPlanningAction(), intents=["planning"])
     # Réservation RÉELLE en base (catalogue + agenda) plutôt que simulée.
     registry.register(BookAppointmentDBAction(), intents=["appointment"])
     # Gestion par le client de son propre RDV (annuler / déplacer / confirmer).

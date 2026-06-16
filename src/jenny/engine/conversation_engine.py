@@ -95,6 +95,10 @@ _STRONG_APPOINTMENT_RE = re.compile(
     re.I,
 )
 
+# Signal de DEVIS explicite : force « quote » → un VRAI devis persisté/envoyé,
+# même si le petit modèle classe le message en « faq/pricing ».
+_STRONG_QUOTE_RE = re.compile(r"\b(devis|estimation|chiffrage|chiffrer)\b", re.I)
+
 
 # Capture du nom : un message qui ressemble à un nom propre (pas une commande,
 # pas une question, pas un numéro) quand Jenny vient de demander « c'est à quel nom ? ».
@@ -243,7 +247,7 @@ class ConversationEngine:
         self.response_generator = response_generator
 
     async def process(
-        self, request: EngineRequest, on_token: "TokenCallback | None" = None
+        self, request: EngineRequest, on_token: TokenCallback | None = None
     ) -> EngineResponse:
         """Traite un message et produit une réponse.
 
@@ -301,6 +305,19 @@ class ConversationEngine:
             intent_result = {
                 **intent_result,
                 "intent": "appointment",
+                "confidence": max(intent_result.get("confidence", 0.0), 0.85),
+                "needs_clarification": False,
+            }
+
+        # Override : « devis »/« estimation »/« chiffrage » → quote (devis réel),
+        # sauf si c'est déjà une prise de RDV / réclamation / escalade.
+        if _STRONG_QUOTE_RE.search(request.message_text or "") and intent_result[
+            "intent"
+        ] not in ("appointment", "manage_appointment", "escalation", "complaint"):
+            logger.info("engine.intent.quote_override", was=intent_result["intent"])
+            intent_result = {
+                **intent_result,
+                "intent": "quote",
                 "confidence": max(intent_result.get("confidence", 0.0), 0.85),
                 "needs_clarification": False,
             }
@@ -740,7 +757,7 @@ class ConversationEngine:
         return {"agent": "fallback", "documents": [], "action_result": None}
 
     async def _generate_response(
-        self, state: ConversationState, on_token: "TokenCallback | None" = None
+        self, state: ConversationState, on_token: TokenCallback | None = None
     ) -> str:
         """Génère la réponse via le LLM (TOUJOURS prioritaire).
 
