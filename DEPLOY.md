@@ -31,7 +31,7 @@ Le moteur d'intention/NER (PyTorch, CPU) tourne **dans le conteneur API** — pa
 
 ```bash
 export PROJECT_ID=mon-projet
-export REGION=europe-west1
+export REGION=europe-west9   # Paris → données hébergées en France (RGPD)
 export REPO=jenny
 gcloud config set project $PROJECT_ID
 
@@ -82,8 +82,19 @@ local) — OK pour 1 instance, indispensable dès qu'on scale > 1.
 printf 'un-secret-jwt-long-et-aleatoire' | gcloud secrets create JENNY_JWT_SECRET --data-file=-
 printf 'gsk_xxx'                          | gcloud secrets create JENNY_GROQ_API_KEY --data-file=-
 printf 'sk_live_xxx'                      | gcloud secrets create JENNY_STRIPE_SECRET_KEY --data-file=-
-# … idem pour les tokens WhatsApp/Insta quand vous les aurez.
+
+# Clé de chiffrement au repos des identifiants de canal (Fernet). OBLIGATOIRE en
+# prod : sans elle, les tokens WhatsApp/Insta/SMTP des salons seraient en clair en base.
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" \
+  | gcloud secrets create JENNY_MASTER_KEY --data-file=-
+
+# Secret d'app Meta (vérification de signature des webhooks WhatsApp/Instagram).
+printf 'votre_app_secret_meta'            | gcloud secrets create JENNY_FACEBOOK_APP_SECRET --data-file=-
 ```
+
+> Les **tokens WhatsApp/Instagram/SMTP ne sont plus des secrets d'environnement** :
+> chaque salon les colle dans l'UI **Intégrations** (stockés en base, chiffrés via
+> `JENNY_MASTER_KEY`). Voir §11.
 
 ## 5. Build & push des images
 
@@ -122,8 +133,14 @@ gcloud run deploy jenny-api \
   --set-env-vars=JENNY_DATABASE_URL="$DBURL" \
   --set-env-vars=JENNY_REDIS_URL=redis://REDIS_IP:6379/0 \
   --set-env-vars=JENNY_LLM_PROVIDER=groq,JENNY_LLM_MODEL=llama-3.3-70b-versatile \
-  --set-secrets=JENNY_JWT_SECRET=JENNY_JWT_SECRET:latest,JENNY_GROQ_API_KEY=JENNY_GROQ_API_KEY:latest,JENNY_STRIPE_SECRET_KEY=JENNY_STRIPE_SECRET_KEY:latest \
+  --set-secrets=JENNY_JWT_SECRET=JENNY_JWT_SECRET:latest,JENNY_GROQ_API_KEY=JENNY_GROQ_API_KEY:latest,JENNY_STRIPE_SECRET_KEY=JENNY_STRIPE_SECRET_KEY:latest,JENNY_MASTER_KEY=JENNY_MASTER_KEY:latest,JENNY_FACEBOOK_APP_SECRET=JENNY_FACEBOOK_APP_SECRET:latest \
   --cpu=2 --memory=4Gi --min-instances=0 --max-instances=4 --timeout=120
+
+# Une fois l'URL de l'API connue, repassez-la en variable pour que les URLs de
+# webhook données à Meta soient correctes :
+API_URL=$(gcloud run services describe jenny-api --region=$REGION --format='value(status.url)')
+gcloud run services update jenny-api --region=$REGION \
+  --update-env-vars=JENNY_PUBLIC_API_BASE_URL="$API_URL"
 ```
 - `--port=8080` : l'image PROD (`docker/api.prod.Dockerfile`, utilisée par `cloudbuild.yaml`)
   écoute sur `$PORT` (8080). Elle embarque **torch CPU** (image bien plus légère que le wheel
@@ -158,11 +175,35 @@ gcloud scheduler jobs create http jenny-worker-tick --location=$REGION --schedul
   --oauth-service-account-email=SA@$PROJECT_ID.iam.gserviceaccount.com
 ```
 
-## 10. Ce qui reste à faire / limites connues
+## 11. Connecter les canaux (WhatsApp / Instagram / Email)
+
+Une fois l'API + le frontend en ligne, **chaque salon connecte ses canaux depuis
+l'UI** (page **Intégrations**) — aucune variable d'env à toucher :
+
+1. **WhatsApp / Instagram** (Meta Cloud API, une App Meta partagée) :
+   - Dans l'UI, cliquer **Connecter** → coller le **Phone Number ID** (WhatsApp) /
+     **Page ID** (Instagram) + le **token permanent** (généré via un *Utilisateur
+     Système* Meta — le token de test expire en 24 h).
+   - L'UI affiche l'**URL de webhook** (`<API_URL>/api/v1/webhooks/whatsapp` ou
+     `/instagram`) et le **Verify Token** : les coller dans Meta → *Webhooks* →
+     s'abonner à `messages`. La vérification (GET challenge) accepte ce token.
+   - `JENNY_FACEBOOK_APP_SECRET` (secret §4) valide la signature des webhooks.
+   - Bouton **Tester** = ping réel de l'API Meta avec le token enregistré.
+2. **Email** : coller SMTP (envoi) + IMAP (réception) dans l'UI. La réponse depuis
+   le dashboard part par SMTP. (Réception IMAP par salon = chantier suivant ; le
+   webhook `<API_URL>/api/v1/ingest/email/inbound` + en-tête `X-Jenny-Inbound-Secret`
+   fonctionne déjà pour SendGrid/Mailgun.)
+
+Tant qu'un canal n'a pas d'identifiants, il **reçoit** quand même (webhook) mais
+l'**envoi est désactivé** (badge « envoi désactivé ») — jamais d'erreur bloquante.
+
+## 12. Ce qui reste à faire / limites connues
 
 - **LLM** : sur GCP on passe par un fournisseur hébergé (Groq/OpenAI/Mistral) via
   `JENNY_LLM_PROVIDER` + clé. Pour garder Ollama, il faut une VM GPU séparée (hors Cloud Run).
-- **Messagerie sortante** (WhatsApp/Insta) : le code d'envoi existe ; renseignez les tokens
-  Meta pour l'activer (sinon les relances restent des notifications internes).
-- **Image API lourde** (torch) : voir §7 pour la réduire.
-- Variables d'environnement complètes : voir [`.env.example`](.env.example).
+- **Email** : réception IMAP *par salon* + auto-réponse Jenny par email = chantier suivant
+  (le polling IMAP global + le webhook inbound marchent déjà ; la réponse manuelle aussi).
+- **Image API lourde** (torch) : voir §7 ; le checkpoint NanoGPT (~200 Mo, option /lab)
+  est exclu de l'image via `.dockerignore` — la prod utilise Groq.
+- Variables d'environnement complètes : voir [`.env.example`](.env.example) (dont
+  `JENNY_MASTER_KEY` et `JENNY_PUBLIC_API_BASE_URL`, nouveaux).

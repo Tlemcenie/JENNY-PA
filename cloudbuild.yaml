@@ -1,12 +1,13 @@
 # Cloud Build — construit et pousse les 3 images Jenny vers Artifact Registry.
 #
 #   gcloud builds submit --config cloudbuild.yaml \
-#     --substitutions=_REGION=europe-west1,_REPO=jenny,_API_URL=https://jenny-api-xxxx.run.app
+#     --substitutions=_REGION=europe-west9,_REPO=jenny,_API_URL=https://jenny-api-xxxx.run.app
 #
 # _API_URL est l'URL publique de l'API (inlinée au build du frontend).
+# Région par défaut : europe-west9 (Paris) → données hébergées en France (RGPD).
 
 substitutions:
-  _REGION: europe-west1
+  _REGION: europe-west9
   _REPO: jenny
   _API_URL: https://CHANGE-ME.run.app
 
