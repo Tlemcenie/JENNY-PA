@@ -1,8 +1,9 @@
 "use client";
 
+import { useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { motion } from "framer-motion";
+import { motion, useScroll, useTransform, useReducedMotion } from "framer-motion";
 import {
   ArrowRight,
   Check,
@@ -18,6 +19,7 @@ import {
   Mail,
   Music,
   Globe,
+  ChevronDown,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
@@ -26,6 +28,12 @@ import { staggerContainer, staggerItem } from "@/lib/motion";
 // Page d'accueil publique (DA « Jenny Front ») — nuit profonde + corail,
 // titres en Instrument Serif, accents mono. Recrée fidèlement l'écran Landing
 // du design handoff, adaptée à Next + au stack existant.
+//
+// Hero « scénique » : l'animation Jenny Intro est intégrée EN FOND (plein
+// cadre, ambiance), surmontée d'un wordmark « Jenny » géant et fantôme (jeu
+// premier plan / arrière plan / lettres) et de la mascotte au premier plan.
+// Le contenu et les couches glissent en parallaxe au défilement (fluide).
+// La démo de chat (« présentation ») a sa propre section « Cas d'usage ».
 
 // Liens de navigation → ancres vers de VRAIES sections de la page (défilement doux).
 const NAV_LINKS: { label: string; target: string }[] = [
@@ -79,20 +87,45 @@ function MascotBubble() {
 export default function LandingPage() {
   const { isAuthenticated } = useAuth();
   const ctaHref = isAuthenticated ? "/chat" : "/register";
+  const reduce = useReducedMotion();
+
+  // La page défile dans ce conteneur (pas la fenêtre) → on le passe à useScroll.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const heroRef = useRef<HTMLElement>(null);
+
+  const { scrollYProgress } = useScroll({
+    container: scrollRef,
+    target: heroRef,
+    offset: ["start start", "end start"],
+  });
+
+  // Parallaxe douce des couches du hero (désactivée si prefers-reduced-motion).
+  const videoY = useTransform(scrollYProgress, [0, 1], ["0%", "16%"]);
+  const videoScale = useTransform(scrollYProgress, [0, 1], [1, 1.14]);
+  // Le wordmark est une couche d'arrière-plan : déplacement doux (révélation
+  // subtile en remontant), pas un mouvement rapide d'avant-plan.
+  const wordmarkY = useTransform(scrollYProgress, [0, 1], ["0%", "-12%"]);
+  const mascotY = useTransform(scrollYProgress, [0, 1], ["0%", "20%"]);
+  const contentY = useTransform(scrollYProgress, [0, 1], ["0%", "-14%"]);
+  // Fonte tardive : le CTA reste visible/cliquable presque jusqu'à la sortie du hero.
+  const contentFade = useTransform(scrollYProgress, [0, 0.95], [1, 0]);
 
   return (
     <div
-      className="h-full overflow-y-auto text-[#F4F1ED]"
-      style={{ background: PAGE_BG, fontFamily: "var(--font-sans)" }}
+      ref={scrollRef}
+      className="relative h-full overflow-y-auto text-[#F4F1ED]"
+      style={{ background: PAGE_BG, fontFamily: "var(--font-sans)", scrollbarGutter: "stable" }}
     >
       {/* ── Nav ── */}
       <nav
-        className="sticky top-0 z-20 flex items-center px-6 md:px-16 py-5"
+        className="sticky top-0 z-30 flex items-center px-6 md:px-16 py-5"
         style={{ backdropFilter: "blur(12px)", background: "rgba(14,11,20,0.7)" }}
       >
-        <Link href="/" className="flex items-center gap-2.5">
-          <JennyAvatar size={36} tone="dark" />
-          <span className="text-[19px] font-bold tracking-[-0.02em]">Jenny</span>
+        <Link href="/" className="flex items-center gap-2.5 group">
+          <JennyAvatar size={38} tone="dark" />
+          <span className="text-[20px] font-bold tracking-[-0.02em] group-hover:text-jenny-coral transition-colors">
+            Jenny
+          </span>
         </Link>
         <div className="hidden lg:flex gap-8 ml-16">
           {NAV_LINKS.map((item) => (
@@ -132,21 +165,109 @@ export default function LandingPage() {
         </div>
       </nav>
 
-      {/* ── Hero ── */}
-      <header className="px-6 md:px-16 pt-12 md:pt-[72px] pb-16 md:pb-[100px]">
-        <div className="max-w-[1100px] mx-auto">
-          {/* Reveal « petit à petit » : chaque élément (et chaque mot du titre)
-              apparaît en cascade fluide via les variants partagés. */}
-          <motion.div variants={staggerContainer} initial="hidden" animate="show">
+      {/* ── Hero scénique : vidéo en fond + lettres + mascotte, en couches ── */}
+      <header
+        ref={heroRef}
+        className="relative isolate overflow-hidden flex flex-col justify-center min-h-[600px] md:min-h-[90vh]"
+      >
+        {/* Couche 0 — animation Jenny Intro plein cadre (ambiance, en boucle).
+            pointer-events-none : ne capte ni clic ni scroll. */}
+        <motion.div
+          aria-hidden
+          style={reduce ? undefined : { y: videoY, scale: videoScale }}
+          className="absolute inset-0 z-0 will-change-transform"
+        >
+          <iframe
+            src="/jenny-intro/index.html?embed=1"
+            title="Jenny en action"
+            loading="lazy"
+            scrolling="no"
+            tabIndex={-1}
+            aria-hidden
+            className="pointer-events-none absolute inset-0 h-full w-full"
+            style={{ border: 0 }}
+          />
+        </motion.div>
+
+        {/* Couche 1 — wordmark « Jenny » géant et fantôme (jeu de lettres). */}
+        <motion.div
+          aria-hidden
+          style={reduce ? undefined : { y: wordmarkY }}
+          className="pointer-events-none absolute inset-x-0 bottom-[-4%] z-[1] flex justify-center select-none will-change-transform"
+        >
+          <span
+            className="font-display leading-[0.8] tracking-[-0.04em] text-[30vw] md:text-[24vw]"
+            style={{
+              // backgroundImage (longhand) et NON `background` : éviter le conflit
+              // shorthand/longhand avec backgroundClip (avertissement React 19).
+              backgroundImage:
+                "linear-gradient(180deg, rgba(255,127,106,0.30) 0%, rgba(255,127,106,0.10) 58%, transparent 88%)",
+              WebkitBackgroundClip: "text",
+              backgroundClip: "text",
+              color: "transparent",
+              // Halo corail doux autour des lettres → présence renforcée du logo.
+              filter: "drop-shadow(0 0 48px rgba(255,127,106,0.18))",
+            }}
+          >
+            Jenny
+          </span>
+        </motion.div>
+
+        {/* Couche 2 — voiles de lisibilité (vertical pour mobile + biais à
+            gauche pour la profondeur sur grand écran). */}
+        <div
+          aria-hidden
+          className="absolute inset-0 z-[2] pointer-events-none"
+          style={{
+            // Plus léger qu'avant : on laisse VOIR la vidéo en fond (intention :
+            // « vidéo en fond »), le biais gauche garde le texte parfaitement lisible.
+            background:
+              "linear-gradient(180deg, rgba(14,11,20,0.78) 0%, rgba(14,11,20,0.40) 46%, rgba(14,11,20,0.72) 100%), linear-gradient(100deg, rgba(14,11,20,0.70) 0%, rgba(14,11,20,0.06) 72%)",
+          }}
+        />
+
+        {/* Couche 3 — mascotte au premier plan (la « photo »). Affichée à partir
+            de lg : sur tablette, le hero reste « wordmark only » pour éviter que
+            le texte ne chevauche la mascotte. Image décorative (alt vide) : le
+            titre/sous-titre portent déjà tout le sens. */}
+        <motion.div
+          style={reduce ? undefined : { y: mascotY }}
+          className="pointer-events-none absolute right-[-2%] bottom-[-2%] z-[3] hidden lg:block w-[40vw] max-w-[500px] will-change-transform"
+        >
+          <div
+            className="absolute"
+            style={{
+              inset: "-12%",
+              background: "radial-gradient(circle, rgba(255,127,106,0.40) 0%, transparent 62%)",
+              filter: "blur(28px)",
+            }}
+          />
+          <Image
+            src="/jenny.png"
+            alt=""
+            width={500}
+            height={500}
+            priority
+            className="relative w-full h-auto object-contain"
+            style={{ filter: "drop-shadow(0 40px 80px rgba(255,127,106,0.45))" }}
+          />
+        </motion.div>
+
+        {/* Couche 10 — contenu (glisse vers le haut + fond au défilement). */}
+        <motion.div
+          style={reduce ? undefined : { y: contentY, opacity: contentFade }}
+          className="relative z-10 w-full max-w-[1100px] mx-auto px-6 md:px-16 py-20 md:py-0 will-change-transform"
+        >
+          <motion.div variants={staggerContainer} initial="hidden" animate="show" className="max-w-[680px]">
             <motion.div
               variants={staggerItem}
               className="inline-flex items-center gap-2 rounded-full mb-8 pl-1.5 pr-3.5 py-1.5"
-              style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
+              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)" }}
             >
               <span className="px-2.5 py-[3px] rounded-full bg-jenny-coral text-white text-[10.5px] font-bold tracking-[0.06em] uppercase font-mono">
                 Nouveau
               </span>
-              <span className="text-[12.5px] text-[#F4F1ED]/75">
+              <span className="text-[12.5px] text-[#F4F1ED]/80">
                 Auto-pilote · Jenny répond seule en moins de 2 secondes
               </span>
             </motion.div>
@@ -174,12 +295,12 @@ export default function LandingPage() {
             </motion.h1>
             <motion.p
               variants={staggerItem}
-              className="text-[17px] md:text-[19px] leading-[1.5] text-[#F4F1ED]/65 max-w-[580px] mb-10"
+              className="text-[17px] md:text-[19px] leading-[1.5] text-[#F4F1ED]/75 max-w-[560px] mb-10"
             >
               Jenny est l&apos;assistante IA qui répond à vos clients sur WhatsApp, Instagram et Email — 24/7, dans
               votre ton, avec votre catalogue.
             </motion.p>
-            <motion.div variants={staggerItem} className="flex flex-wrap gap-3.5 items-center mb-16 md:mb-20">
+            <motion.div variants={staggerItem} className="flex flex-wrap gap-3.5 items-center">
               <Link
                 href={ctaHref}
                 className="btn-fluffy h-[50px] px-7 text-[15px] font-semibold inline-flex items-center gap-2 bg-jenny-coral text-white hover:bg-jenny-coral-dark"
@@ -187,76 +308,109 @@ export default function LandingPage() {
                 Activer Jenny pour mon business
                 <ArrowRight className="w-4 h-4" />
               </Link>
-              <span className="text-[12.5px] text-[#F4F1ED]/40 ml-2 font-mono">Sans CB · Activation en 4 minutes</span>
+              <span className="text-[12.5px] text-[#F4F1ED]/45 ml-2 font-mono">Sans CB · Activation en 4 minutes</span>
             </motion.div>
           </motion.div>
+        </motion.div>
 
-          {/* Hero visual #1 — animation d'intro Jenny (boucle, épurée) pour attirer.
-              Servie en static asset ; ?embed=1 masque les contrôles de lecture. */}
+        {/* Indice de défilement (renforce le « slide » fluide). */}
+        {!reduce && (
           <motion.div
-            initial={{ opacity: 0, y: 28 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.15 }}
-            className="relative rounded-[24px] overflow-hidden border border-white/10"
-            style={{ boxShadow: "0 40px 120px rgba(255,127,106,0.20)" }}
+            aria-hidden
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 1.1, duration: 0.6 }}
+            className="absolute left-1/2 -translate-x-1/2 bottom-6 z-10 flex flex-col items-center gap-1.5 text-[#F4F1ED]/45"
           >
-            {/* Halo corail doux derrière l'animation (épuré, sans cadre lourd) */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute -inset-12 z-0"
-              style={{
-                background:
-                  "radial-gradient(ellipse at center, rgba(255,127,106,0.22) 0%, transparent 70%)",
-                filter: "blur(40px)",
-              }}
-            />
-            <iframe
-              src="/jenny-intro/index.html?embed=1"
-              title="Jenny en action"
-              loading="lazy"
-              scrolling="no"
-              aria-label="Jenny en animation"
-              className="relative z-10 block w-full aspect-video"
-              style={{ border: 0 }}
-            />
+            <span className="font-mono text-[10px] tracking-[0.3em] uppercase">défilez</span>
+            <motion.span
+              animate={{ y: [0, 6, 0] }}
+              transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+            >
+              <ChevronDown className="w-4 h-4" />
+            </motion.span>
+          </motion.div>
+        )}
+      </header>
+
+      {/* ── Bandeau canaux (connectez en un clic) ── */}
+      <div className="px-6 md:px-16 py-10 md:py-12">
+        <div className="max-w-[1100px] mx-auto flex flex-wrap gap-8 md:gap-12 items-center justify-center opacity-50">
+          <span className="font-mono text-[11px] tracking-[0.18em] uppercase">Connectez en un clic ·</span>
+          <MessageCircle className="w-6 h-6" />
+          <AtSign className="w-6 h-6" />
+          <Mail className="w-6 h-6" />
+          <Music className="w-6 h-6" />
+          <Globe className="w-6 h-6" />
+        </div>
+      </div>
+
+      {/* ── Cas d'usage : la « présentation » (démo de chat), à sa place ── */}
+      <section id="apercu" className="px-6 md:px-16 pb-16 md:pb-24 scroll-mt-24">
+        <div className="max-w-[1100px] mx-auto grid lg:grid-cols-[0.85fr_1.15fr] gap-12 lg:gap-16 items-center">
+          {/* Colonne éditoriale */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: "-60px" }}
+            transition={{ duration: 0.5 }}
+          >
+            <div className="font-mono text-[11px] tracking-[0.32em] uppercase text-jenny-coral mb-[18px]">
+              — cas d&apos;usage —
+            </div>
+            <h2 className="font-display text-[40px] md:text-[60px] leading-[1.04] tracking-[-0.02em] mb-5">
+              Une conversation,
+              <br />
+              pas un <span className="italic text-jenny-coral">formulaire.</span>
+            </h2>
+            <p className="text-[15.5px] leading-[1.6] text-[#F4F1ED]/60 mb-8 max-w-[440px]">
+              Le client écrit comme à un ami. Jenny comprend l&apos;intention, vérifie le stock,
+              et conclut la vente — en quelques secondes.
+            </p>
+            <ul className="space-y-3.5">
+              {[
+                { t: "Comprend", d: "l'intention réelle derrière le message" },
+                { t: "Agit", d: "vérifie le stock, prépare le lien de paiement" },
+                { t: "Conclut", d: "sans formulaire, sans attente, 24/7" },
+              ].map((s) => (
+                <li key={s.t} className="flex items-start gap-3">
+                  <span
+                    className="mt-0.5 w-6 h-6 rounded-full flex items-center justify-center text-jenny-coral shrink-0"
+                    style={{ background: "rgba(255,127,106,0.14)" }}
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </span>
+                  <span className="text-[14.5px] text-[#F4F1ED]/85">
+                    <b className="font-semibold text-white">{s.t}</b> — {s.d}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </motion.div>
 
-          {/* Hero visual #2 — aperçu de chat flottant (exemple concret, en
-              complément de l'animation ci-dessus). Ancre « Cas d'usage ». */}
+          {/* Carte chat (la démo, mise en valeur) */}
           <motion.div
-            id="apercu"
-            initial={{ opacity: 0, y: 28 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.2 }}
-            className="relative rounded-[24px] overflow-hidden p-6 md:p-12 grid md:grid-cols-2 gap-8 md:gap-12 items-center mt-8 md:mt-10 scroll-mt-24"
+            initial={{ opacity: 0, y: 24 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: "-60px" }}
+            transition={{ duration: 0.55, delay: 0.1 }}
+            className="relative rounded-[24px] p-6 md:p-8"
             style={{
               background: "linear-gradient(180deg, rgba(255,127,106,0.08) 0%, rgba(255,255,255,0.02) 100%)",
               border: "1px solid rgba(255,255,255,0.08)",
+              boxShadow: "0 40px 120px rgba(255,127,106,0.14)",
             }}
           >
-            {/* Mascotte */}
-            <div className="relative h-[260px] md:h-[340px] flex items-center justify-center">
-              <div
-                className="absolute"
-                style={{
-                  inset: "-20%",
-                  background: "radial-gradient(circle, rgba(255,127,106,0.4) 0%, transparent 60%)",
-                  filter: "blur(20px)",
-                }}
-              />
-              <Image
-                src="/jenny.png"
-                alt="Jenny, votre assistante"
-                width={340}
-                height={340}
-                priority
-                className="relative h-[260px] md:h-[340px] w-auto object-contain max-w-none"
-                style={{ filter: "drop-shadow(0 30px 60px rgba(255,127,106,0.4))" }}
-              />
+            <div className="flex items-center gap-2.5 mb-5 pb-4 border-b border-white/[0.07]">
+              <JennyAvatar size={30} tone="dark" />
+              <div>
+                <div className="text-[13.5px] font-semibold text-white">Jenny</div>
+                <div className="text-[11px] text-jenny-success font-mono flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-jenny-success inline-block" /> en ligne
+                </div>
+              </div>
             </div>
-
-            {/* Chat */}
-            <div className="flex flex-col gap-2.5">
+            <div className="flex flex-col gap-2.5" role="group" aria-label="Exemple de conversation avec Jenny">
               <div className="self-end max-w-[85%] px-4 py-3 bg-jenny-coral text-[#1a0a08] text-[14.5px] font-medium rounded-[16px_16px_4px_16px]">
                 Bonjour, vous livrez à Bordeaux ?
               </div>
@@ -293,6 +447,7 @@ export default function LandingPage() {
                 </div>
               </div>
               <div
+                aria-hidden
                 className="self-start px-3.5 py-2 rounded-full flex gap-1.5 mt-1"
                 style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
               >
@@ -300,25 +455,16 @@ export default function LandingPage() {
                   <motion.span
                     key={i}
                     className="w-1.5 h-1.5 rounded-full bg-jenny-coral"
-                    animate={{ opacity: [0.3, 1, 0.3] }}
-                    transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.2 }}
+                    style={reduce ? { opacity: 0.6 } : undefined}
+                    animate={reduce ? undefined : { opacity: [0.3, 1, 0.3] }}
+                    transition={reduce ? undefined : { duration: 1.2, repeat: Infinity, delay: i * 0.2 }}
                   />
                 ))}
               </div>
             </div>
           </motion.div>
-
-          {/* Trust / canaux */}
-          <div className="mt-16 md:mt-20 flex flex-wrap gap-8 md:gap-12 items-center justify-center opacity-50">
-            <span className="font-mono text-[11px] tracking-[0.18em] uppercase">Connectez en un clic ·</span>
-            <MessageCircle className="w-6 h-6" />
-            <AtSign className="w-6 h-6" />
-            <Mail className="w-6 h-6" />
-            <Music className="w-6 h-6" />
-            <Globe className="w-6 h-6" />
-          </div>
         </div>
-      </header>
+      </section>
 
       {/* ── Features ── */}
       <section
