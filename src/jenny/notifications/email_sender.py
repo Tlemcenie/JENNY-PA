@@ -191,6 +191,38 @@ N'hésitez pas à nous contacter pour toute question.
 }
 
 
+# Eyebrow + titre serif (heading + accent corail) par type d'email transactionnel.
+_HTML_META: dict[str, tuple[str, str, str]] = {
+    "appointment_confirmation": ("rendez-vous", "Votre rendez-vous est", "confirmé."),
+    "appointment_modification": ("rendez-vous", "Votre rendez-vous a été", "modifié."),
+    "appointment_cancellation": ("rendez-vous", "Votre rendez-vous a été", "annulé."),
+    "appointment_reminder": ("rappel", "Petit rappel pour votre", "rendez-vous."),
+    "quote_sent": ("devis", "Voici votre", "devis."),
+    "order_confirmation": ("commande", "Votre commande est", "confirmée."),
+    "complaint_acknowledgment": ("support", "Nous avons bien reçu votre", "message."),
+    "welcome": ("bienvenue", "Bienvenue chez", "nous."),
+}
+
+
+def _template_html(email_type: str, subject: str, body: str, variables: dict[str, str]) -> str:
+    """Habille le corps texte d'un template dans le gabarit premium Jenny."""
+    from jenny.notifications.email_layout import MUTED, SANS, render_email
+
+    eyebrow, heading, accent = _HTML_META.get(email_type, ("information", "Information", ""))
+    safe = html_lib.escape(body).replace("\n", "<br>")
+    block = (
+        f'<div style="font-family:{SANS};font-size:15px;line-height:1.7;color:{MUTED};">{safe}</div>'
+    )
+    return render_email(
+        preheader=subject,
+        eyebrow=eyebrow,
+        heading=heading,
+        accent=accent,
+        content_html=block,
+        app_name="Jenny",
+    )
+
+
 class EmailSender:
     """Service d'envoi d'emails transactionnels via SMTP.
 
@@ -357,6 +389,7 @@ class EmailSender:
             to=to,
             subject=subject,
             body_text=body,
+            body_html=_template_html(email_type, subject, body, variables),
         )
 
         logger.info(

@@ -31,7 +31,7 @@ from jenny.domain.models.business import Business
 from jenny.domain.models.business_member import BusinessMember
 from jenny.domain.models.user import User
 from jenny.notifications.email_sender import EmailSender
-from jenny.notifications.verification_email import build_verification_email
+from jenny.notifications.verification_email import build_reset_email, build_verification_email
 
 logger = get_logger(__name__)
 
@@ -96,6 +96,20 @@ async def _send_verification_email(user: User, code: str) -> None:
         await EmailSender().send(msg)
     except Exception as e:
         logger.error("auth.verification_email_failed", error=str(e), to=user.email)
+
+
+async def _send_reset_email(user: User, code: str) -> None:
+    """Construit et envoie l'email de réinitialisation (best-effort, ne lève pas)."""
+    try:
+        msg = build_reset_email(
+            to=user.email,
+            code=code,
+            full_name=user.full_name,
+            ttl_minutes=ttl_minutes(),
+        )
+        await EmailSender().send(msg)
+    except Exception as e:
+        logger.error("auth.reset_email_failed", error=str(e), to=user.email)
 
 
 # ── Schemas ──────────────────────────────────────────────────────
@@ -299,8 +313,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: DbSession) -> JSONRes
     user.password_reset_expires_at = code_expiry(now)
     await db.commit()
 
-    # Réutilise le canal email (le gabarit délivre un code à 6 chiffres).
-    await _send_verification_email(user, code)
+    await _send_reset_email(user, code)
     logger.info("auth.forgot_password.code_sent", user_id=str(user.id))
 
     payload: dict = {"status": "sent"}
