@@ -33,8 +33,10 @@ _CONNECTORS = {
     "twitter": TwitterConnector(),
     "snapchat": SnapchatConnector(),
 }
-# Connecteurs prenant des identifiants PAR BUSINESS (priment sur l'env global).
-_PER_BUSINESS = {"whatsapp", "instagram"}
+# Canaux à identifiants PAR BUSINESS (priment sur l'env global).
+_PER_BUSINESS = {"whatsapp", "instagram", "email"}
+# Connecteurs Meta prenant l'argument ``creds`` dans ``send_reply``.
+_META = {"whatsapp", "instagram"}
 
 
 async def send_channel_reply(
@@ -44,29 +46,42 @@ async def send_channel_reply(
     *,
     session: AsyncSession | None = None,
     business_id: UUID | None = None,
+    recipient_override: str | None = None,
+    subject: str | None = None,
 ) -> bool:
     """Envoie une réponse humaine au client via le connecteur du canal.
 
     Si ``session`` + ``business_id`` sont fournis, on résout les identifiants DU
     business (base chiffrée, sinon env global) et on les passe au connecteur —
-    sinon le connecteur retombe sur l'env. Renvoie ``True`` si l'envoi a réussi ;
-    ``False`` (sans lever) si pas de connecteur sortant, destinataire introuvable
-    ou échec API — l'appelant persiste alors la réponse avec un statut d'échec.
+    sinon repli sur l'env. Pour l'email, le destinataire vient de
+    ``recipient_override`` (l'``external_conversation_id`` email est un thread).
+    Renvoie ``True`` si l'envoi a réussi ; ``False`` (sans lever) si pas de canal
+    sortant, destinataire introuvable ou échec API — l'appelant persiste alors la
+    réponse avec un statut d'échec.
     """
-    if not external_conversation_id or ":" not in external_conversation_id:
-        return False
-    _, recipient = external_conversation_id.split(":", 1)
-    conn = _CONNECTORS.get(channel)
-    if conn is None or not recipient:
-        return False
     creds = None
     if session is not None and business_id is not None and channel in _PER_BUSINESS:
         try:
             creds = await creds_svc.resolve(session, business_id, channel)
         except Exception as e:  # pragma: no cover - résolution best-effort
             logger.warning("reply_dispatch.creds_resolve_failed", channel=channel, error=str(e))
+
+    # Email : envoi SMTP (par business si configuré, sinon repli global / fichier en dev).
+    if channel == "email":
+        from jenny.connectors.email.outbound import send_email_reply
+
+        return await send_email_reply(
+            recipient_override, text, creds=creds, subject=subject or "Re: votre message"
+        )
+
+    if not external_conversation_id or ":" not in external_conversation_id:
+        return False
+    _, recipient = external_conversation_id.split(":", 1)
+    conn = _CONNECTORS.get(channel)
+    if conn is None or not recipient:
+        return False
     try:
-        if channel in _PER_BUSINESS:
+        if channel in _META:
             return await conn.send_reply(recipient, text, creds=creds)  # type: ignore[call-arg]
         return await conn.send_reply(recipient, text)
     except Exception as e:  # pragma: no cover - dépend d'une API externe

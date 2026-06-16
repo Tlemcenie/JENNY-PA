@@ -197,13 +197,26 @@ class EmailSender:
     Supporte Gmail, SendGrid, Mailgun, ou tout serveur SMTP.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, creds=None) -> None:
         self.settings = get_settings()
+        # Paramètres SMTP effectifs : identifiants DU business (``creds``) s'ils
+        # sont fournis, sinon configuration globale d'environnement. ``creds=None``
+        # ⇒ comportement strictement identique à avant (emails transactionnels).
+        self.smtp_host = (getattr(creds, "smtp_host", "") or self.settings.smtp_host)
+        self.smtp_port = (getattr(creds, "smtp_port", 0) or self.settings.smtp_port)
+        self.smtp_username = (getattr(creds, "smtp_username", "") or self.settings.smtp_username)
+        self.smtp_password = (getattr(creds, "smtp_password", "") or self.settings.smtp_password)
+        self.smtp_from_email = (getattr(creds, "smtp_from_email", "") or self.settings.smtp_from_email)
+        self.smtp_from_name = (getattr(creds, "smtp_from_name", "") or self.settings.smtp_from_name)
+        self.smtp_use_tls = (
+            creds.smtp_use_tls if creds is not None and hasattr(creds, "smtp_use_tls")
+            else self.settings.smtp_use_tls
+        )
 
     def _build_message(self, email: EmailMessage) -> MIMEMultipart:
         """Construit le message MIME."""
         msg = MIMEMultipart("alternative")
-        msg["From"] = f"{self.settings.smtp_from_name} <{self.settings.smtp_from_email}>"
+        msg["From"] = f"{self.smtp_from_name} <{self.smtp_from_email}>"
         msg["To"] = email.to
         msg["Subject"] = email.subject
 
@@ -228,13 +241,13 @@ class EmailSender:
         all_recipients = [email.to, *email.cc, *email.bcc]
 
         try:
-            with smtplib.SMTP(self.settings.smtp_host, self.settings.smtp_port) as server:
-                if self.settings.smtp_use_tls:
+            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+                if self.smtp_use_tls:
                     server.starttls()
-                if self.settings.smtp_username:
-                    server.login(self.settings.smtp_username, self.settings.smtp_password)
+                if self.smtp_username:
+                    server.login(self.smtp_username, self.smtp_password)
                 server.sendmail(
-                    self.settings.smtp_from_email,
+                    self.smtp_from_email,
                     all_recipients,
                     msg.as_string(),
                 )
@@ -257,7 +270,7 @@ class EmailSender:
         backend = getattr(self.settings, "email_backend", "auto")
         if backend != "auto":
             return backend
-        if self.settings.smtp_username and self.settings.smtp_password and self.settings.smtp_from_email:
+        if self.smtp_username and self.smtp_password and self.smtp_from_email:
             return "smtp"
         if self.settings.is_test:
             return "console"

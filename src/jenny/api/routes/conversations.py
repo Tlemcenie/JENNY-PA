@@ -680,12 +680,20 @@ async def reply_to_conversation(
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
 
+    # Pour l'email, le destinataire est l'adresse du client (l'identifiant de
+    # conversation email est un fil, pas une adresse).
+    recipient_override: str | None = None
+    if conv.channel == "email" and conv.customer_id:
+        cust = await db.get(Customer, conv.customer_id)
+        recipient_override = cust.email if cust else None
+
     delivered = await send_channel_reply(
         conv.channel,
         conv.external_conversation_id,
         body.text,
         session=db,
         business_id=conv.business_id,
+        recipient_override=recipient_override,
     )
 
     now = datetime.now(UTC)
