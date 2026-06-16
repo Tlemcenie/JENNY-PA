@@ -25,10 +25,21 @@ export function Card({ children, className, hover, onClick }: CardProps) {
         "bg-jenny-surface rounded-2xl border border-jenny-divider p-6",
         "transition-colors duration-200",
         hover && "hover:shadow-md hover:border-jenny-coral/20 cursor-pointer",
-        onClick && "cursor-pointer",
+        onClick &&
+          "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-jenny-coral/40 focus-visible:ring-offset-2 focus-visible:ring-offset-jenny-bg",
         className
       )}
       onClick={onClick}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
       {...lift}

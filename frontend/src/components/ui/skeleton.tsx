@@ -5,7 +5,8 @@ interface SkeletonProps {
 }
 
 export function Skeleton({ className }: SkeletonProps) {
-  return <div className={cn("rounded-lg animate-shimmer", className)} />;
+  // Décoratif : ignoré par les lecteurs d'écran (placeholder de chargement).
+  return <div aria-hidden className={cn("rounded-lg animate-shimmer", className)} />;
 }
 
 export function SkeletonText({ lines = 3 }: { lines?: number }) {

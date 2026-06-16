@@ -1,4 +1,8 @@
+"use client";
+
+import { motion, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { staggerContainer, staggerItem } from "@/lib/motion";
 
 interface EmptyStateProps {
   icon?: React.ReactNode;
@@ -8,19 +12,42 @@ interface EmptyStateProps {
   className?: string;
 }
 
+/**
+ * État vide partagé — apparition douce en cascade (icône → titre → texte →
+ * action), neutralisée sous prefers-reduced-motion. Réutilisé par les pages
+ * métier (connaissances, prestations, calendrier…) pour un « vide » premium.
+ */
 export function EmptyState({ icon, title, description, action, className }: EmptyStateProps) {
+  const reduce = useReducedMotion();
+
   return (
-    <div className={cn("flex flex-col items-center justify-center py-16 px-4 text-center", className)}>
+    <motion.div
+      variants={staggerContainer}
+      initial={reduce ? false : "hidden"}
+      animate="show"
+      className={cn("flex flex-col items-center justify-center py-16 px-4 text-center", className)}
+    >
       {icon && (
-        <div className="w-16 h-16 rounded-2xl bg-jenny-divider/50 flex items-center justify-center text-jenny-text-secondary mb-4">
+        <motion.div
+          variants={staggerItem}
+          className="w-16 h-16 rounded-2xl bg-jenny-divider/50 flex items-center justify-center text-jenny-text-secondary mb-4"
+        >
           {icon}
-        </div>
+        </motion.div>
       )}
-      <h3 className="text-lg font-semibold text-jenny-text mb-1">{title}</h3>
+      <motion.h3 variants={staggerItem} className="text-lg font-semibold text-jenny-text mb-1">
+        {title}
+      </motion.h3>
       {description && (
-        <p className="text-sm text-jenny-text-secondary max-w-sm">{description}</p>
+        <motion.p variants={staggerItem} className="text-sm text-jenny-text-secondary max-w-sm">
+          {description}
+        </motion.p>
       )}
-      {action && <div className="mt-4">{action}</div>}
-    </div>
+      {action && (
+        <motion.div variants={staggerItem} className="mt-4">
+          {action}
+        </motion.div>
+      )}
+    </motion.div>
   );
 }

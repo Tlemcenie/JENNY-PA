@@ -494,6 +494,7 @@ export function ChatInterface() {
             </div>
 
             <div
+              className="jcomposer"
               style={{
                 display: "flex",
                 alignItems: "flex-end",
@@ -502,6 +503,7 @@ export function ChatInterface() {
                 background: "var(--bg)",
                 border: "1px solid var(--divider)",
                 borderRadius: "calc(var(--r-card) * .85)",
+                transition: "box-shadow .15s ease, border-color .15s ease",
               }}
             >
               <button

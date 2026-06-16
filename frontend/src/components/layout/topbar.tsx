@@ -80,7 +80,9 @@ export function Topbar() {
             }`}
           />
           {apiStatus === "error" && (
-            <span className="text-jenny-error text-[10px] hidden sm:inline">Hors ligne</span>
+            <span className="text-jenny-error text-[10px] font-semibold bg-jenny-error/10 rounded-full px-2 py-0.5 hidden sm:inline">
+              Hors ligne
+            </span>
           )}
         </div>
         <UserMenu />

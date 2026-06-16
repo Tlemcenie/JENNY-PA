@@ -312,10 +312,22 @@ html {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+/* Barre de saisie du chat : anneau de focus visible au clavier (focus-within).
+   Le textarea garde outline:none ; c'est le conteneur qui signale le focus. */
+.jcomposer:focus-within {
+  border-color: var(--color-jenny-coral, #ff7f6a) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-jenny-coral, #ff7f6a) 22%, transparent);
+}
+
 /* Respecte la préférence « réduire les animations » */
 @media (prefers-reduced-motion: reduce) {
   .animate-aurora, .animate-aurora-slow, .animate-float, .text-gradient-coral {
     animation: none;
+  }
+  /* Placeholders de chargement : pas de balayage infini (vestibulaire). */
+  .animate-shimmer {
+    animation: none;
+    background: var(--color-jenny-bg-tint, #f1f0ee);
   }
 }
 

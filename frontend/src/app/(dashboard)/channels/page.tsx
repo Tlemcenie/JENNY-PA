@@ -516,7 +516,7 @@ export default function ChannelsPage() {
         Connectez d&apos;autres canaux pour centraliser tous vos messages.
       </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14 }}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
         {loading
           ? Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)
           : channels.map((c) => (

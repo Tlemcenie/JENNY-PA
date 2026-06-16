@@ -3,9 +3,9 @@
 import { createContext, useCallback, useContext, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangle } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { useFocusTrap } from "@/lib/use-focus-trap";
 import { easeOutExpo } from "@/lib/motion";
+import { PressableButton } from "@/components/ui/pressable-button";
 
 interface ConfirmOptions {
   title: string;
@@ -85,23 +85,16 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
                 </div>
               </div>
               <div className="flex justify-end gap-2 mt-5">
-                <button
-                  onClick={() => close(false)}
-                  className="h-9 px-3.5 rounded-xl text-sm font-medium text-jenny-text-secondary hover:bg-jenny-divider/40 transition-colors"
-                >
+                <PressableButton variant="ghost" size="sm" onClick={() => close(false)}>
                   {opts.cancelLabel || "Annuler"}
-                </button>
-                <button
+                </PressableButton>
+                <PressableButton
+                  variant={opts.danger ? "danger" : "primary"}
+                  size="sm"
                   onClick={() => close(true)}
-                  className={cn(
-                    "h-9 px-4 rounded-xl text-sm font-semibold text-white transition-colors",
-                    opts.danger
-                      ? "bg-jenny-error hover:bg-red-600"
-                      : "bg-jenny-coral hover:bg-jenny-coral-dark"
-                  )}
                 >
                   {opts.confirmLabel || "Confirmer"}
-                </button>
+                </PressableButton>
               </div>
             </motion.div>
           </>

@@ -34,8 +34,9 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
               icon ? "pl-11" : "pl-4",
               "placeholder:text-jenny-text-secondary/50",
               "transition-all duration-150",
-              "focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral",
+              "focus:outline-none focus:ring-2 focus:ring-jenny-coral/30 focus:border-jenny-coral",
               "hover:border-jenny-text-secondary/30",
+              "disabled:opacity-50 disabled:bg-jenny-divider/20 disabled:cursor-not-allowed",
               error
                 ? "border-jenny-error focus:ring-jenny-error/20"
                 : "border-jenny-divider",
