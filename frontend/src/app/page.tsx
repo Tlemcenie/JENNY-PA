@@ -5,7 +5,7 @@ import Image from "next/image";
 import { motion } from "framer-motion";
 import {
   ArrowRight,
-  Eye,
+  Check,
   Brain,
   Zap,
   Hash,
@@ -20,12 +20,20 @@ import {
   Globe,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { JennyAvatar } from "@/components/ui/jenny-avatar";
+import { staggerContainer, staggerItem } from "@/lib/motion";
 
 // Page d'accueil publique (DA « Jenny Front ») — nuit profonde + corail,
 // titres en Instrument Serif, accents mono. Recrée fidèlement l'écran Landing
 // du design handoff, adaptée à Next + au stack existant.
 
-const NAV_LINKS = ["Produit", "Cas d'usage", "Tarifs", "Documentation"];
+// Liens de navigation → ancres vers de VRAIES sections de la page (défilement doux).
+const NAV_LINKS: { label: string; target: string }[] = [
+  { label: "Produit", target: "produit" },
+  { label: "Cas d'usage", target: "apercu" },
+  { label: "Tarifs", target: "tarifs" },
+  { label: "FAQ", target: "faq" },
+];
 
 const FEATURES = [
   {
@@ -63,18 +71,9 @@ const FEATURES = [
 const PAGE_BG =
   "radial-gradient(ellipse at 70% 0%, rgba(255,127,106,0.18) 0%, transparent 50%), radial-gradient(ellipse at 0% 80%, rgba(114,132,168,0.12) 0%, transparent 50%), #0E0B14";
 
+// Petit avatar Jenny pour les bulles de la démo de chat.
 function MascotBubble() {
-  return (
-    <span className="w-6 h-6 rounded-full overflow-hidden shrink-0 bg-jenny-coral block relative">
-      <Image
-        src="/jenny.png"
-        alt="Jenny"
-        width={29}
-        height={29}
-        className="object-cover w-[120%] h-[120%] mt-0.5 max-w-none"
-      />
-    </span>
-  );
+  return <JennyAvatar size={24} tone="dark" />;
 }
 
 export default function LandingPage() {
@@ -92,27 +91,25 @@ export default function LandingPage() {
         style={{ backdropFilter: "blur(12px)", background: "rgba(14,11,20,0.7)" }}
       >
         <Link href="/" className="flex items-center gap-2.5">
-          <span className="w-9 h-9 rounded-[10px] overflow-hidden bg-jenny-coral block">
-            <Image src="/jenny.png" alt="Jenny" width={36} height={36} className="object-cover w-full h-full" />
-          </span>
+          <JennyAvatar size={36} tone="dark" />
           <span className="text-[19px] font-bold tracking-[-0.02em]">Jenny</span>
         </Link>
         <div className="hidden lg:flex gap-8 ml-16">
-          {NAV_LINKS.map((t) => (
-            <span
-              key={t}
+          {NAV_LINKS.map((item) => (
+            <a
+              key={item.target}
+              href={`#${item.target}`}
               className="text-[13.5px] font-medium text-[#F4F1ED]/60 hover:text-[#F4F1ED]/90 transition-colors cursor-pointer"
             >
-              {t}
-            </span>
+              {item.label}
+            </a>
           ))}
         </div>
         <div className="ml-auto flex gap-3 items-center">
           {isAuthenticated ? (
             <Link
               href="/chat"
-              className="h-8 px-3 rounded-lg text-[12.5px] font-semibold inline-flex items-center gap-2 bg-jenny-coral text-white hover:bg-jenny-coral-dark transition-colors"
-              style={{ boxShadow: "0 4px 14px rgba(255,127,106,0.25)" }}
+              className="btn-fluffy h-9 px-4 text-[12.5px] font-semibold inline-flex items-center gap-2 bg-jenny-coral text-white hover:bg-jenny-coral-dark"
             >
               Ouvrir le tableau de bord →
             </Link>
@@ -126,8 +123,7 @@ export default function LandingPage() {
               </Link>
               <Link
                 href="/register"
-                className="h-8 px-3 rounded-lg text-[12.5px] font-semibold inline-flex items-center gap-2 bg-jenny-coral text-white hover:bg-jenny-coral-dark transition-colors"
-                style={{ boxShadow: "0 4px 14px rgba(255,127,106,0.25)" }}
+                className="btn-fluffy h-9 px-4 text-[12.5px] font-semibold inline-flex items-center gap-2 bg-jenny-coral text-white hover:bg-jenny-coral-dark"
               >
                 Essayer gratuitement →
               </Link>
@@ -139,8 +135,11 @@ export default function LandingPage() {
       {/* ── Hero ── */}
       <header className="px-6 md:px-16 pt-12 md:pt-[72px] pb-16 md:pb-[100px]">
         <div className="max-w-[1100px] mx-auto">
-          <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-            <div
+          {/* Reveal « petit à petit » : chaque élément (et chaque mot du titre)
+              apparaît en cascade fluide via les variants partagés. */}
+          <motion.div variants={staggerContainer} initial="hidden" animate="show">
+            <motion.div
+              variants={staggerItem}
               className="inline-flex items-center gap-2 rounded-full mb-8 pl-1.5 pr-3.5 py-1.5"
               style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
             >
@@ -150,43 +149,86 @@ export default function LandingPage() {
               <span className="text-[12.5px] text-[#F4F1ED]/75">
                 Auto-pilote · Jenny répond seule en moins de 2 secondes
               </span>
-            </div>
+            </motion.div>
 
-            <h1 className="font-display font-normal tracking-[-0.03em] mb-7 text-[clamp(48px,9vw,116px)]" style={{ lineHeight: 0.96 }}>
-              Chaque message client,
+            <motion.h1
+              variants={staggerContainer}
+              className="font-display font-normal tracking-[-0.03em] mb-7 text-[clamp(48px,9vw,116px)]"
+              style={{ lineHeight: 0.96 }}
+            >
+              {["Chaque", "message", "client,"].map((w) => (
+                <motion.span key={w} variants={staggerItem} className="inline-block mr-[0.22em]">
+                  {w}
+                </motion.span>
+              ))}
               <br />
-              <span className="italic text-jenny-coral">une opportunité.</span>
-            </h1>
-            <p className="text-[17px] md:text-[19px] leading-[1.5] text-[#F4F1ED]/65 max-w-[580px] mb-10">
+              {["une", "opportunité."].map((w) => (
+                <motion.span
+                  key={w}
+                  variants={staggerItem}
+                  className="inline-block mr-[0.22em] italic text-jenny-coral"
+                >
+                  {w}
+                </motion.span>
+              ))}
+            </motion.h1>
+            <motion.p
+              variants={staggerItem}
+              className="text-[17px] md:text-[19px] leading-[1.5] text-[#F4F1ED]/65 max-w-[580px] mb-10"
+            >
               Jenny est l&apos;assistante IA qui répond à vos clients sur WhatsApp, Instagram et Email — 24/7, dans
               votre ton, avec votre catalogue.
-            </p>
-            <div className="flex flex-wrap gap-3.5 items-center mb-16 md:mb-20">
+            </motion.p>
+            <motion.div variants={staggerItem} className="flex flex-wrap gap-3.5 items-center mb-16 md:mb-20">
               <Link
                 href={ctaHref}
-                className="h-[50px] px-6 rounded-xl text-[15px] font-semibold inline-flex items-center gap-2 bg-jenny-coral text-white hover:bg-jenny-coral-dark transition-colors"
-                style={{ boxShadow: "0 4px 14px rgba(255,127,106,0.25)" }}
+                className="btn-fluffy h-[50px] px-7 text-[15px] font-semibold inline-flex items-center gap-2 bg-jenny-coral text-white hover:bg-jenny-coral-dark"
               >
                 Activer Jenny pour mon business
                 <ArrowRight className="w-4 h-4" />
               </Link>
-              <button
-                className="h-[50px] px-6 rounded-xl text-[15px] font-semibold inline-flex items-center gap-2 text-white transition-colors hover:bg-white/10"
-                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)" }}
-              >
-                <Eye className="w-4 h-4" />
-                Voir une démo (90s)
-              </button>
               <span className="text-[12.5px] text-[#F4F1ED]/40 ml-2 font-mono">Sans CB · Activation en 4 minutes</span>
-            </div>
+            </motion.div>
           </motion.div>
 
-          {/* Hero visual — aperçu de chat flottant */}
+          {/* Hero visual #1 — animation d'intro Jenny (boucle, épurée) pour attirer.
+              Servie en static asset ; ?embed=1 masque les contrôles de lecture. */}
           <motion.div
             initial={{ opacity: 0, y: 28 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.15 }}
-            className="relative rounded-[24px] overflow-hidden p-6 md:p-12 grid md:grid-cols-2 gap-8 md:gap-12 items-center"
+            className="relative rounded-[24px] overflow-hidden border border-white/10"
+            style={{ boxShadow: "0 40px 120px rgba(255,127,106,0.20)" }}
+          >
+            {/* Halo corail doux derrière l'animation (épuré, sans cadre lourd) */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -inset-12 z-0"
+              style={{
+                background:
+                  "radial-gradient(ellipse at center, rgba(255,127,106,0.22) 0%, transparent 70%)",
+                filter: "blur(40px)",
+              }}
+            />
+            <iframe
+              src="/jenny-intro/index.html?embed=1"
+              title="Jenny en action"
+              loading="lazy"
+              scrolling="no"
+              aria-label="Jenny en animation"
+              className="relative z-10 block w-full aspect-video"
+              style={{ border: 0 }}
+            />
+          </motion.div>
+
+          {/* Hero visual #2 — aperçu de chat flottant (exemple concret, en
+              complément de l'animation ci-dessus). Ancre « Cas d'usage ». */}
+          <motion.div
+            id="apercu"
+            initial={{ opacity: 0, y: 28 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+            className="relative rounded-[24px] overflow-hidden p-6 md:p-12 grid md:grid-cols-2 gap-8 md:gap-12 items-center mt-8 md:mt-10 scroll-mt-24"
             style={{
               background: "linear-gradient(180deg, rgba(255,127,106,0.08) 0%, rgba(255,255,255,0.02) 100%)",
               border: "1px solid rgba(255,255,255,0.08)",
@@ -280,7 +322,8 @@ export default function LandingPage() {
 
       {/* ── Features ── */}
       <section
-        className="px-6 md:px-16 py-16 md:py-20"
+        id="produit"
+        className="px-6 md:px-16 py-16 md:py-20 scroll-mt-20"
         style={{
           background: "rgba(255,255,255,0.02)",
           borderTop: "1px solid rgba(255,255,255,0.05)",
@@ -322,6 +365,107 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Tarifs (honnête : essai gratuit, pas de prix fictif) ── */}
+      <section id="tarifs" className="px-6 md:px-16 py-16 md:py-20 scroll-mt-20">
+        <div className="max-w-[1100px] mx-auto">
+          <div className="font-mono text-[11px] tracking-[0.32em] uppercase text-jenny-coral mb-[18px]">
+            — tarifs —
+          </div>
+          <h2 className="font-display text-[40px] md:text-[64px] leading-[1.05] tracking-[-0.02em] mb-12 md:mb-16 max-w-[800px]">
+            Essayez, puis <span className="italic text-jenny-coral">décidez.</span>
+          </h2>
+          <div
+            className="max-w-[480px] rounded-[20px] p-8"
+            style={{
+              background: "linear-gradient(180deg, rgba(255,127,106,0.10) 0%, rgba(255,255,255,0.02) 100%)",
+              border: "1px solid rgba(255,127,106,0.20)",
+            }}
+          >
+            <div className="font-mono text-[11px] tracking-[0.18em] uppercase text-jenny-coral mb-3">
+              Essai
+            </div>
+            <div className="flex items-baseline gap-2 mb-1">
+              <span className="font-display text-[56px] leading-none">14 jours</span>
+              <span className="text-[17px] text-[#F4F1ED]/55">gratuits</span>
+            </div>
+            <p className="text-[14px] text-[#F4F1ED]/55 mb-6">
+              Sans carte bancaire. Tous les canaux, toutes les fonctions. Annulez en un clic.
+            </p>
+            <ul className="space-y-2.5 mb-7">
+              {[
+                "WhatsApp, Instagram & email illimités",
+                "Réservations & agenda automatiques",
+                "Votre ton, votre catalogue, vos règles",
+                "Hébergement en France · RGPD",
+              ].map((f) => (
+                <li key={f} className="flex items-center gap-2.5 text-[14px] text-[#F4F1ED]/80">
+                  <Check className="w-4 h-4 text-jenny-coral shrink-0" />
+                  {f}
+                </li>
+              ))}
+            </ul>
+            <Link
+              href={ctaHref}
+              className="btn-fluffy h-[50px] w-full text-[15px] font-semibold inline-flex items-center justify-center gap-2 bg-jenny-coral text-white hover:bg-jenny-coral-dark"
+            >
+              Commencer gratuitement
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+            <p className="text-[12.5px] text-[#F4F1ED]/45 mt-4 text-center">
+              Une question sur le tarif après l&apos;essai ?{" "}
+              <a href="mailto:azsay12@gmail.com?subject=Tarifs%20Jenny" className="text-jenny-coral hover:underline">
+                Écrivez-nous
+              </a>
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── FAQ (réponses réelles sur le produit) ── */}
+      <section
+        id="faq"
+        className="px-6 md:px-16 py-16 md:py-20 scroll-mt-20"
+        style={{
+          background: "rgba(255,255,255,0.02)",
+          borderTop: "1px solid rgba(255,255,255,0.05)",
+          borderBottom: "1px solid rgba(255,255,255,0.05)",
+        }}
+      >
+        <div className="max-w-[820px] mx-auto">
+          <div className="font-mono text-[11px] tracking-[0.32em] uppercase text-jenny-coral mb-[18px]">
+            — questions fréquentes —
+          </div>
+          <h2 className="font-display text-[40px] md:text-[56px] leading-[1.05] tracking-[-0.02em] mb-12">
+            Tout ce qu&apos;il faut <span className="italic text-jenny-coral">savoir.</span>
+          </h2>
+          <div className="divide-y divide-white/[0.07]">
+            {[
+              {
+                q: "Sur quels canaux Jenny répond-elle ?",
+                a: "WhatsApp, Instagram et email — gérés depuis un seul tableau de bord. Vous gardez la main : Jenny vous passe le relais quand c'est nécessaire.",
+              },
+              {
+                q: "Est-ce que Jenny invente des réponses ?",
+                a: "Non. Elle s'appuie sur votre catalogue et votre base de connaissances. Quand elle ne sait pas, elle propose de vérifier et vous remonte la question — plutôt que d'inventer.",
+              },
+              {
+                q: "Mes données sont-elles en sécurité ?",
+                a: "Hébergement en France, conforme RGPD. Vous pouvez exporter ou supprimer toutes les données d'un client à tout moment, en un clic.",
+              },
+              {
+                q: "Combien de temps pour démarrer ?",
+                a: "Quelques minutes : connectez vos canaux, renseignez vos prestations, choisissez le ton de Jenny — et elle commence à répondre.",
+              },
+            ].map((item) => (
+              <div key={item.q} className="py-6">
+                <h3 className="text-[18px] font-semibold mb-2 tracking-[-0.01em]">{item.q}</h3>
+                <p className="text-[14.5px] leading-[1.6] text-[#F4F1ED]/60">{item.a}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* ── CTA final ── */}
       <section className="px-6 md:px-16 py-20 md:py-[100px] text-center">
         <h2 className="font-display text-[44px] md:text-[80px] leading-none tracking-[-0.025em] mb-6">
@@ -334,8 +478,7 @@ export default function LandingPage() {
         </p>
         <Link
           href={ctaHref}
-          className="h-[58px] px-8 rounded-xl text-[16px] font-semibold inline-flex items-center gap-2 bg-jenny-coral text-white hover:bg-jenny-coral-dark transition-colors"
-          style={{ boxShadow: "0 4px 14px rgba(255,127,106,0.25)" }}
+          className="btn-fluffy h-[58px] px-9 text-[16px] font-semibold inline-flex items-center gap-2 bg-jenny-coral text-white hover:bg-jenny-coral-dark"
         >
           Activer Jenny maintenant
           <ArrowRight className="w-[18px] h-[18px]" />
@@ -351,9 +494,18 @@ export default function LandingPage() {
           © 2026 Jenny — Hébergé en France · RGPD
         </span>
         <div className="flex gap-5 text-[12.5px] text-[#F4F1ED]/50">
-          <span className="hover:text-[#F4F1ED]/80 transition-colors cursor-pointer">Confidentialité</span>
-          <span className="hover:text-[#F4F1ED]/80 transition-colors cursor-pointer">Conditions</span>
-          <span className="hover:text-[#F4F1ED]/80 transition-colors cursor-pointer">Contact</span>
+          <Link href="/confidentialite" className="hover:text-[#F4F1ED]/80 transition-colors">
+            Confidentialité
+          </Link>
+          <Link href="/conditions" className="hover:text-[#F4F1ED]/80 transition-colors">
+            Conditions
+          </Link>
+          <a
+            href="mailto:azsay12@gmail.com?subject=Contact%20Jenny"
+            className="hover:text-[#F4F1ED]/80 transition-colors"
+          >
+            Contact
+          </a>
         </div>
       </footer>
     </div>

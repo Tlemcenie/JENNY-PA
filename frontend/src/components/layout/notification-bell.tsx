@@ -13,6 +13,7 @@ import {
   type NotificationItem,
 } from "@/lib/api";
 import { RelativeTime } from "@/components/ui/relative-time";
+import { listStagger, listItem } from "@/lib/motion";
 
 const KIND_ICON: Record<string, typeof Bell> = {
   assigned: UserPlus,
@@ -158,40 +159,46 @@ export function NotificationBell() {
                   <span className="text-sm">Aucune notification</span>
                 </div>
               ) : (
-                items.map((n) => {
-                  const Icon = KIND_ICON[n.kind] || Bell;
-                  const tint = KIND_TINT[n.kind] || "text-jenny-text-secondary";
-                  return (
-                    <button
-                      key={n.id}
-                      onClick={() => openConversation(n)}
-                      className={`w-full text-left flex gap-3 px-4 py-3 border-b border-jenny-divider/60 last:border-0 hover:bg-jenny-bg transition-colors ${
-                        n.read ? "" : "bg-jenny-coral/[0.04]"
-                      }`}
-                    >
-                      <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${tint}`} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-jenny-text truncate">
-                            {n.title}
-                          </span>
-                          {!n.read && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-jenny-coral shrink-0" />
+                // Apparition en cascade des notifications (listStagger/listItem).
+                // Respecte prefers-reduced-motion : listItem n'anime que opacity/y
+                // et framer neutralise le mouvement quand l'utilisateur le demande.
+                <motion.div variants={listStagger} initial="hidden" animate="show">
+                  {items.map((n) => {
+                    const Icon = KIND_ICON[n.kind] || Bell;
+                    const tint = KIND_TINT[n.kind] || "text-jenny-text-secondary";
+                    return (
+                      <motion.button
+                        key={n.id}
+                        variants={listItem}
+                        onClick={() => openConversation(n)}
+                        className={`w-full text-left flex gap-3 px-4 py-3 border-b border-jenny-divider/60 last:border-0 hover:bg-jenny-bg transition-colors ${
+                          n.read ? "" : "bg-jenny-coral/[0.04]"
+                        }`}
+                      >
+                        <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${tint}`} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-jenny-text truncate">
+                              {n.title}
+                            </span>
+                            {!n.read && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-jenny-coral shrink-0" />
+                            )}
+                          </div>
+                          {n.body && (
+                            <p className="text-xs text-jenny-text-secondary truncate mt-0.5">
+                              {n.body}
+                            </p>
                           )}
+                          <RelativeTime
+                            date={n.created_at}
+                            className="text-[10px] text-jenny-text-secondary/70"
+                          />
                         </div>
-                        {n.body && (
-                          <p className="text-xs text-jenny-text-secondary truncate mt-0.5">
-                            {n.body}
-                          </p>
-                        )}
-                        <RelativeTime
-                          date={n.created_at}
-                          className="text-[10px] text-jenny-text-secondary/70"
-                        />
-                      </div>
-                    </button>
-                  );
-                })
+                      </motion.button>
+                    );
+                  })}
+                </motion.div>
               )}
             </div>
           </motion.div>

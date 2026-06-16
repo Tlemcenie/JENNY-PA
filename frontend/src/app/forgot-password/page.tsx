@@ -4,10 +4,11 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, Check } from "lucide-react";
 import { forgotPassword, resetPassword, ApiError } from "@/lib/api";
-import { staggerContainer, staggerItem } from "@/lib/motion";
+import { PressableButton } from "@/components/ui/pressable-button";
+import { slideInLeft, slideInRight, staggerContainer, staggerItem } from "@/lib/motion";
 
 // Page « Mot de passe oublié » — DA « Jenny Front » : calque exact de l'écran
 // login (split-screen, formulaire sur fond clair à gauche, panneau nuit profonde
@@ -126,15 +127,22 @@ export default function ForgotPasswordPage() {
           <span className="text-[18px] font-bold tracking-[-0.02em] text-jenny-text">Jenny</span>
         </Link>
 
-        <motion.div
-          key={step}
-          variants={staggerContainer}
-          initial="hidden"
-          animate="show"
-          className="my-auto w-full max-w-[380px] py-12"
-        >
-          {step === "request" && (
-            <>
+        <div className="my-auto w-full max-w-[380px] py-12">
+          {/* Transitions d'étapes (request → reset → done) : glissement + fondu. */}
+          <AnimatePresence mode="wait" initial={false}>
+            {step === "request" && (
+              <motion.div
+                key="request"
+                variants={slideInLeft}
+                initial="hidden"
+                animate="show"
+                exit="hidden"
+              >
+                <motion.div
+                  variants={staggerContainer}
+                  initial="hidden"
+                  animate="show"
+                >
               <motion.div
                 variants={staggerItem}
                 className="font-mono text-[11px] tracking-[0.28em] uppercase text-jenny-text-secondary mb-3.5"
@@ -190,22 +198,34 @@ export default function ForgotPasswordPage() {
                 )}
 
                 <motion.div variants={staggerItem}>
-                  <button
+                  <PressableButton
                     type="submit"
+                    size="lg"
+                    isLoading={isLoading}
                     disabled={isLoading}
-                    className="w-full h-12 mt-2 rounded-[11px] bg-jenny-coral text-white text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 transition-all duration-150 hover:bg-jenny-coral-dark active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
-                    style={{ boxShadow: "0 4px 14px rgba(255,127,106,0.25)" }}
+                    className="w-full mt-2 shadow-[0_4px_14px_rgba(255,127,106,0.25)]"
                   >
-                    {isLoading && <Spinner />}
                     {isLoading ? "Envoi…" : "Envoyer le code →"}
-                  </button>
+                  </PressableButton>
                 </motion.div>
               </motion.form>
-            </>
-          )}
+                </motion.div>
+              </motion.div>
+            )}
 
-          {step === "reset" && (
-            <>
+            {step === "reset" && (
+              <motion.div
+                key="reset"
+                variants={slideInRight}
+                initial="hidden"
+                animate="show"
+                exit="hidden"
+              >
+                <motion.div
+                  variants={staggerContainer}
+                  initial="hidden"
+                  animate="show"
+                >
               <motion.div
                 variants={staggerItem}
                 className="font-mono text-[11px] tracking-[0.28em] uppercase text-jenny-text-secondary mb-3.5"
@@ -298,15 +318,15 @@ export default function ForgotPasswordPage() {
                 )}
 
                 <motion.div variants={staggerItem}>
-                  <button
+                  <PressableButton
                     type="submit"
+                    size="lg"
+                    isLoading={isLoading}
                     disabled={isLoading}
-                    className="w-full h-12 mt-2 rounded-[11px] bg-jenny-coral text-white text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 transition-all duration-150 hover:bg-jenny-coral-dark active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
-                    style={{ boxShadow: "0 4px 14px rgba(255,127,106,0.25)" }}
+                    className="w-full mt-2 shadow-[0_4px_14px_rgba(255,127,106,0.25)]"
                   >
-                    {isLoading && <Spinner />}
                     {isLoading ? "Réinitialisation…" : "Réinitialiser →"}
-                  </button>
+                  </PressableButton>
                 </motion.div>
 
                 <motion.button
@@ -321,11 +341,19 @@ export default function ForgotPasswordPage() {
                   Pas reçu le code ? En redemander un
                 </motion.button>
               </motion.form>
-            </>
-          )}
+                </motion.div>
+              </motion.div>
+            )}
 
-          {step === "done" && (
-            <div className="text-center">
+            {step === "done" && (
+              <motion.div
+                key="done"
+                variants={slideInRight}
+                initial="hidden"
+                animate="show"
+                exit="hidden"
+                className="text-center"
+              >
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -352,11 +380,17 @@ export default function ForgotPasswordPage() {
               >
                 On vous redirige vers la connexion…
               </motion.p>
-            </div>
-          )}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {step !== "done" && (
-            <motion.div variants={staggerItem} className="mt-8">
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              className="mt-8"
+            >
               <Link
                 href="/login"
                 className="inline-flex items-center gap-1.5 text-[13.5px] text-jenny-text-secondary hover:text-jenny-coral transition-colors"
@@ -366,7 +400,7 @@ export default function ForgotPasswordPage() {
               </Link>
             </motion.div>
           )}
-        </motion.div>
+        </div>
 
         <p className="font-mono text-[11px] tracking-[0.08em] text-jenny-text-secondary/60">
           © 2026 Jenny — Hébergé en France · RGPD
@@ -421,19 +455,5 @@ export default function ForgotPasswordPage() {
         </div>
       </div>
     </div>
-  );
-}
-
-// Spinner repris à l'identique du bouton de l'écran login.
-function Spinner() {
-  return (
-    <svg className="animate-spin h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-      />
-    </svg>
   );
 }

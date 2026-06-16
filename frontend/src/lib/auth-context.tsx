@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
 import * as api from "./api";
+import { ApiError } from "./api";
 import type { RegisterResult, User } from "./api";
 
 interface AuthState {
@@ -27,22 +28,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthenticated: false,
   });
 
-  // Check for existing session on mount
+  // Vérifie la session au montage. Robuste aux pépins transitoires : on ne
+  // déconnecte JAMAIS sur une erreur réseau / 5xx / API qui redémarre — sinon
+  // l'utilisateur est renvoyé au login au moindre hoquet (« ça refresh tout le
+  // temps / ça me change d'onglet »). On ne vide la session que sur un vrai 401/403.
   useEffect(() => {
+    let cancelled = false;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
     const checkAuth = async () => {
       if (!api.isAuthenticated()) {
         setState({ user: null, isLoading: false, isAuthenticated: false });
         return;
       }
-      try {
-        const user = await api.getMe();
-        setState({ user, isLoading: false, isAuthenticated: true });
-      } catch {
-        api.clearToken();
-        setState({ user: null, isLoading: false, isAuthenticated: false });
+      // Jusqu'à 3 tentatives avec petit back-off : couvre un redémarrage d'API ou
+      // une coupure réseau brève sans jamais déconnecter l'utilisateur.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const user = await api.getMe();
+          if (!cancelled) setState({ user, isLoading: false, isAuthenticated: true });
+          return;
+        } catch (err) {
+          const status = err instanceof ApiError ? err.status : 0;
+          if (status === 401 || status === 403) {
+            // Vraie expiration de session → on déconnecte proprement.
+            api.clearToken();
+            if (!cancelled) setState({ user: null, isLoading: false, isAuthenticated: false });
+            return;
+          }
+          if (attempt < 2) await sleep(800 * (attempt + 1));
+        }
       }
+      // Toujours pas de réponse après les tentatives : on RESTE connecté (token
+      // valide), `getMe` sera retenté plus tard. Pas de rebond vers /login.
+      if (!cancelled) setState((s) => ({ ...s, isLoading: false, isAuthenticated: true }));
     };
+
     checkAuth();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {

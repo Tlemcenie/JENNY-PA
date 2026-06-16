@@ -210,7 +210,9 @@ class BookAppointmentDBAction(BaseAction):
                 business_id=bid,
                 customer_id=customer_id,
                 title=f"{service_name}",
-                description=f"Réservé via Jenny ({params['date']} {params.get('time', '')})".strip(),
+                # On formate depuis le datetime réellement réservé : les slots date/time
+                # contiennent le message brut (souvent identique), ce qui dupliquait le texte.
+                description=f"Réservé via Jenny — {start.astimezone(tz).strftime('%d/%m/%Y à %Hh%M')}",
                 channel="chat",
                 start_at=start,
                 end_at=end,

@@ -121,28 +121,34 @@ class Business(Base, TimestampMixin):
     )
 
     # Relations
-    customers = relationship("Customer", back_populates="business", lazy="selectin")
-    conversations = relationship("Conversation", back_populates="business", lazy="selectin")
+    # ⚠️ Efficacité : ces collections sont volumineuses (tous les clients, RDV,
+    # commandes… d'un salon). Surtout PAS « lazy=selectin » : chaque chargement
+    # d'un Business (à CHAQUE message du chat) déclencherait un SELECT par
+    # collection → toute la base du salon en mémoire pour rien. Aucun code ne lit
+    # ces relations via l'objet Business (les besoins réels passent par des requêtes
+    # filtrées dédiées). On les laisse donc en chargement à la demande (« select »).
+    customers = relationship("Customer", back_populates="business", lazy="select")
+    conversations = relationship("Conversation", back_populates="business", lazy="select")
     customer_addresses = relationship(
         "CustomerAddress",
         back_populates="business",
-        lazy="selectin",
+        lazy="select",
     )
-    orders = relationship("Order", back_populates="business", lazy="selectin")
+    orders = relationship("Order", back_populates="business", lazy="select")
     customer_transactions = relationship(
         "CustomerTransaction",
         back_populates="business",
-        lazy="selectin",
+        lazy="select",
     )
     customer_documents = relationship(
         "CustomerDocument",
         back_populates="business",
-        lazy="selectin",
+        lazy="select",
     )
     support_tickets = relationship(
         "SupportTicket",
         back_populates="business",
-        lazy="selectin",
+        lazy="select",
     )
 
     def __repr__(self) -> str:

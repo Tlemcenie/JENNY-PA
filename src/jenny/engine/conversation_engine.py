@@ -31,7 +31,10 @@ from jenny.engine.intelligence import (
 from jenny.engine.state_manager import ConversationPhase, ConversationState, StateManager
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from uuid import UUID
+
+    TokenCallback = Callable[[str], Awaitable[None]]
 
 logger = get_logger(__name__)
 
@@ -239,11 +242,17 @@ class ConversationEngine:
         self.agent_router = agent_router
         self.response_generator = response_generator
 
-    async def process(self, request: EngineRequest) -> EngineResponse:
+    async def process(
+        self, request: EngineRequest, on_token: "TokenCallback | None" = None
+    ) -> EngineResponse:
         """Traite un message et produit une réponse.
 
         Flux complet :
         1. Contexte → 2. Intent → 3. NER → 4. Agent (action) → 5. LLM (réponse)
+
+        ``on_token`` (optionnel) reçoit chaque token de la réponse LLM au fil de
+        l'eau (chat en streaming). ``EngineResponse.response_text`` reste la
+        version finale nettoyée.
         """
         logger.info(
             "engine.process.start",
@@ -403,6 +412,16 @@ class ConversationEngine:
             svc_slot = state.slots.get("service")
             if not (svc_slot and svc_slot.filled) and request.catalog_services:
                 matched_svc = match_catalog_services(msg, request.catalog_services)
+                if not matched_svc:
+                    # La prestation a pu être citée à un tour précédent (« combien le
+                    # balayage ? » → « je réserve ») : on la retrouve dans les derniers
+                    # messages du client pour ne pas la redemander bêtement.
+                    recent_user = " ".join(
+                        m.get("content", "")
+                        for m in state.message_history[-6:]
+                        if m.get("role") == "user"
+                    )
+                    matched_svc = match_catalog_services(recent_user, request.catalog_services)
                 if matched_svc:
                     state.set_slot("service", matched_svc, entity_type="SERVICE")
 
@@ -476,6 +495,10 @@ class ConversationEngine:
             documents=state.retrieved_documents,
             action_result=state.action_result,
         )
+        # Le catalogue de prestations EST dans le prompt : une question de prix/devis
+        # n'est donc PAS une lacune (Jenny doit citer le tarif, pas dire « je vérifie »).
+        if gap and intent in ("pricing", "quote") and state.business_catalog:
+            gap = False
         gap_question: str | None = None
         # On n'enregistre pas de lacune si on va déjà demander une clarification :
         # ce n'est pas « je ne sais pas », c'est « je n'ai pas compris ».
@@ -488,7 +511,7 @@ class ConversationEngine:
 
         # ── 5. Générer la réponse via LLM (TOUJOURS) ──
         state.phase = ConversationPhase.RESPONDING
-        response_text = await self._generate_response(state)
+        response_text = await self._generate_response(state, on_token=on_token)
 
         # ── Affinage de la lacune après génération ──
         # Une réponse qui esquive (« je vérifie et je reviens ») trahit une
@@ -716,19 +739,22 @@ class ConversationEngine:
 
         return {"agent": "fallback", "documents": [], "action_result": None}
 
-    async def _generate_response(self, state: ConversationState) -> str:
+    async def _generate_response(
+        self, state: ConversationState, on_token: "TokenCallback | None" = None
+    ) -> str:
         """Génère la réponse via le LLM (TOUJOURS prioritaire).
 
         Le LLM reçoit tout le contexte : intention, entités, résultat d'action,
         historique, documents RAG. C'est lui qui formule la réponse naturelle.
         Fallback sur templates uniquement si le LLM est indisponible.
+        ``on_token`` diffuse la réponse au fil de l'eau si fourni.
         """
         if self.response_generator is not None:
             try:
                 from jenny.engine.response_generator import ResponseGenerator
 
                 if isinstance(self.response_generator, ResponseGenerator):
-                    return await self.response_generator.generate(state)
+                    return await self.response_generator.generate(state, on_token=on_token)
             except (ImportError, Exception) as e:
                 logger.warning("engine.generator.error", error=str(e))
 

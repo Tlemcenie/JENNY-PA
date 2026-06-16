@@ -80,7 +80,10 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="h-full antialiased">
+      {/* suppressHydrationWarning : certaines extensions navigateur (ClickUp, Grammarly…)
+          modifient <body> avant l'hydratation React → faux avertissements rouges en console.
+          Inoffensif, mais on les fait taire pour ne pas inquiéter. */}
+      <body className="h-full antialiased" suppressHydrationWarning>
         <AuthProvider>
           <ToastProvider>{children}</ToastProvider>
         </AuthProvider>

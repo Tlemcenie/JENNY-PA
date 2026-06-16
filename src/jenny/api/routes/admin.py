@@ -6,14 +6,16 @@ actions de gestion (activer/désactiver une entreprise, promouvoir un admin).
 """
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from jenny.api.dependencies import DbSession, SuperUser
 from jenny.core.logging import get_logger
+from jenny.domain.models.audit_log import AuditLog
 from jenny.domain.models.business import Business
 from jenny.domain.models.business_member import BusinessMember
 from jenny.domain.models.conversation import Conversation
@@ -236,4 +238,92 @@ async def admin_set_superuser(
         is_superuser=bool(u.is_superuser),
         businesses=n,
         created_at=u.created_at,
+    )
+
+
+# ── Journal d'audit GLOBAL (toutes entreprises) ──
+# Même forme de réponse que ``routes/audit.py`` (AuditItem / AuditListResponse),
+# mais SANS filtre business_id : la console plateforme voit « qui a fait quoi »
+# sur l'ensemble des entreprises. Données 100% réelles (table audit_logs).
+
+
+class AdminAuditItem(BaseModel):
+    id: str
+    actor: str | None = None
+    action: str
+    entity_type: str
+    entity_id: str | None = None
+    summary: str
+    meta: dict | None = None
+    created_at: datetime
+    # Champs additionnels propres à la vue globale : on rattache chaque ligne
+    # à son entreprise pour que l'admin sache de qui il s'agit.
+    business_id: str
+    business_name: str | None = None
+
+
+class AdminAuditListResponse(BaseModel):
+    items: list[AdminAuditItem]
+    total: int
+
+
+@router.get("/audit", response_model=AdminAuditListResponse)
+async def admin_audit(
+    db: DbSession,
+    _: SuperUser,
+    q: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminAuditListResponse:
+    """Historique d'audit GLOBAL de la plateforme (le plus récent d'abord).
+
+    Lecture seule de toute la table ``audit_logs``, toutes entreprises
+    confondues. ``q`` filtre (insensible à la casse) sur action / summary /
+    actor.
+    """
+    filters = []
+    if q:
+        like = f"%{q.strip()}%"
+        filters.append(
+            or_(
+                AuditLog.action.ilike(like),
+                AuditLog.summary.ilike(like),
+                AuditLog.actor.ilike(like),
+            )
+        )
+
+    total = (
+        await db.execute(select(func.count(AuditLog.id)).where(*filters))
+    ).scalar_one()
+    rows = (
+        (
+            await db.execute(
+                select(AuditLog)
+                .where(*filters)
+                .order_by(AuditLog.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    return AdminAuditListResponse(
+        items=[
+            AdminAuditItem(
+                id=str(a.id),
+                actor=a.actor,
+                action=a.action,
+                entity_type=a.entity_type,
+                entity_id=str(a.entity_id) if a.entity_id else None,
+                summary=a.summary,
+                meta=a.meta,
+                created_at=a.created_at,
+                business_id=str(a.business_id),
+                business_name=a.business.name if a.business is not None else None,
+            )
+            for a in rows
+        ],
+        total=int(total or 0),
     )

@@ -4,9 +4,12 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError } from "@/lib/api";
+import { JennyAvatar } from "@/components/ui/jenny-avatar";
+import { BrandedLoader } from "@/components/ui/branded-loader";
+import { PressableButton } from "@/components/ui/pressable-button";
 import { staggerContainer, staggerItem } from "@/lib/motion";
 
 // Page de connexion — DA « Jenny Front » : split-screen, formulaire sur fond
@@ -24,6 +27,7 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
   const router = useRouter();
+  const reduce = useReducedMotion();
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -57,15 +61,7 @@ export default function LoginPage() {
       <div className="flex flex-col px-6 py-10 sm:px-12 lg:px-16 lg:py-14">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2.5">
-          <span className="w-[34px] h-[34px] rounded-[9px] overflow-hidden bg-jenny-coral block">
-            <Image
-              src="/jenny.png"
-              alt="Jenny"
-              width={34}
-              height={34}
-              className="object-cover w-full h-full"
-            />
-          </span>
+          <JennyAvatar size={34} tone="light" />
           <span className="text-[18px] font-bold tracking-[-0.02em] text-jenny-text">Jenny</span>
         </Link>
 
@@ -101,7 +97,7 @@ export default function LoginPage() {
           <motion.form
             variants={staggerContainer}
             onSubmit={handleSubmit}
-            className="flex flex-col gap-3.5"
+            className="relative flex flex-col gap-3.5"
           >
             {/* Email */}
             <motion.div variants={staggerItem}>
@@ -119,7 +115,7 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 autoComplete="email"
-                className="w-full h-12 px-4 rounded-[11px] bg-white border border-jenny-divider text-[14.5px] text-jenny-text placeholder:text-jenny-text-secondary/50 outline-none transition-all duration-150 hover:border-jenny-text-secondary/30 focus:border-jenny-coral focus:ring-2 focus:ring-jenny-coral/20"
+                className="w-full h-12 px-4 rounded-[11px] bg-jenny-surface border border-jenny-divider text-[14.5px] text-jenny-text placeholder:text-jenny-text-secondary/50 outline-none transition-all duration-150 hover:border-jenny-text-secondary/30 focus:border-jenny-coral focus:ring-2 focus:ring-jenny-coral/20"
               />
             </motion.div>
 
@@ -147,15 +143,18 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 autoComplete="current-password"
-                className="w-full h-12 px-4 rounded-[11px] bg-white border border-jenny-divider text-[14.5px] text-jenny-text placeholder:text-jenny-text-secondary/50 outline-none transition-all duration-150 hover:border-jenny-text-secondary/30 focus:border-jenny-coral focus:ring-2 focus:ring-jenny-coral/20"
+                className="w-full h-12 px-4 rounded-[11px] bg-jenny-surface border border-jenny-divider text-[14.5px] text-jenny-text placeholder:text-jenny-text-secondary/50 outline-none transition-all duration-150 hover:border-jenny-text-secondary/30 focus:border-jenny-coral focus:ring-2 focus:ring-jenny-coral/20"
               />
             </motion.div>
 
             {error && (
               <motion.div
+                key={error}
                 initial={{ opacity: 0, y: -4 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="p-3.5 rounded-[11px] bg-jenny-error/[0.08] border border-jenny-error/15 text-jenny-error text-sm leading-relaxed"
+                role="alert"
+                aria-live="assertive"
+                className={`p-3.5 rounded-[11px] bg-jenny-error/[0.08] border border-jenny-error/15 text-jenny-error text-sm leading-relaxed ${reduce ? "" : "animate-shake"}`}
               >
                 {error}
               </motion.div>
@@ -163,32 +162,32 @@ export default function LoginPage() {
 
             {/* Continuer */}
             <motion.div variants={staggerItem}>
-              <button
+              <PressableButton
                 type="submit"
-                disabled={isLoading}
-                className="w-full h-12 mt-2 rounded-[11px] bg-jenny-coral text-white text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 transition-all duration-150 hover:bg-jenny-coral-dark active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
-                style={{ boxShadow: "0 4px 14px rgba(255,127,106,0.25)" }}
+                isLoading={isLoading}
+                className="btn-fluffy w-full h-12 mt-2 bg-jenny-coral text-white text-[14.5px] font-semibold hover:bg-jenny-coral-dark"
               >
-                {isLoading && (
-                  <svg className="animate-spin h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none">
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                    />
-                  </svg>
-                )}
                 {isLoading ? "Connexion…" : "Continuer →"}
-              </button>
+              </PressableButton>
             </motion.div>
+
+            {/* Overlay de soumission : voile flouté + loader brandé au-dessus du formulaire */}
+            <AnimatePresence>
+              {isLoading && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  aria-hidden
+                  className="absolute -inset-3 z-10 flex items-center justify-center rounded-2xl bg-jenny-bg/55 backdrop-blur-sm"
+                >
+                  <div className="h-[180px] w-[180px] overflow-hidden rounded-2xl border border-jenny-divider/60 bg-jenny-surface/90 shadow-xl shadow-jenny-coral/10">
+                    <BrandedLoader label="Connexion…" />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.form>
 
           <motion.p variants={staggerItem} className="mt-8 text-[13.5px] text-jenny-text-secondary">

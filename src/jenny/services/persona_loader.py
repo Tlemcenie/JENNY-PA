@@ -30,7 +30,13 @@ async def load_business_persona(
         return None, None
     if biz is None:
         return None, None
-    return biz.persona, biz.name
+    # La description du business vit sur la colonne `description` (pas dans le JSON
+    # persona). On la fusionne dans le persona pour que le « Cerveau » puisse s'en
+    # servir afin de se présenter — sans modifier ce qui est stocké en base.
+    persona = dict(biz.persona) if isinstance(biz.persona, dict) else {}
+    if biz.description and not persona.get("description"):
+        persona["description"] = biz.description
+    return (persona or None), biz.name
 
 
 async def load_business_persona_fresh(

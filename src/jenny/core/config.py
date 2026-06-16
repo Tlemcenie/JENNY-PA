@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     llama_base_url: str = "http://localhost:11434"  # Ollama / vLLM local
     llm_provider: str = "groq"  # groq, openai, mistral, llama, nanogpt
     llm_model: str = "llama-3.3-70b-versatile"  # modèle par défaut Groq
-    llm_temperature: float = 0.7  # ton/créativité du LLM (0=factuel, 1=créatif)
+    llm_temperature: float = 0.4  # ton du LLM : assez bas = stable/posé (évite l'effet « fébrile »)
     # Durée pendant laquelle Ollama garde le modèle chargé en mémoire entre deux
     # requêtes. "30m"/"-1" (illimité) évitent le cold-start → réponses « au tac au
     # tac ». Mettre "0" pour libérer la RAM immédiatement après chaque requête.

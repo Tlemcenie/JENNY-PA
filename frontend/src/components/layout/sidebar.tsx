@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { getConversationStats, subscribeToConversationEvents } from "@/lib/api";
@@ -19,6 +18,7 @@ import {
   TrendingUp,
   Lightbulb,
   Gauge,
+  Cpu,
   Scissors,
   CalendarDays,
   Shield,
@@ -33,6 +33,8 @@ import {
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
+import { JennyAvatar } from "@/components/ui/jenny-avatar";
+import { ThemeSwitch } from "@/components/ui/theme-switch";
 
 // Navigation principale + section « Compte », dans l'ordre de la DA Jenny Front.
 const navItems = [
@@ -47,6 +49,7 @@ const navItems = [
   { href: "/learning", icon: Lightbulb, labelKey: "nav.learning", accent: false, section: "main" },
   { href: "/analytics", icon: BarChart3, labelKey: "nav.analytics", accent: false, section: "main" },
   { href: "/efficacy", icon: Gauge, labelKey: "nav.efficacy", accent: false, section: "main" },
+  { href: "/lab", icon: Cpu, labelKey: "nav.lab", accent: false, section: "main" },
   { href: "/stats", icon: TrendingUp, labelKey: "nav.stats", accent: false, section: "main" },
   { href: "/channels", icon: Radio, labelKey: "nav.channels", accent: false, section: "main" },
   { href: "/customers", icon: Users, labelKey: "nav.customers", accent: false, section: "account" },
@@ -78,18 +81,25 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
 
   return (
     <>
-      {/* Logo */}
+      {/* Logo — clic = retour à l'accueil du tableau de bord */}
       <div className="h-[60px] flex items-center px-4 border-b border-white/[0.06]">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-xl overflow-hidden bg-jenny-coral flex items-center justify-center flex-shrink-0 shadow-md shadow-jenny-coral/30">
-            <Image src="/jenny.png" alt="Jenny" width={36} height={36} className="object-cover w-full h-full" />
-          </div>
+        <Link
+          href="/dashboard"
+          onClick={onClose}
+          aria-label="Accueil Jenny"
+          className="flex items-center gap-3 min-w-0 rounded-xl -ml-1 pl-1 pr-2 py-1 transition-colors hover:bg-white/[0.06] group/logo"
+        >
+          <JennyAvatar
+            size={36}
+            tone="dark"
+            className="shadow-md shadow-jenny-coral/30 transition-transform duration-200 group-hover/logo:scale-105"
+          />
           {expanded && (
             <span className="text-white font-semibold text-[1.0625rem] tracking-tight">
               Jenny
             </span>
           )}
-        </div>
+        </Link>
         {expanded && !mobileOpen && (
           <span className="ml-auto font-mono text-[9px] tracking-[0.12em] uppercase text-white/30 px-1.5 py-[3px] border border-white/10 rounded">
             Bêta
@@ -119,10 +129,10 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
               href={item.href}
               onClick={onClose}
               className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150 group relative",
+                "flex items-center gap-3 px-3 py-2.5 rounded-2xl transition-all duration-200 ease-out group relative",
                 isActive
-                  ? "bg-white/[0.08] text-white"
-                  : "text-white/45 hover:text-white/75 hover:bg-white/[0.04]"
+                  ? "text-white bg-gradient-to-r from-white/[0.13] to-white/[0.04] shadow-[0_6px_18px_-8px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.07)]"
+                  : "text-white/45 hover:text-white/80 hover:bg-white/[0.055] hover:translate-x-[2px]"
               )}
             >
               {isActive && (
@@ -176,12 +186,15 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
               {t("nav.autopilot")}
             </div>
             <p className="text-white/70 text-[12px] leading-snug mb-2.5">{t("nav.autopilotDesc")}</p>
-            <div className="flex items-center gap-2">
-              <span className="w-8 h-[18px] bg-jenny-coral rounded-full relative">
-                <span className="absolute right-0.5 top-0.5 w-3.5 h-3.5 bg-white rounded-full" />
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-jenny-coral/15 border border-jenny-coral/25">
+              <span className="relative flex w-1.5 h-1.5">
+                <span className="absolute inline-flex h-full w-full rounded-full bg-jenny-coral opacity-60 animate-ping" />
+                <span className="relative inline-flex w-1.5 h-1.5 rounded-full bg-jenny-coral" />
               </span>
-              <span className="text-white text-[11px] font-semibold">{t("nav.autopilotOn")}</span>
-            </div>
+              <span className="text-jenny-coral text-[10.5px] font-semibold tracking-wide">
+                {t("nav.autopilotOn")}
+              </span>
+            </span>
           </div>
         )}
         {expanded && user && (
@@ -190,11 +203,13 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
             <p className="text-white/30 text-[0.75rem] truncate">{user.email}</p>
           </div>
         )}
+        {/* Mode sombre — vrai toggle premium (synchro avec la topbar) */}
+        {expanded && <ThemeSwitch className="hover:bg-white/[0.04]" />}
         {user?.is_superuser && (
           <Link
             href="/admin"
             onClick={onClose}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-jenny-coral/80 hover:text-jenny-coral hover:bg-jenny-coral/10 transition-all duration-150 w-full"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-2xl text-jenny-coral/80 hover:text-jenny-coral hover:bg-jenny-coral/10 transition-all duration-200 w-full"
           >
             <Shield className="w-[18px] h-[18px] flex-shrink-0" />
             {expanded && <span className="text-[0.8125rem] font-medium">{t("nav.admin")}</span>}
@@ -202,7 +217,7 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
         )}
         <button
           onClick={() => { logout(); onClose(); }}
-          className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-white/35 hover:text-white/60 hover:bg-white/[0.04] transition-all duration-150 w-full"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-2xl text-white/35 hover:text-white/60 hover:bg-white/[0.04] transition-all duration-200 w-full"
         >
           <LogOut className="w-[18px] h-[18px] flex-shrink-0" />
           {expanded && <span className="text-[0.8125rem]">{t("nav.logout")}</span>}

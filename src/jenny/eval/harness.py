@@ -2,8 +2,8 @@
 
 Pour chaque scénario, on amorce une base de connaissances **en mémoire** (vrais
 embeddings nomic-embed-text), on fait tourner le VRAI moteur conversationnel
-(qwen2.5:3b) tour par tour, puis on score chaque réponse selon les attentes du
-scénario. Aucune dépendance Postgres : l'éval est hermétique et reproductible.
+(qwen2.5:7b-instruct) tour par tour, puis on score chaque réponse selon les attentes
+du scénario. Aucune dépendance Postgres : l'éval est hermétique et reproductible.
 """
 
 from __future__ import annotations

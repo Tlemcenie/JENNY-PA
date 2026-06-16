@@ -49,6 +49,29 @@ class TestPromptBuilder:
         prompt = builder.build_rag_system_prompt(state)
         assert "persuasif" in prompt
 
+    def test_persona_sliders_sector_description_active(self) -> None:
+        # Curseurs (positions franches), secteur et description doivent influencer
+        # le prompt — ils étaient sauvegardés mais ignorés auparavant.
+        out = build_persona_instructions(
+            {
+                "sliders": {"formel": 20, "concision": 15, "vente": 85},
+                "sector": "Maroquinerie artisanale",
+                "description": "Atelier de sacs en cuir cousus main.",
+            }
+        )
+        assert "soutenu" in out  # formel ≤ 35
+        assert "courtes" in out  # concision ≤ 35
+        assert "réservation" in out.lower()  # vente ≥ 65
+        assert "Maroquinerie artisanale" in out
+        assert "cousus main" in out
+
+    def test_persona_sliders_neutral_emit_nothing(self) -> None:
+        # Autour du neutre (~50), aucun curseur ne doit brider le ton.
+        out = build_persona_instructions(
+            {"sliders": {"formel": 50, "concision": 50, "vente": 50}}
+        )
+        assert out == ""
+
     def test_system_prompt_with_intent(self) -> None:
         builder = PromptBuilder()
         state = ConversationState()

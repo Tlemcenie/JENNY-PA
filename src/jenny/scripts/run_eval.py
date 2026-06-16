@@ -3,8 +3,8 @@
 Usage :
     .venv/bin/python -m jenny.scripts.run_eval
 
-Nécessite Ollama (qwen2.5:3b + nomic-embed-text). N'utilise NI Postgres NI Redis
-(état conversationnel + base de connaissances en mémoire) : reproductible.
+Nécessite Ollama (qwen2.5:7b-instruct + nomic-embed-text). N'utilise NI Postgres NI
+Redis (état conversationnel + base de connaissances en mémoire) : reproductible.
 """
 
 from __future__ import annotations
@@ -14,7 +14,9 @@ import os
 # État conversationnel en mémoire (Redis pointé sur un port fermé → repli immédiat).
 os.environ.setdefault("JENNY_REDIS_URL", "redis://localhost:6390/1")
 os.environ.setdefault("JENNY_LLM_PROVIDER", "llama")
-os.environ.setdefault("JENNY_LLM_MODEL", "qwen2.5:3b")
+# Baseline représentative de la prod : qwen2.5:7b-instruct (le 3b laissait fuir de
+# l'anglais / des « Bonjour » répétés). Éval à 100% au 2026-06-15 avec ce modèle.
+os.environ.setdefault("JENNY_LLM_MODEL", "qwen2.5:7b-instruct")
 os.environ.setdefault("JENNY_ENABLE_ML_MODELS", "false")
 
 import asyncio

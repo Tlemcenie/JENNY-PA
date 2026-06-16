@@ -1274,6 +1274,39 @@ export async function setUserSuperuser(id: string, isSuperuser: boolean): Promis
   });
 }
 
+// ── Journal d'audit GLOBAL (toutes entreprises) ──
+// Même forme que `AuditItem`, enrichie de l'entreprise rattachée à chaque ligne.
+export interface AdminAuditItem {
+  id: string;
+  actor: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  summary: string;
+  meta: Record<string, unknown> | null;
+  created_at: string;
+  business_id: string;
+  business_name: string | null;
+}
+
+export interface AdminAuditListResponse {
+  items: AdminAuditItem[];
+  total: number;
+}
+
+export async function getAdminAudit(
+  params: { limit?: number; offset?: number; q?: string } = {}
+): Promise<AdminAuditListResponse> {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      searchParams.set(key, String(value));
+    }
+  });
+  const qs = searchParams.toString();
+  return request<AdminAuditListResponse>(`/api/v1/admin/audit${qs ? `?${qs}` : ""}`);
+}
+
 // ==================== EXPORT CSV ====================
 
 async function downloadExport(endpoint: string, filename: string): Promise<void> {
@@ -1731,13 +1764,17 @@ export async function streamChat(
     for (const part of parts) {
       const line = part.trim();
       if (!line.startsWith("data:")) continue;
+      let data: Record<string, unknown>;
       try {
-        const data = JSON.parse(line.slice(5).trim());
-        if (data.done) onDone(data as Record<string, unknown>);
-        else if (typeof data.token === "string") onToken(data.token);
+        data = JSON.parse(line.slice(5).trim());
       } catch {
-        // ligne SSE partielle ou non-JSON : on ignore
+        continue; // ligne SSE partielle ou non-JSON : on ignore
       }
+      // Erreur côté serveur → on lève pour que l'appelant bascule sur le fallback
+      // (appel non-streamé), plutôt que de laisser une bulle vide.
+      if (data.error) throw new ApiError(502, "stream_error", data);
+      if (data.done) onDone(data);
+      else if (typeof data.token === "string") onToken(data.token as string);
     }
   }
 }
@@ -1746,6 +1783,142 @@ export async function streamChat(
 
 export async function checkHealth(): Promise<{ status: string }> {
   return request<{ status: string }>("/health");
+}
+
+// Readiness profonde : reflète exactement la forme renvoyée par `/ready`
+// (health.py). Chaque check porte son propre `status` ("ok" | "warning" |
+// "error" | "skip") + des champs spécifiques. Le endpoint répond 200 si prêt,
+// 503 si dégradé — on lit le corps dans les deux cas.
+export interface ReadinessCheck {
+  status: "ok" | "warning" | "error" | "skip" | string;
+  type?: string;
+  error?: string;
+  reason?: string;
+  // ml_models expose en plus l'état de chaque modèle.
+  intent_model?: string;
+  ner_model?: string;
+}
+
+export interface Readiness {
+  status: "ready" | "degraded" | string;
+  env?: string;
+  timestamp?: string;
+  checks: {
+    database: ReadinessCheck;
+    redis: ReadinessCheck;
+    ml_models: ReadinessCheck;
+    [key: string]: ReadinessCheck;
+  };
+}
+
+export async function getReadiness(): Promise<Readiness> {
+  // `/ready` renvoie 503 quand le service est dégradé : on récupère quand même
+  // le JSON (qui décrit quel check a échoué) plutôt que de lever une ApiError.
+  const token = getToken();
+  const res = await fetch(`${API_BASE}/ready`, {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    throw new ApiError(res.status, res.statusText);
+  }
+  return data as Readiness;
+}
+
+// ==================== LLM (bascule de moteur) ====================
+
+export interface LlmOption {
+  key: string;
+  label: string;
+  hint: string;
+  model: string;
+  available: boolean;
+  current: boolean;
+}
+
+export interface LlmState {
+  active: string;
+  options: LlmOption[];
+}
+
+export async function getLlmSettings(): Promise<LlmState> {
+  return request<LlmState>("/api/v1/settings/llm");
+}
+
+export async function switchLlm(key: string): Promise<LlmState> {
+  return request<LlmState>("/api/v1/settings/llm", { method: "POST", body: { key } });
+}
+
+// ==================== MODÈLE MAISON (NanoGPT from scratch) ====================
+
+// Un point de la courbe d'entraînement (un palier de `step`).
+export interface NanoGptTrainingPoint {
+  step: number;
+  train_loss: number;
+  val_loss: number;
+  lr: number;
+  tokens_seen: number;
+  elapsed_s: number;
+}
+
+// Hyperparamètres de l'architecture du GPT maison (null tant qu'il n'a pas tourné).
+export interface NanoGptModelArch {
+  n_layer: number;
+  n_head: number;
+  n_embd: number;
+  block_size: number;
+}
+
+export interface NanoGptTraining {
+  // « running » = entraînement en cours, « done » = terminé, « absent » = jamais lancé.
+  state: "running" | "done" | "absent";
+  points: NanoGptTrainingPoint[];
+  step: number;
+  max_steps: number;
+  params: number;
+  vocab_size: number;
+  best_val_loss: number | null;
+  device: string | null;
+  total_tokens: number | null;
+  model: NanoGptModelArch | null;
+}
+
+export async function getNanoGptTraining(): Promise<NanoGptTraining> {
+  return request<NanoGptTraining>("/api/v1/nanogpt/training");
+}
+
+// Un échantillon question→réponse joué contre un modèle lors de la comparaison.
+export interface ModelComparisonSample {
+  q: string;
+  a: string;
+  ok: boolean;
+}
+
+// Résultat d'un modèle (Groq / Ollama / NanoGPT) sur le même jeu de prompts.
+export interface ModelComparisonResult {
+  key: string;
+  label: string;
+  provider: string;
+  model: string;
+  available: boolean;
+  score_pct: number | null;
+  checks_passed: number | null;
+  checks_total: number | null;
+  avg_latency_ms: number | null;
+  note: string | null;
+  samples?: ModelComparisonSample[];
+}
+
+export interface ModelComparison {
+  generated_at: number | null;
+  prompts: number;
+  results: ModelComparisonResult[];
+}
+
+export async function getModelComparison(): Promise<ModelComparison> {
+  return request<ModelComparison>("/api/v1/nanogpt/comparison");
 }
 
 export { ApiError, getToken, setToken, clearToken };

@@ -186,8 +186,13 @@ KNOWLEDGE_SEEKING_INTENTS = frozenset(
     {"faq", "general", "pricing", "payment_question", "planning", "quote"}
 )
 
-# Score de pertinence RAG minimal pour considérer qu'on a une vraie réponse.
-GAP_SCORE_FLOOR = 0.28
+# Score de pertinence RAG minimal pour considérer qu'on a une VRAIE réponse.
+# Mesuré sur nomic-embed-text (cf. banc d'essai) : une question DONT la réponse est
+# dans la base score ≥ 0.70 ; une question hors-sujet mais « du même commerce »
+# (parking dans un resto, permis moto dans une auto-école…) plafonne à ~0.63. Le
+# seuil 0.62 sépare proprement les deux → Jenny propose de vérifier au lieu
+# d'INVENTER un fait absent de la base. Mieux vaut différer que mentir au client.
+GAP_SCORE_FLOOR = 0.62
 
 
 def _action_has_concrete_result(action_result: dict | None) -> bool:

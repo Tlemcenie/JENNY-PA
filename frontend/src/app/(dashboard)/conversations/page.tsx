@@ -36,6 +36,8 @@ import {
   Loader2,
   Check,
   HelpCircle,
+  ChevronRight,
+  CornerUpLeft,
 } from "lucide-react";
 import { isToday, isYesterday, isThisWeek, isThisMonth } from "date-fns";
 import {
@@ -73,8 +75,7 @@ import {
   type PendingQuestion,
   ApiError,
 } from "@/lib/api";
-import { formatDate, channelLabel, statusLabel, intentLabel, cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
+import { formatDate, channelLabel, intentLabel, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { SkeletonCard } from "@/components/ui/skeleton";
@@ -88,8 +89,9 @@ import { CustomerPanel } from "@/components/customer/customer-panel";
 import { ScheduleAppointmentDialog } from "@/components/customer/schedule-appointment-dialog";
 import { CannedManager } from "@/components/canned/canned-manager";
 import { EmojiButton } from "@/components/conversations/emoji-button";
-import { ConversationRow } from "@/components/conversations/conversation-row";
 import { fadeInUp } from "@/lib/motion";
+import { ChannelAvatar, StatusBadge } from "@/components/jenny/jenny-ui";
+import { JennyAvatar } from "@/components/ui/jenny-avatar";
 
 const channels = ["all", "whatsapp", "instagram", "email", "twitter", "form"];
 const statuses = ["all", "open", "closed", "archived"];
@@ -142,15 +144,47 @@ interface Segment {
   mineOnly: boolean;
 }
 
-function statusColor(status: string) {
-  switch (status) {
-    case "open":
-      return "success" as const;
-    case "closed":
-      return "default" as const;
-    default:
-      return "default" as const;
+// Vue active des pastilles de la refonte (présentation uniquement : pilote les
+// filtres réels via leurs setters, ne remplace aucune logique de chargement).
+type InboxView = "all" | "unread" | "you" | "jenny";
+
+// Mappe les canaux de l'app vers ceux des primitives de la refonte
+// (ChannelAvatar/ChannelChip). « form » et l'inconnu retombent sur « email ».
+type DesignChannel = "whatsapp" | "instagram" | "email" | "twitter";
+function designChannel(ch: string): DesignChannel {
+  if (ch === "whatsapp" || ch === "instagram" || ch === "email" || ch === "twitter") {
+    return ch;
   }
+  return "email";
+}
+
+// Statut visuel d'une conversation pour le StatusBadge de la refonte :
+//  - fermée/archivée → « RÉSOLU »
+//  - reprise humaine (assignée) OU en attente de réponse → « → VOUS »
+//  - sinon (Jenny gère) → « JENNY »
+function conversationStatusKind(c: {
+  status: string;
+  assigned_to?: string | null;
+  awaiting_reply?: boolean;
+}): "jenny" | "human" | "resolved" {
+  if (c.status === "closed" || c.status === "archived") return "resolved";
+  if (c.assigned_to || c.awaiting_reply) return "human";
+  return "jenny";
+}
+
+// Durée d'attente compacte (« 2h », « 35min », « 1j ») pour le badge « en retard ».
+function formatWaitShort(minutes: number): string {
+  if (minutes >= 1440) return `${Math.floor(minutes / 1440)}j`;
+  if (minutes >= 60) return `${Math.floor(minutes / 60)}h`;
+  return `${minutes}min`;
+}
+
+// Heure courte « 14:32 » à partir d'une date ISO (axe temporel des lignes).
+function shortTime(dateStr: string | null): string {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 }
 
 function extractError(err: unknown, fallback: string): string {
@@ -199,6 +233,8 @@ export default function ConversationsPage() {
   const [cannedManagerOpen, setCannedManagerOpen] = useState(false);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [mineOnly, setMineOnly] = useState(false);
+  // Pastille de filtre active dans la refonte (Tous / Non lus / → Vous / Jenny).
+  const [inboxView, setInboxView] = useState<InboxView>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -898,39 +934,198 @@ export default function ConversationsPage() {
   const hasMore = conversations.length < total;
   const awaitingCount = conversations.filter((c) => c.awaiting_reply).length;
   const overdueCount = conversations.filter((c) => c.overdue).length;
+  // Conversations encore gérées par Jenny (non fermées, non reprises par un humain),
+  // parmi celles chargées — sert au compteur de la pastille « Jenny ».
+  const jennyCount = conversations.filter(
+    (c) => c.status !== "closed" && c.status !== "archived" && !c.awaiting_reply
+  ).length;
+
+  // Pastilles de filtre de la refonte (Tous / Non lus / → Vous / Jenny).
+  // Chacune pilote l'état RÉEL déjà en place (statut, « mes conversations »…) ;
+  // les compteurs sont dérivés des données chargées (honnêtes, sans invention).
+  const inboxFilters: {
+    key: InboxView;
+    label: string;
+    count: number;
+    accent?: boolean;
+    apply: () => void;
+  }[] = [
+    {
+      key: "all",
+      label: "Tous",
+      count: total,
+      apply: () => {
+        setInboxView("all");
+        setMineOnly(false);
+        setSelectedStatus("all");
+      },
+    },
+    {
+      key: "unread",
+      label: "Non lus",
+      count: awaitingCount,
+      apply: () => {
+        setInboxView("unread");
+        setMineOnly(false);
+        setSelectedStatus("open");
+      },
+    },
+    {
+      key: "you",
+      label: "→ Vous",
+      count: conversations.filter((c) => !!c.awaiting_reply).length,
+      accent: true,
+      apply: () => {
+        setInboxView("you");
+        setSelectedStatus("all");
+        setMineOnly(true);
+      },
+    },
+    {
+      key: "jenny",
+      label: "Jenny",
+      count: jennyCount,
+      apply: () => {
+        setInboxView("jenny");
+        setMineOnly(false);
+        setSelectedStatus("open");
+      },
+    },
+  ];
 
   return (
-    <div className="h-full flex">
+    <div className="jx h-full flex">
       {/* Liste */}
       <div
         className={cn(
           "relative flex-col border-r border-jenny-divider bg-jenny-surface min-w-0",
           // Mobile : on n'affiche jamais la liste et le détail côte à côte.
           // Quand une conversation est ouverte, la liste cède la place au détail.
-          selectedId ? "hidden md:flex md:w-[420px]" : "flex flex-1"
+          // Desktop : largeur fixe (392px, comme la maquette) ; le détail remplit le reste.
+          selectedId
+            ? "hidden md:flex md:w-[392px]"
+            : "flex flex-1 md:flex-none md:w-[392px]"
         )}
       >
-        {/* Filtres */}
+        {/* En-tête de la refonte : bandeau « pilote automatique » + pastilles */}
         <motion.div
           variants={fadeInUp}
           initial="hidden"
           animate="show"
-          className="p-4 border-b border-jenny-divider space-y-3"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-jenny-text-secondary">
+          {/* Bandeau auto-pilote : Jenny gère N conversations, X attendent. */}
+          <button
+            type="button"
+            onClick={() => inboxFilters[2].apply()}
+            className="jlift w-full text-left"
+            style={{
+              margin: "14px 16px 0",
+              width: "calc(100% - 32px)",
+              padding: "12px 14px",
+              borderRadius: "calc(var(--r-card) * .8)",
+              background:
+                "linear-gradient(120deg, var(--coral-tint), color-mix(in srgb, var(--coral) 14%, transparent))",
+              border: "1px solid var(--coral-light)",
+              display: "flex",
+              alignItems: "center",
+              gap: 11,
+            }}
+            title="Voir les conversations qui attendent votre réponse"
+          >
+            <JennyAvatar size={34} />
+            <div style={{ flex: 1, lineHeight: 1.3 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text)" }}>
+                Jenny gère{" "}
+                <b style={{ color: "var(--coral-dark)" }}>
+                  {jennyCount} conversation{jennyCount > 1 ? "s" : ""}
+                </b>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-2)" }}>
+                {awaitingCount > 0
+                  ? `${awaitingCount} attend${awaitingCount > 1 ? "ent" : ""} votre regard ✦`
+                  : "Tout est sous contrôle ✦"}
+              </div>
+            </div>
+            <ChevronRight style={{ width: 16, height: 16, color: "var(--coral)" }} />
+          </button>
+
+          {/* Pastilles de filtre (Tous / Non lus / → Vous / Jenny) */}
+          <div style={{ padding: "12px 16px", display: "flex", gap: 6, overflow: "auto" }}>
+            {inboxFilters.map((f) => {
+              const active = inboxView === f.key;
+              return (
+                <button
+                  key={f.key}
+                  onClick={f.apply}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 999,
+                    border: "1px solid",
+                    borderColor: active ? "var(--text)" : "var(--divider)",
+                    background: active ? "var(--text)" : "var(--surface)",
+                    color: active ? "white" : f.accent ? "var(--coral)" : "var(--text)",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {f.label}
+                  <span
+                    className="jmono"
+                    style={{
+                      fontSize: 10,
+                      opacity: 0.75,
+                      padding: "1px 6px",
+                      borderRadius: 999,
+                      background: active
+                        ? "rgba(255,255,255,0.18)"
+                        : f.accent
+                        ? "var(--coral-tint)"
+                        : "var(--bg-tint)",
+                    }}
+                  >
+                    {f.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </motion.div>
+
+        {/* Filtres avancés (recherche, canal, statut, tri, priorité, sélection,
+            segments) — toute la logique existante, repliée pour épouser la
+            sobriété de la refonte sans rien perdre. */}
+        <motion.details
+          variants={fadeInUp}
+          initial="hidden"
+          animate="show"
+          className="px-4 pb-3 border-b border-jenny-divider [&>summary]:list-none"
+        >
+          <summary className="flex items-center justify-between cursor-pointer select-none py-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium text-jenny-text-secondary">
+              <Filter className="w-3.5 h-3.5" />
+              Filtres avancés
+            </span>
+            <span className="text-[11px] font-medium text-jenny-text-secondary">
               {total} conversation{total > 1 ? "s" : ""}
               {awaitingCount > 0 && (
-                <span className="ml-2 text-jenny-coral font-semibold">
+                <span className="ml-1.5 text-jenny-coral font-semibold">
                   · {awaitingCount} à traiter
                 </span>
               )}
               {overdueCount > 0 && (
-                <span className="ml-1.5 text-jenny-error font-semibold">
+                <span className="ml-1 text-jenny-error font-semibold">
                   · {overdueCount} en retard
                 </span>
               )}
             </span>
+          </summary>
+          <div className="space-y-3 pt-3">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span
                 className="flex items-center gap-1.5 text-[11px] font-medium"
@@ -1132,7 +1327,8 @@ export default function ConversationsPage() {
               Segment
             </button>
           </div>
-        </motion.div>
+          </div>
+        </motion.details>
 
         {/* Bandeau de filtre par étiquette */}
         {tagFilter && (
@@ -1153,7 +1349,11 @@ export default function ConversationsPage() {
         )}
 
         {/* Liste */}
-        <div ref={listScrollRef} className="flex-1 overflow-y-auto">
+        <div
+          ref={listScrollRef}
+          className="flex-1 overflow-y-auto"
+          style={{ padding: "0 10px 12px" }}
+        >
           {isLoading && conversations.length === 0 ? (
             <div className="p-4 space-y-3">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -1196,20 +1396,205 @@ export default function ConversationsPage() {
                       }}
                     >
                       {showHeader && (
-                        <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-jenny-text-secondary/70 bg-jenny-surface">
+                        <div
+                          className="jmono"
+                          style={{
+                            padding: "12px 6px 4px",
+                            fontSize: 10.5,
+                            fontWeight: 600,
+                            letterSpacing: "0.08em",
+                            textTransform: "uppercase",
+                            color: "var(--text-3)",
+                          }}
+                        >
                           {group}
                         </div>
                       )}
-                      <ConversationRow
-                        conv={conv}
-                        selected={selectedId === conv.id}
-                        onSelect={onSelectRow}
-                        onTagClick={onTagRow}
-                        selectable={selectMode}
-                        checked={selectedIds.has(conv.id)}
-                        onToggle={toggleSelect}
-                        onQuickReply={selectMode ? undefined : onQuickReplyRow}
-                      />
+                      {(() => {
+                        const sel = selectedId === conv.id;
+                        const unread = conv.awaiting_reply;
+                        const kind = conversationStatusKind(conv);
+                        const prio =
+                          conv.priority_level === "high" ||
+                          conv.priority_level === "critical";
+                        return (
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              if (selectMode) toggleSelect(conv.id);
+                              else onSelectRow(conv.id);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                if (selectMode) toggleSelect(conv.id);
+                                else onSelectRow(conv.id);
+                              }
+                            }}
+                            className="jlift"
+                            style={{
+                              padding: "13px 14px",
+                              display: "flex",
+                              gap: 13,
+                              marginBottom: 4,
+                              borderRadius: "calc(var(--r-card) * .78)",
+                              cursor: "pointer",
+                              background: sel ? "var(--coral-tint)" : "transparent",
+                              border: sel
+                                ? "1px solid var(--coral-light)"
+                                : "1px solid transparent",
+                              boxShadow: sel ? "var(--shadow-card)" : "none",
+                            }}
+                          >
+                            {selectMode && (
+                              <label
+                                className="flex items-center"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.has(conv.id)}
+                                  onChange={() => toggleSelect(conv.id)}
+                                  aria-label="Sélectionner la conversation"
+                                  className="w-4 h-4 rounded border-jenny-divider text-jenny-coral focus:ring-jenny-coral/30 cursor-pointer accent-jenny-coral"
+                                />
+                              </label>
+                            )}
+                            <ChannelAvatar
+                              name={conv.customer_name || "Client"}
+                              ch={designChannel(conv.channel)}
+                              size={42}
+                            />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  marginBottom: 3,
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontSize: 13.5,
+                                    fontWeight: unread ? 700 : 600,
+                                    color: "var(--text)",
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                  }}
+                                >
+                                  {conv.customer_name || "Client inconnu"}
+                                </span>
+                                <span
+                                  className="jmono"
+                                  style={{
+                                    marginLeft: "auto",
+                                    fontSize: 10.5,
+                                    color: unread ? "var(--coral)" : "var(--text-3)",
+                                    letterSpacing: "0.04em",
+                                    fontWeight: unread ? 700 : 400,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  {shortTime(conv.last_message_at || conv.created_at)}
+                                </span>
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: 12.5,
+                                  color: unread ? "var(--text)" : "var(--text-2)",
+                                  display: "-webkit-box",
+                                  WebkitLineClamp: 1,
+                                  WebkitBoxOrient: "vertical",
+                                  overflow: "hidden",
+                                  marginBottom: 7,
+                                  lineHeight: 1.4,
+                                  fontWeight: unread ? 500 : 400,
+                                }}
+                              >
+                                {conv.last_message_preview || "(Pas de message)"}
+                              </div>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: 5,
+                                  alignItems: "center",
+                                  flexWrap: "wrap",
+                                }}
+                              >
+                                <StatusBadge status={kind} />
+                                {prio && (
+                                  <span
+                                    className="jbadge jbadge--urgent"
+                                    title={`Priorité ${conv.priority_level}`}
+                                  >
+                                    URGENT
+                                  </span>
+                                )}
+                                {conv.is_escalated && (
+                                  <span className="jbadge jbadge--warn">ESCALADÉE</span>
+                                )}
+                                {conv.overdue && conv.waiting_minutes != null && (
+                                  <span className="jbadge jbadge--urgent">
+                                    EN RETARD · {formatWaitShort(conv.waiting_minutes)}
+                                  </span>
+                                )}
+                                {conv.tags.map((t) => (
+                                  <span
+                                    key={t}
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onTagRow(t);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        onTagRow(t);
+                                      }
+                                    }}
+                                    className="jbadge jbadge--slate"
+                                    style={{ cursor: "pointer" }}
+                                  >
+                                    {t}
+                                  </span>
+                                ))}
+                                {!selectMode && conv.awaiting_reply && (
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onQuickReplyRow(conv.id);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        onQuickReplyRow(conv.id);
+                                      }
+                                    }}
+                                    title="Réponse rapide"
+                                    aria-label="Réponse rapide"
+                                    style={{
+                                      marginLeft: "auto",
+                                      color: "var(--text-3)",
+                                      display: "inline-flex",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <CornerUpLeft className="w-3.5 h-3.5" />
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
                       {quickReplyId === conv.id && (
                         <div className="px-4 pb-3 bg-jenny-coral/[0.03] border-b border-jenny-divider">
                           <textarea
@@ -1354,12 +1739,40 @@ export default function ConversationsPage() {
         )}
       </div>
 
+      {/* Détail — pane vide (desktop) quand aucune conversation n'est ouverte,
+          pour conserver la grille deux colonnes de la maquette. */}
+      {!selectedId && (
+        <div
+          className="hidden md:flex flex-1 flex-col items-center justify-center min-w-0 text-center px-8"
+          style={{
+            background:
+              "linear-gradient(180deg, var(--bg-tint) 0%, var(--surface) 26%)",
+          }}
+        >
+          <JennyAvatar size={56} />
+          <p
+            className="jserif"
+            style={{ fontSize: 20, color: "var(--text)", marginTop: 16 }}
+          >
+            Sélectionnez une conversation
+          </p>
+          <p style={{ fontSize: 13, color: "var(--text-2)", marginTop: 6, maxWidth: 340 }}>
+            Choisissez un échange dans la liste pour lire le fil et répondre. Jenny
+            gère le reste en autonomie.
+          </p>
+        </div>
+      )}
+
       {/* Détail */}
       {selectedId && (
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           className="flex-1 flex flex-col min-w-0"
+          style={{
+            background:
+              "linear-gradient(180deg, var(--bg-tint) 0%, var(--surface) 26%)",
+          }}
         >
           {detailLoading ? (
             <div className="p-6 space-y-3">
@@ -1375,44 +1788,71 @@ export default function ConversationsPage() {
           ) : detail ? (
             <>
               {/* En-tête */}
-              <div className="p-5 border-b border-jenny-divider flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  {detail.customer_id ? (
-                    <button
-                      onClick={() => setCustomerPanelId(detail.customer_id)}
-                      className="group flex items-center gap-1.5 text-lg font-semibold text-jenny-text hover:text-jenny-coral transition-colors max-w-full"
-                      title="Voir la fiche client"
-                    >
-                      <span className="truncate">{detail.customer_name || "Client"}</span>
-                      <UserRound className="w-4 h-4 text-jenny-text-secondary group-hover:text-jenny-coral transition-colors shrink-0" />
-                    </button>
-                  ) : (
-                    <h2 className="text-lg font-semibold text-jenny-text truncate">
-                      {detail.customer_name || "Client inconnu"}
-                    </h2>
-                  )}
-                  <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                    <Badge variant="channel" channel={detail.channel}>
-                      {channelLabel(detail.channel)}
-                    </Badge>
-                    <Badge variant={statusColor(detail.status)}>{statusLabel(detail.status)}</Badge>
-                    {detail.is_escalated && (
-                      <Badge variant="error">
-                        <AlertTriangle className="w-3 h-3 mr-1" />
-                        Escaladée
-                      </Badge>
+              <div
+                className="border-b border-jenny-divider flex items-start justify-between gap-3"
+                style={{ padding: "16px 28px", background: "var(--surface)" }}
+              >
+                <div className="flex items-start gap-3.5 min-w-0">
+                  <ChannelAvatar
+                    name={detail.customer_name || "Client"}
+                    ch={designChannel(detail.channel)}
+                    size={44}
+                  />
+                  <div className="min-w-0">
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    {detail.customer_id ? (
+                      <button
+                        onClick={() => setCustomerPanelId(detail.customer_id)}
+                        className="group flex items-center gap-1.5 font-semibold text-jenny-text hover:text-jenny-coral transition-colors max-w-full"
+                        style={{ fontSize: 15.5, letterSpacing: "-0.01em" }}
+                        title="Voir la fiche client"
+                      >
+                        <span className="truncate">{detail.customer_name || "Client"}</span>
+                        <UserRound className="w-4 h-4 text-jenny-text-secondary group-hover:text-jenny-coral transition-colors shrink-0" />
+                      </button>
+                    ) : (
+                      <h2
+                        className="font-semibold text-jenny-text truncate"
+                        style={{ fontSize: 15.5, letterSpacing: "-0.01em" }}
+                      >
+                        {detail.customer_name || "Client inconnu"}
+                      </h2>
                     )}
-                    {detail.current_intent && (
-                      <Badge>
-                        <Hash className="w-3 h-3 mr-1" />
-                        {intentLabel(detail.current_intent)}
-                      </Badge>
+                    {(detail.priority_level === "high" ||
+                      detail.priority_level === "critical") && (
+                      <span className="jbadge jbadge--urgent">URGENT</span>
+                    )}
+                    {detail.is_escalated && (
+                      <span className="jbadge jbadge--warn">ESCALADÉE</span>
                     )}
                   </div>
-                  <p className="text-xs text-jenny-text-secondary mt-1.5">
-                    Créée le {formatDate(detail.created_at)} · {detail.message_count}{" "}
-                    message{detail.message_count > 1 ? "s" : ""}
-                  </p>
+                  {/* Ligne méta — uniquement des champs réels (canal, statut, intention,
+                      nb de messages, date de création). Aucune donnée inventée. */}
+                  <div
+                    className="flex items-center gap-2 flex-wrap"
+                    style={{ fontSize: 11.5, color: "var(--text-2)", marginTop: 3 }}
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      <StatusBadge status={conversationStatusKind(detail)} />
+                    </span>
+                    <span>·</span>
+                    <span>{channelLabel(detail.channel)}</span>
+                    {detail.current_intent && (
+                      <>
+                        <span>·</span>
+                        <span className="inline-flex items-center gap-1">
+                          <Hash className="w-3 h-3" />
+                          {intentLabel(detail.current_intent)}
+                        </span>
+                      </>
+                    )}
+                    <span>·</span>
+                    <span>
+                      {detail.message_count} message{detail.message_count > 1 ? "s" : ""}
+                    </span>
+                    <span>·</span>
+                    <span>créée le {formatDate(detail.created_at)}</span>
+                  </div>
                   <div className="flex items-center gap-1.5 mt-2">
                     <UserCheck className="w-3.5 h-3.5 text-jenny-text-secondary flex-shrink-0" />
                     <select
@@ -1488,8 +1928,25 @@ export default function ConversationsPage() {
                       )}
                     </span>
                   </div>
+                  </div>
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
+                  {/* Action primaire de la refonte : « Demander à Jenny » (co-pilote réel). */}
+                  <button
+                    type="button"
+                    onClick={handleCopilot}
+                    disabled={copilotBusy}
+                    className="inline-flex items-center gap-1.5 rounded-full text-white text-xs font-semibold px-3.5 py-2 disabled:opacity-60 transition-colors"
+                    style={{ background: "var(--coral)" }}
+                    title="Demander un brouillon de réponse à Jenny"
+                  >
+                    {copilotBusy ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5" />
+                    )}
+                    Demander à Jenny
+                  </button>
                   {detail.status === "open" ? (
                     <>
                       <button
@@ -1497,7 +1954,7 @@ export default function ConversationsPage() {
                         className="flex items-center gap-1 text-xs font-medium text-jenny-success hover:underline underline-offset-2"
                       >
                         <CheckCircle2 className="w-4 h-4" />
-                        Résoudre
+                        Marquer résolu
                       </button>
                       <button
                         onClick={() => handleStatus("archived")}
@@ -1662,7 +2119,14 @@ export default function ConversationsPage() {
               )}
 
               {/* Fil de messages */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              <div
+                className="flex-1 overflow-y-auto"
+                style={{ padding: "24px 28px" }}
+              >
+                <div
+                  className="mx-auto flex flex-col"
+                  style={{ maxWidth: 640, gap: 16 }}
+                >
                 {/* Questions en attente (#56) — Jenny les a mises de côté faute de
                     savoir répondre. Affiché uniquement s'il y en a, sans gêner le fil. */}
                 {pendingQuestions.length > 0 && !threadSearch && (
@@ -1769,64 +2233,103 @@ export default function ConversationsPage() {
                     {threadSearch ? "Aucun message ne correspond." : "Aucun message dans cette conversation."}
                   </p>
                 ) : (
-                  threadMessages.map((m) => {
+                  threadMessages.map((m, idx) => {
                     const outbound = m.direction === "outbound";
+                    // Séparateur de date (style refonte) au changement de jour.
+                    const prevMsg = idx > 0 ? threadMessages[idx - 1] : null;
+                    const dayLabel = new Date(m.created_at).toLocaleDateString("fr-FR", {
+                      weekday: "long",
+                      day: "numeric",
+                      month: "long",
+                    });
+                    const showDay =
+                      !prevMsg ||
+                      new Date(prevMsg.created_at).toDateString() !==
+                        new Date(m.created_at).toDateString();
                     return (
-                      <div
-                        key={m.id}
-                        className={cn("flex", outbound ? "justify-end" : "justify-start")}
-                      >
+                      <div key={m.id} className="contents">
+                        {showDay && (
+                          <div
+                            className="jmono"
+                            style={{
+                              textAlign: "center",
+                              fontSize: 11,
+                              color: "var(--text-3)",
+                              letterSpacing: "0.12em",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {dayLabel} · {shortTime(m.created_at)}
+                          </div>
+                        )}
                         <div
-                          className={cn(
-                            "max-w-[75%] rounded-2xl px-4 py-2.5",
-                            outbound
-                              ? "bg-brand-gradient text-white rounded-br-sm shadow-sm shadow-jenny-coral/15"
-                              : "bg-jenny-surface border border-jenny-divider text-jenny-text rounded-bl-sm"
-                          )}
+                          style={{
+                            alignSelf: outbound ? "flex-end" : "flex-start",
+                            maxWidth: "82%",
+                          }}
                         >
-                          <p className="text-sm whitespace-pre-wrap break-words">
-                            {m.content || "(Pas de contenu)"}
-                          </p>
-                          {!!m.attachment_count && m.attachment_count > 0 && (
-                            <span
-                              className={cn(
-                                "mt-1 inline-flex items-center gap-1 text-[11px]",
-                                outbound ? "text-white/80" : "text-jenny-text-secondary"
-                              )}
-                            >
-                              <Paperclip className="w-3 h-3" />
-                              {m.attachment_count} pièce{m.attachment_count > 1 ? "s" : ""} jointe
-                              {m.attachment_count > 1 ? "s" : ""}
-                            </span>
-                          )}
-                          <span
-                            className={cn(
-                              "text-[10px] mt-1 block",
-                              outbound ? "text-white/70" : "text-jenny-text-secondary"
+                          <div
+                            className={cn("jbubble", outbound ? "jbubble--me" : "jbubble--them")}
+                            style={{ maxWidth: "100%" }}
+                          >
+                            <p className="whitespace-pre-wrap break-words" style={{ margin: 0 }}>
+                              {m.content || "(Pas de contenu)"}
+                            </p>
+                            {!!m.attachment_count && m.attachment_count > 0 && (
+                              <span
+                                className="mt-1 inline-flex items-center gap-1"
+                                style={{
+                                  fontSize: 11,
+                                  color: outbound
+                                    ? "rgba(255,255,255,0.85)"
+                                    : "var(--text-2)",
+                                }}
+                              >
+                                <Paperclip className="w-3 h-3" />
+                                {m.attachment_count} pièce{m.attachment_count > 1 ? "s" : ""} jointe
+                                {m.attachment_count > 1 ? "s" : ""}
+                              </span>
                             )}
+                          </div>
+                          <div
+                            className="jmono"
+                            style={{
+                              fontSize: 10.5,
+                              color: "var(--text-3)",
+                              marginTop: 5,
+                              textAlign: outbound ? "right" : "left",
+                            }}
                           >
                             {m.sender_name ? `${m.sender_name} · ` : ""}
                             <RelativeTime date={m.created_at} />
-                          </span>
+                          </div>
                         </div>
                       </div>
                     );
                   })
                 )}
                 {(typingConvId === detail.id || suggesting) && (
-                  <div className="flex items-center gap-2 text-xs text-jenny-text-secondary">
-                    <span className="flex gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-jenny-coral animate-bounce [animation-delay:-0.2s]" />
-                      <span className="w-1.5 h-1.5 rounded-full bg-jenny-coral animate-bounce [animation-delay:-0.1s]" />
-                      <span className="w-1.5 h-1.5 rounded-full bg-jenny-coral animate-bounce" />
+                  <div
+                    className="flex items-center gap-2"
+                    style={{ fontSize: 12.5, color: "var(--text-2)" }}
+                  >
+                    <span className="jtyping">
+                      <i />
+                      <i />
+                      <i />
                     </span>
                     Jenny rédige…
                   </div>
                 )}
+                </div>
               </div>
 
               {/* Composer de réponse (reprise humaine) */}
-              <div className="border-t border-jenny-divider p-4 bg-jenny-surface">
+              <div
+                className="border-t border-jenny-divider"
+                style={{ padding: "14px 28px 18px", background: "var(--surface)" }}
+              >
+                <div className="mx-auto" style={{ maxWidth: 640 }}>
                 {detail.assigned_to && (
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <span className="flex items-center gap-1.5 text-[11px] text-jenny-text-secondary min-w-0">
@@ -1948,7 +2451,19 @@ export default function ConversationsPage() {
                     </button>
                   </div>
                 )}
-                <div className="flex items-end gap-2">
+                {/* Dock de saisie (style refonte) : emoji + zone de texte + actions
+                    Jenny (co-pilote/suggestion) + envoi corail. Toute la logique
+                    d'envoi/suggestion existante est conservée. */}
+                <div
+                  className="flex items-end gap-2"
+                  style={{
+                    padding: 8,
+                    background: "var(--bg)",
+                    border: "1px solid var(--divider)",
+                    borderRadius: "calc(var(--r-card) * .85)",
+                  }}
+                >
+                  <EmojiButton onPick={(emoji) => setReplyText((t) => t + emoji)} />
                   <div className="flex-1 relative">
                     <textarea
                       ref={replyRef}
@@ -1960,15 +2475,18 @@ export default function ConversationsPage() {
                           handleReply();
                         }
                       }}
-                      placeholder="Répondre au client…"
+                      placeholder={`Répondre à ${
+                        detail.customer_name?.split(" ")[0] || "votre client"
+                      }…`}
                       rows={1}
                       maxLength={5000}
-                      className="w-full resize-none px-4 py-2.5 rounded-xl bg-jenny-bg border border-jenny-divider text-sm text-jenny-text placeholder:text-jenny-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-jenny-coral/30 focus:border-jenny-coral transition-all max-h-32"
+                      className="w-full resize-none bg-transparent border-none text-sm text-jenny-text placeholder:text-jenny-text-secondary/50 focus:outline-none max-h-32"
+                      style={{ paddingTop: 8, paddingBottom: 8 }}
                     />
                     {replyText.length > 0 && (
                       <span
                         className={cn(
-                          "absolute bottom-1.5 right-3 text-[10px] tabular-nums pointer-events-none",
+                          "absolute bottom-1 right-1 text-[10px] tabular-nums pointer-events-none",
                           replyText.length > 4800 ? "text-jenny-error" : "text-jenny-text-secondary/50"
                         )}
                       >
@@ -1976,14 +2494,13 @@ export default function ConversationsPage() {
                       </span>
                     )}
                   </div>
-                  <EmojiButton onPick={(emoji) => setReplyText((t) => t + emoji)} />
                   <button
                     type="button"
                     onClick={handleCopilot}
                     disabled={copilotBusy}
                     title="Demander un brouillon de réponse à Jenny (co-pilote)"
                     aria-label="Suggérer une réponse (co-pilote)"
-                    className="h-9 w-9 flex items-center justify-center rounded-xl border border-jenny-divider text-jenny-coral hover:bg-jenny-coral/10 hover:border-jenny-coral/40 disabled:opacity-50 transition-colors flex-shrink-0"
+                    className="h-9 w-9 flex items-center justify-center rounded-xl text-jenny-coral hover:bg-jenny-coral/10 disabled:opacity-50 transition-colors flex-shrink-0"
                   >
                     {copilotBusy ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -1997,18 +2514,25 @@ export default function ConversationsPage() {
                     disabled={suggesting}
                     title="Suggérer une réponse"
                     aria-label="Suggérer une réponse"
-                    className="h-9 w-9 flex items-center justify-center rounded-xl border border-jenny-divider text-jenny-coral hover:bg-jenny-coral/10 hover:border-jenny-coral/40 disabled:opacity-50 transition-colors flex-shrink-0"
+                    className="h-9 w-9 flex items-center justify-center rounded-xl text-jenny-coral hover:bg-jenny-coral/10 disabled:opacity-50 transition-colors flex-shrink-0"
                   >
                     <Sparkles className={cn("w-4 h-4", suggesting && "animate-pulse")} />
                   </button>
-                  <Button
+                  <button
+                    type="button"
                     onClick={handleReply}
-                    isLoading={sending}
-                    disabled={!replyText.trim()}
-                    size="sm"
+                    disabled={!replyText.trim() || sending}
+                    aria-label="Envoyer la réponse"
+                    className="flex items-center justify-center rounded-xl text-white disabled:opacity-50 transition-opacity flex-shrink-0"
+                    style={{ width: 38, height: 38, background: "var(--coral)" }}
                   >
-                    <Send className="w-4 h-4" />
-                  </Button>
+                    {sending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Send className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
                 </div>
               </div>
             </>

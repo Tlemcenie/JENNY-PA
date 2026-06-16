@@ -1,4 +1,8 @@
+"use client";
+
+import { motion, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { springSoft } from "@/lib/motion";
 
 interface CardProps {
   children: React.ReactNode;
@@ -8,20 +12,28 @@ interface CardProps {
 }
 
 export function Card({ children, className, hover, onClick }: CardProps) {
+  const reduce = useReducedMotion();
+
+  // Lift premium piloté par un spring (springSoft) au lieu du translate CSS
+  // statique. Neutralisé proprement en mode mouvement réduit, et seulement
+  // quand `hover` est demandé. Les classes/props publiques restent identiques.
+  const lift = hover && !reduce ? { whileHover: { y: -2 }, transition: springSoft } : {};
+
   return (
-    <div
+    <motion.div
       className={cn(
         "bg-jenny-surface rounded-2xl border border-jenny-divider p-6",
-        "transition-all duration-200",
-        hover && "hover:shadow-md hover:border-jenny-coral/20 cursor-pointer hover:-translate-y-0.5",
+        "transition-colors duration-200",
+        hover && "hover:shadow-md hover:border-jenny-coral/20 cursor-pointer",
         onClick && "cursor-pointer",
         className
       )}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
+      {...lift}
     >
       {children}
-    </div>
+    </motion.div>
   );
 }

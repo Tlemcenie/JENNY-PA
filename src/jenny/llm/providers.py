@@ -67,6 +67,23 @@ class BaseLLMProvider(ABC):
         """Génère un vecteur d'embedding pour un texte."""
         ...
 
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ):
+        """Diffusion token par token (async generator).
+
+        Implémentation par défaut SANS vrai streaming : on génère tout puis on
+        renvoie le bloc en une fois. Les providers qui supportent le streaming
+        natif (ex. Ollama) surchargent cette méthode pour un premier token rapide.
+        """
+        resp = await self.generate(prompt, system_prompt, temperature, max_tokens)
+        if resp.finish_reason != "error" and resp.content:
+            yield resp.content
+
 
 class OpenAIProvider(BaseLLMProvider):
     """Provider OpenAI (GPT-4o, GPT-4o-mini)."""
@@ -304,6 +321,56 @@ class LlamaProvider(BaseLLMProvider):
                 finish_reason="error",
             )
 
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ):
+        """Vrai streaming Ollama : on relaie chaque token dès qu'il arrive
+        (premier token rapide → le chat « répond » tout de suite)."""
+        import json as _json
+
+        import httpx
+
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client, client.stream(
+                "POST",
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self._model,
+                    "messages": messages,
+                    "stream": True,
+                    "keep_alive": self._keep_alive,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                },
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        data = _json.loads(line)
+                    except ValueError:
+                        continue
+                    token = data.get("message", {}).get("content", "")
+                    if token:
+                        yield token
+                    if data.get("done"):
+                        break
+        except Exception as e:
+            logger.error("llm.llama.stream_error", error=str(e))
+            # Pas de re-raise : l'appelant retombera sur generate() non-streamé.
+
     async def embed(self, text: str) -> list[float]:
         logger.info("llm.llama.embed", text_length=len(text))
         try:
@@ -409,8 +476,10 @@ class NanoGPTProvider(BaseLLMProvider):
     def __init__(
         self,
         checkpoint_path: str = "checkpoints/nanogpt/best_model.pt",
+        tokenizer_path: str = "checkpoints/nanogpt/tokenizer.json",
     ) -> None:
         self._checkpoint_path = checkpoint_path
+        self._tokenizer_path = tokenizer_path
         self._model = None
         self._tokenizer = None
 
@@ -422,7 +491,9 @@ class NanoGPTProvider(BaseLLMProvider):
     def is_configured(self) -> bool:
         from pathlib import Path
 
-        return Path(self._checkpoint_path).exists()
+        # Le modèle maison n'est utilisable qu'une fois ENTRAÎNÉ : il faut à la fois
+        # le checkpoint (poids) et le tokenizer (entraîné de zéro sur le corpus).
+        return Path(self._checkpoint_path).exists() and Path(self._tokenizer_path).exists()
 
     def _load_model(self) -> None:
         if self._model is not None:
@@ -430,6 +501,7 @@ class NanoGPTProvider(BaseLLMProvider):
 
         try:
             import torch
+            from tokenizers import Tokenizer
 
             from nanogpt.config import NanoGPTConfig
             from nanogpt.model import NanoGPT
@@ -443,7 +515,13 @@ class NanoGPTProvider(BaseLLMProvider):
             self._model = NanoGPT(config)
             self._model.load_state_dict(checkpoint["model_state_dict"])
             self._model.eval()
-            logger.info("llm.nanogpt.loaded", path=self._checkpoint_path)
+            self._tokenizer = Tokenizer.from_file(self._tokenizer_path)
+            logger.info(
+                "llm.nanogpt.loaded",
+                path=self._checkpoint_path,
+                step=checkpoint.get("step"),
+                val_loss=checkpoint.get("best_val_loss"),
+            )
         except (FileNotFoundError, ImportError) as e:
             logger.warning("llm.nanogpt.not_available", error=str(e))
 
@@ -457,22 +535,32 @@ class NanoGPTProvider(BaseLLMProvider):
         logger.info("llm.nanogpt.generate")
         self._load_model()
 
-        if self._model is None:
+        if self._model is None or self._tokenizer is None:
             return LLMResponse(
-                content="[NanoGPT non disponible]",
+                content="[NanoGPT non disponible — entraîne le modèle d'abord]",
                 model=self.model_name,
                 finish_reason="error",
             )
 
         try:
-            from nanogpt.generate import generate_text
+            import torch
 
-            text = generate_text(
-                model=self._model,
-                prompt=prompt,
-                max_new_tokens=max_tokens,
-                temperature=temperature,
+            from nanogpt.generate import generate as nano_generate
+
+            # On amorce avec le prompt (encodé par le tokenizer maison), tronqué au
+            # contexte du modèle, puis on échantillonne uniquement les NOUVEAUX tokens.
+            block = self._model.config.block_size
+            prompt_ids = self._tokenizer.encode(prompt).ids[-(block - 1) :]
+            idx = torch.tensor([prompt_ids or [0]], dtype=torch.long)
+            out = nano_generate(
+                self._model,
+                idx,
+                max_new_tokens=max(1, min(max_tokens, 200)),
+                temperature=max(temperature, 1e-3),
+                top_k=40,
             )
+            gen_ids = out[0].tolist()[len(prompt_ids) :]
+            text = self._tokenizer.decode(gen_ids).strip()
             return LLMResponse(content=text, model=self.model_name)
         except Exception as e:
             logger.error("llm.nanogpt.error", error=str(e))
@@ -525,29 +613,31 @@ def get_llm_provider(provider_name: str | None = None, **kwargs) -> BaseLLMProvi
 
 
 def get_default_llm_provider() -> BaseLLMProvider | None:
-    """Construit le provider LLM par défaut depuis Settings.
+    """Construit le provider LLM ACTIF (choix modifiable à chaud via l'UI).
 
-    Renvoie None si aucun provider n'est configuré (pas de clé/endpoint).
-    Le code appelant doit alors basculer sur un fallback (templates).
+    Le choix vit dans ``jenny.llm.runtime`` (bouton de bascule Ollama/Groq/NanoGPT),
+    avec repli sur ``JENNY_LLM_PROVIDER``. Renvoie None si le provider choisi n'est
+    pas configuré (pas de clé/endpoint/checkpoint) → l'appelant bascule en templates.
     """
-    settings = get_settings()
+    from jenny.llm.runtime import active_provider_model
+
+    name, model = active_provider_model()
+    # NanoGPTProvider ne prend pas `model=` (il charge un checkpoint) → on n'injecte
+    # le modèle que pour les providers qui l'acceptent.
+    kwargs = {"model": model} if (model and name != "nanogpt") else {}
     try:
-        provider = get_llm_provider(settings.llm_provider)
+        provider = get_llm_provider(name, **kwargs)
     except ValueError:
-        logger.warning("llm.unknown_provider", provider=settings.llm_provider)
+        logger.warning("llm.unknown_provider", provider=name)
         return None
 
     if not provider.is_configured:
         logger.info(
             "llm.provider.not_configured",
-            provider=settings.llm_provider,
-            hint="renseignez JENNY_<PROVIDER>_API_KEY pour activer le LLM",
+            provider=name,
+            hint="clé API / endpoint / checkpoint manquant pour ce modèle",
         )
         return None
 
-    logger.info(
-        "llm.provider.ready",
-        provider=settings.llm_provider,
-        model=provider.model_name,
-    )
+    logger.info("llm.provider.ready", provider=name, model=provider.model_name)
     return provider

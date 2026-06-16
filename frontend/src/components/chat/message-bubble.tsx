@@ -1,8 +1,8 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { cn, intentLabel } from "@/lib/utils";
-import { Sparkles, User } from "lucide-react";
+import { intentLabel } from "@/lib/utils";
+import { JennyAvatar } from "@/components/ui/jenny-avatar";
 
 interface MessageBubbleProps {
   content: string;
@@ -17,68 +17,76 @@ interface MessageBubbleProps {
 }
 
 export function MessageBubble({ content, isUser, timestamp, meta }: MessageBubbleProps) {
+  // ── Message client (à droite) : bulle coral `.jbubble--me`, horodatage mono dessous.
+  if (isUser) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 10, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ type: "spring", stiffness: 380, damping: 30, mass: 0.7 }}
+        style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}
+      >
+        <div className="jbubble jbubble--me">{content}</div>
+        {timestamp && (
+          <div
+            className="jmono"
+            style={{ fontSize: 10.5, color: "var(--text-3)", marginTop: 5, letterSpacing: "0.06em" }}
+          >
+            {timestamp}
+          </div>
+        )}
+      </motion.div>
+    );
+  }
+
+  // ── Message Jenny (à gauche) : avatar 32 + bulle blanche `.jbubble--them`,
+  //    ligne meta/horodatage en mono dessous (intent · confiance · agent — vraies données).
+  const hasMeta = !!meta && (!!meta.intent || !!meta.agent);
   return (
     <motion.div
       initial={{ opacity: 0, y: 10, scale: 0.97 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ type: "spring", stiffness: 380, damping: 30, mass: 0.7 }}
-      className={cn("flex items-start gap-3", isUser ? "justify-end" : "")}
+      style={{ alignSelf: "flex-start", display: "flex", gap: 10, maxWidth: "84%" }}
     >
-      {/* Avatar - left for Jenny */}
-      {!isUser && (
-        <div className="w-9 h-9 rounded-xl bg-jenny-mint flex items-center justify-center flex-shrink-0">
-          <span className="text-jenny-coral font-bold text-[0.75rem]">J</span>
-        </div>
-      )}
-
-      {/* Bubble */}
-      <div className={cn("max-w-[75%] md:max-w-[65%] flex flex-col gap-1.5", isUser ? "items-end" : "items-start")}>
-        <div
-          className={cn(
-            "px-4 py-3 text-[0.9375rem] leading-[1.6]",
-            isUser
-              ? "bg-brand-gradient text-white rounded-2xl rounded-tr-lg shadow-sm shadow-jenny-coral/20"
-              : "bg-jenny-bg border border-jenny-divider rounded-2xl rounded-tl-lg text-jenny-text"
-          )}
-        >
+      <JennyAvatar size={32} tone="light" className="mt-0.5" />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="jbubble jbubble--them" style={{ maxWidth: "100%" }}>
           {content}
         </div>
-
-        {/* Meta for Jenny */}
-        {!isUser && meta && (meta.intent || meta.agent) && (
-          <div className="flex items-center gap-2 px-1 flex-wrap">
-            {meta.intent && (
-              <span className="text-[0.6875rem] text-jenny-text-secondary/70 flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-jenny-coral/50" />
-                {intentLabel(meta.intent)}
-                {meta.confidence != null && (
-                  <span className="opacity-50">
-                    {Math.round(meta.confidence * 100)}%
-                  </span>
-                )}
-              </span>
+        {(timestamp || hasMeta) && (
+          <div
+            className="jmono"
+            style={{
+              fontSize: 10.5,
+              color: "var(--text-3)",
+              marginTop: 5,
+              letterSpacing: "0.04em",
+              display: "flex",
+              alignItems: "center",
+              gap: 7,
+              flexWrap: "wrap",
+            }}
+          >
+            {timestamp && <span>{timestamp}</span>}
+            {meta?.intent && (
+              <>
+                <span aria-hidden>·</span>
+                <span>
+                  {intentLabel(meta.intent)}
+                  {meta.confidence != null && ` ${Math.round(meta.confidence * 100)}%`}
+                </span>
+              </>
             )}
-            {meta.agent && (
-              <span className="text-[0.6875rem] text-jenny-text-secondary/40">
-                via {meta.agent}
-              </span>
+            {meta?.agent && (
+              <>
+                <span aria-hidden>·</span>
+                <b style={{ color: "var(--coral)" }}>{meta.agent}</b>
+              </>
             )}
           </div>
         )}
-
-        {timestamp && (
-          <span className="text-[0.6875rem] text-jenny-text-secondary/40 px-1">
-            {timestamp}
-          </span>
-        )}
       </div>
-
-      {/* Avatar - right for user */}
-      {isUser && (
-        <div className="w-9 h-9 rounded-xl bg-jenny-coral/8 flex items-center justify-center flex-shrink-0">
-          <User className="w-4 h-4 text-jenny-coral" />
-        </div>
-      )}
     </motion.div>
   );
 }

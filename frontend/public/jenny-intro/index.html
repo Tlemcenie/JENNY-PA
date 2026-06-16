@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jenny — Intro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: transparent; overflow: hidden; }
+  #root { position: fixed; inset: 0; }
+</style>
+<!-- React (production, vendorisé en local : aucune dépendance CDN au runtime). -->
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<!--
+  bundle.js = animations.jsx + jenny-scenes.jsx + jenny-app.jsx pré-compilés
+  (JSX → React.createElement) pour éviter Babel-standalone au runtime.
+  Pour reconstruire après édition d'un .jsx :
+    cat animations.jsx jenny-scenes.jsx jenny-app.jsx > .build/bundle.tsx
+    npx tsc .build/bundle.tsx --jsx react --target es2020 --skipLibCheck --noEmitOnError false --outDir .
+-->
+<script src="bundle.js"></script>
+</body>
+</html>

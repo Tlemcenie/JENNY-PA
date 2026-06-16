@@ -10,6 +10,8 @@ import { SoundToggle } from "@/components/ui/sound-toggle";
 import { DensityToggle } from "@/components/ui/density-toggle";
 import { LanguageSwitcher } from "@/components/ui/language-switcher";
 import { NotificationBell } from "@/components/layout/notification-bell";
+import { UserMenu } from "@/components/layout/user-menu";
+import { LlmSwitcher } from "@/components/layout/llm-switcher";
 
 const pageTitleKeys: Record<string, string> = {
   "/dashboard": "nav.dashboard",
@@ -59,6 +61,7 @@ export function Topbar() {
           <Search className="w-3.5 h-3.5" />
           <kbd className="hidden sm:inline text-[10px] bg-jenny-divider/50 rounded px-1 py-0.5">⌘K</kbd>
         </button>
+        <LlmSwitcher />
         <NotificationBell />
         <SoundToggle />
         <DensityToggle />
@@ -80,6 +83,7 @@ export function Topbar() {
             <span className="text-jenny-error text-[10px] hidden sm:inline">Hors ligne</span>
           )}
         </div>
+        <UserMenu />
       </div>
     </header>
   );

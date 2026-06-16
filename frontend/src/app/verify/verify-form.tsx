@@ -10,17 +10,28 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Mail, ArrowRight, ShieldCheck } from "lucide-react";
-import { motion } from "framer-motion";
+import { Mail, ArrowRight, ShieldCheck, Check } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
 import { ApiError, resendCode } from "@/lib/api";
-import { fadeInUp, staggerContainer, staggerItem } from "@/lib/motion";
+import { fadeInUp, springSnappy, staggerContainer, staggerItem } from "@/lib/motion";
 
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN = 60;
+
+// Petit délai pour laisser respirer l'écran interstitiel de succès avant la
+// redirection vers l'onboarding (la redirection elle-même reste inchangée).
+const SUCCESS_INTERSTITIAL_MS = 1100;
+
+// Géométrie de l'anneau de progression circulaire du cooldown de renvoi.
+const RING_SIZE = 22;
+const RING_STROKE = 2.5;
+const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 const EMPTY = Array.from({ length: CODE_LENGTH }, () => "");
 
@@ -28,6 +39,7 @@ export function VerifyForm({ initialEmail }: { initialEmail: string }) {
   const router = useRouter();
   const { verifyEmail } = useAuth();
   const toast = useToast();
+  const reduce = useReducedMotion();
 
   const [email, setEmail] = useState(initialEmail);
   const emailLocked = initialEmail.length > 0;
@@ -37,6 +49,10 @@ export function VerifyForm({ initialEmail }: { initialEmail: string }) {
   const [isLoading, setIsLoading] = useState(false);
   const [isResending, setIsResending] = useState(false);
   const [cooldown, setCooldown] = useState(emailLocked ? RESEND_COOLDOWN : 0);
+  // Case OTP actuellement ciblée (pour l'effet de focus en spring).
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  // Vrai après une vérification réussie → affiche l'écran interstitiel.
+  const [verified, setVerified] = useState(false);
 
   const inputsRef = useRef<Array<HTMLInputElement | null>>([]);
 
@@ -63,8 +79,11 @@ export function VerifyForm({ initialEmail }: { initialEmail: string }) {
       try {
         await verifyEmail(email, code);
         toast.success("Compte confirmé. Bienvenue chez Jenny !");
+        // Court écran interstitiel (badge Check + halo) avant la redirection.
+        // La destination — parcours d'accueil — est inchangée.
+        setVerified(true);
         // Nouveau compte → parcours d'accueil (business → canaux → ton de Jenny).
-        router.push("/onboarding");
+        setTimeout(() => router.push("/onboarding"), SUCCESS_INTERSTITIAL_MS);
       } catch (err) {
         const detail =
           err instanceof ApiError
@@ -166,6 +185,66 @@ export function VerifyForm({ initialEmail }: { initialEmail: string }) {
 
   return (
     <div className="min-h-full flex flex-col lg:flex-row">
+      {/* ── Écran interstitiel de succès (avant la redirection /onboarding) ── */}
+      <AnimatePresence>
+        {verified && (
+          <motion.div
+            key="verified"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduce ? 0 : 0.25, ease: [0.16, 1, 0.3, 1] }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-jenny-bg"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex flex-col items-center gap-6 text-center px-6">
+              <div className="relative">
+                {/* Halo corail qui respire — esprit BrandedLoader. */}
+                <motion.span
+                  aria-hidden
+                  className="absolute inset-0 rounded-full bg-jenny-success/25 blur-2xl"
+                  animate={
+                    reduce
+                      ? { opacity: 0.6 }
+                      : { scale: [1, 1.35, 1], opacity: [0.45, 0.8, 0.45] }
+                  }
+                  transition={
+                    reduce
+                      ? { duration: 0 }
+                      : { duration: 2.2, ease: "easeInOut", repeat: Infinity }
+                  }
+                />
+                {/* Badge Check en scaleIn. */}
+                <motion.div
+                  className="relative w-20 h-20 rounded-[28px] bg-jenny-success/12 border border-jenny-success/25 flex items-center justify-center"
+                  initial={{ opacity: 0, scale: 0.7 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={reduce ? { duration: 0 } : springSnappy}
+                >
+                  <Check className="w-10 h-10 text-jenny-success" strokeWidth={2.5} />
+                </motion.div>
+              </div>
+
+              <motion.div
+                initial={{ opacity: 0, y: reduce ? 0 : 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: reduce ? 0 : 0.4, delay: reduce ? 0 : 0.12, ease: [0.16, 1, 0.3, 1] }}
+                className="flex flex-col items-center gap-2"
+              >
+                <JennyAvatar size={40} tone="light" priority />
+                <h2 className="text-[1.5rem] font-bold text-jenny-text tracking-tight">
+                  Compte confirmé
+                </h2>
+                <p className="text-jenny-text-secondary text-[0.9375rem]">
+                  On vous emmène dans votre espace…
+                </p>
+              </motion.div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Left - branding */}
       <div className="hidden lg:flex lg:w-[45%] xl:w-[40%] bg-jenny-sidebar relative overflow-hidden items-end">
         <div className="absolute inset-0">
@@ -251,25 +330,37 @@ export function VerifyForm({ initialEmail }: { initialEmail: string }) {
           <motion.div variants={staggerItem}>
             <div className="flex items-center justify-between gap-2 sm:gap-3" onPaste={handlePaste}>
               {digits.map((d, i) => (
-                <input
+                <motion.div
                   key={i}
-                  ref={(el) => {
-                    inputsRef.current[i] = el;
-                  }}
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete={i === 0 ? "one-time-code" : "off"}
-                  maxLength={1}
-                  value={d}
-                  disabled={isLoading}
-                  aria-label={`Chiffre ${i + 1}`}
-                  onChange={(e) => handleChange(i, e.target.value)}
-                  onKeyDown={(e) => handleKeyDown(i, e)}
-                  onFocus={(e) => e.target.select()}
-                  className={`w-12 h-14 sm:w-[52px] sm:h-16 text-center text-2xl font-bold rounded-2xl bg-white border-2 text-jenny-text transition-all duration-150 focus:outline-none focus:ring-4 focus:ring-jenny-coral/15 focus:border-jenny-coral disabled:opacity-50 ${
-                    d ? "border-jenny-coral/60 bg-jenny-coral/[0.04]" : "border-jenny-divider"
-                  } ${error ? "border-jenny-error/50" : ""}`}
-                />
+                  className="relative"
+                  // Légère mise à l'échelle de la case active (spring « snappy »),
+                  // neutralisée si l'utilisateur préfère un mouvement réduit.
+                  animate={{ scale: !reduce && activeIndex === i ? 1.04 : 1 }}
+                  transition={springSnappy}
+                >
+                  <input
+                    ref={(el) => {
+                      inputsRef.current[i] = el;
+                    }}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete={i === 0 ? "one-time-code" : "off"}
+                    maxLength={1}
+                    value={d}
+                    disabled={isLoading}
+                    aria-label={`Chiffre ${i + 1}`}
+                    onChange={(e) => handleChange(i, e.target.value)}
+                    onKeyDown={(e) => handleKeyDown(i, e)}
+                    onFocus={(e) => {
+                      setActiveIndex(i);
+                      e.target.select();
+                    }}
+                    onBlur={() => setActiveIndex((cur) => (cur === i ? null : cur))}
+                    className={`w-12 h-14 sm:w-[52px] sm:h-16 text-center text-2xl font-bold rounded-2xl bg-white border-2 text-jenny-text transition-all duration-150 focus:outline-none focus:ring-4 focus:ring-jenny-coral/15 focus:border-jenny-coral disabled:opacity-50 ${
+                      d ? "border-jenny-coral/60 bg-jenny-coral/[0.04]" : "border-jenny-divider"
+                    } ${error ? "border-jenny-error/50" : ""}`}
+                  />
+                </motion.div>
               ))}
             </div>
 
@@ -298,11 +389,50 @@ export function VerifyForm({ initialEmail }: { initialEmail: string }) {
             </Button>
           </motion.div>
 
-          <motion.div variants={staggerItem} className="mt-6 text-center text-sm text-jenny-text-secondary">
-            Vous n&apos;avez pas reçu le code ?{" "}
+          <motion.div
+            variants={staggerItem}
+            className="mt-6 flex items-center justify-center gap-2 text-center text-sm text-jenny-text-secondary"
+          >
+            <span>Vous n&apos;avez pas reçu le code ?</span>
             {cooldown > 0 ? (
-              <span className="text-jenny-text-secondary/70">
-                Renvoyer dans {cooldown}s
+              <span className="inline-flex items-center gap-1.5 text-jenny-text-secondary/70">
+                {/* Anneau de progression : se vide au fil du décompte. */}
+                <span className="relative inline-flex items-center justify-center">
+                  <svg
+                    width={RING_SIZE}
+                    height={RING_SIZE}
+                    viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+                    className="-rotate-90"
+                    aria-hidden
+                  >
+                    <circle
+                      cx={RING_SIZE / 2}
+                      cy={RING_SIZE / 2}
+                      r={RING_RADIUS}
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={RING_STROKE}
+                      className="text-jenny-divider"
+                    />
+                    <motion.circle
+                      cx={RING_SIZE / 2}
+                      cy={RING_SIZE / 2}
+                      r={RING_RADIUS}
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={RING_STROKE}
+                      strokeLinecap="round"
+                      className="text-jenny-coral"
+                      strokeDasharray={RING_CIRCUMFERENCE}
+                      animate={{
+                        strokeDashoffset:
+                          RING_CIRCUMFERENCE * (1 - cooldown / RESEND_COOLDOWN),
+                      }}
+                      transition={reduce ? { duration: 0 } : { duration: 1, ease: "linear" }}
+                    />
+                  </svg>
+                </span>
+                <span className="tabular-nums">Renvoyer dans {cooldown}s</span>
               </span>
             ) : (
               <button

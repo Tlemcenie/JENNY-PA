@@ -7,7 +7,6 @@ import {
   useRef,
   type KeyboardEvent,
 } from "react";
-import Image from "next/image";
 import { motion } from "framer-motion";
 import { Plus, Check, Sparkles, X, Wallet, BellRing, CalendarOff, Trash } from "lucide-react";
 import {
@@ -16,6 +15,7 @@ import {
   listClosures,
   createClosure,
   deleteClosure,
+  getJennyMetrics,
   type BusinessConfig,
   type JennyPersona,
   type Closure,
@@ -23,6 +23,7 @@ import {
 } from "@/lib/api";
 import { ErrorState } from "@/components/shared/error-state";
 import { useToast } from "@/components/ui/toast";
+import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { cn } from "@/lib/utils";
 
 // « Cerveau de Jenny » — page de configuration de la personnalité (DA handoff,
@@ -88,6 +89,9 @@ export default function BrainPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Tests de cohérence : vrais scores du dernier banc d'essai (null = pas encore lancé).
+  const [coherence, setCoherence] = useState<{ l: string; v: number }[] | null>(null);
 
   // ── 01 · Identité ──
   const [name, setName] = useState("");
@@ -288,6 +292,37 @@ export default function BrainPage() {
   useEffect(() => {
     void loadClosures();
   }, [loadClosures]);
+
+  // Tests de cohérence = critères réels du dernier banc d'essai (best-effort :
+  // si aucune éval n'existe, on n'affiche pas de chiffres inventés).
+  useEffect(() => {
+    let alive = true;
+    const LABELS: Record<string, string> = {
+      persona_humaine: "Persona humaine",
+      info_cle_presente: "Précision factuelle",
+      interdits_absents: "Respect des règles",
+      langue: "Bonne langue",
+      lacune_detectee: "Lacunes détectées",
+    };
+    const ORDER = ["persona_humaine", "interdits_absents", "info_cle_presente"];
+    void (async () => {
+      try {
+        const m = await getJennyMetrics();
+        const crit = m.last_eval?.by_criterion;
+        if (!alive || !crit) return;
+        const bars = ORDER.filter((k) => crit[k]).map((k) => ({
+          l: LABELS[k] ?? k,
+          v: Math.round(crit[k].pct),
+        }));
+        if (bars.length) setCoherence(bars);
+      } catch {
+        // silencieux : le panneau affiche alors un repli « lance le banc d'essai »
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const addClosure = async () => {
     if (!closureStart || closureSubmitting) return;
@@ -1036,15 +1071,7 @@ export default function BrainPage() {
                 className="flex items-center gap-2 px-3 py-2.5 rounded-xl mb-3"
                 style={{ background: "rgba(255,255,255,0.04)" }}
               >
-                <span className="w-[26px] h-[26px] rounded-full overflow-hidden bg-jenny-coral block shrink-0 relative">
-                  <Image
-                    src="/jenny.png"
-                    alt="Jenny"
-                    width={31}
-                    height={31}
-                    className="object-cover w-[120%] h-[120%] mt-[3px] max-w-none"
-                  />
-                </span>
+                <JennyAvatar size={26} tone="dark" />
                 <div className="min-w-0">
                   <div className="text-[11px] font-semibold text-white truncate">
                     Jenny · {name || "Maison Lila"}
@@ -1100,11 +1127,13 @@ export default function BrainPage() {
                 <Sparkles className="w-3.5 h-3.5 text-jenny-coral" />
                 Tests de cohérence
               </div>
-              {[
-                { l: "Cohérence du ton", v: 96 },
-                { l: "Respect des règles", v: 100 },
-                { l: "Précision factuelle", v: 89 },
-              ].map((m) => (
+              {coherence === null ? (
+                <p className="text-[11.5px] text-jenny-text-secondary leading-snug">
+                  Lance le banc d&apos;essai pour mesurer la cohérence de Jenny. Les
+                  scores réels s&apos;afficheront ici.
+                </p>
+              ) : (
+                coherence.map((m) => (
                 <div key={m.l} className="mb-2">
                   <div className="flex justify-between mb-1">
                     <span className="text-[11.5px] text-jenny-text-secondary">{m.l}</span>
@@ -1128,7 +1157,8 @@ export default function BrainPage() {
                     />
                   </div>
                 </div>
-              ))}
+                ))
+              )}
             </div>
           </motion.div>
         </div>

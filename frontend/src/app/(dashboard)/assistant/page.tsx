@@ -7,7 +7,7 @@ import {
   useCallback,
   type KeyboardEvent,
 } from "react";
-import Image from "next/image";
+import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Loader2, AlertCircle } from "lucide-react";
 import { ownerChat, ApiError, type OwnerChatResponse } from "@/lib/api";
@@ -50,24 +50,6 @@ const SUGGESTIONS: { label: string; insert?: boolean }[] = [
 
 function nowTime(): string {
   return new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-}
-
-// Petite pastille mascotte réutilisée (avatar des bulles Jenny + en-tête).
-function JennyAvatar({ size = 36 }: { size?: number }) {
-  return (
-    <span
-      className="rounded-xl overflow-hidden bg-jenny-mint block shrink-0 relative ring-1 ring-jenny-coral/15"
-      style={{ width: size, height: size }}
-    >
-      <Image
-        src="/jenny.png"
-        alt="Jenny"
-        width={size}
-        height={size}
-        className="object-cover w-[122%] h-[122%] mt-[2px] max-w-none"
-      />
-    </span>
-  );
 }
 
 export default function AssistantPage() {

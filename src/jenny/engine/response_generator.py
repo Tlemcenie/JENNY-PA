@@ -14,8 +14,12 @@ from jenny.core.logging import get_logger
 from jenny.llm.prompts import PromptBuilder
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from jenny.engine.state_manager import ConversationState
     from jenny.llm.providers import BaseLLMProvider
+
+    TokenCallback = Callable[[str], Awaitable[None]]
 
 logger = get_logger(__name__)
 
@@ -82,6 +86,81 @@ def sanitize_identity(text: str) -> str:
     return cleaned
 
 
+# Salutation en ouverture (à retirer si Jenny a déjà parlé dans la conversation).
+_OPENING_GREETING_RE = re.compile(
+    r"^\s*(?:bonjour|bonsoir|coucou|salut|hello|hey|re[\s-]?bonjour)\b"
+    r"[^.!?\n]*[.!?\n]?\s*",
+    re.IGNORECASE,
+)
+# Fragments d'instructions internes parfois recopiés par les petits modèles.
+_LEAKED_INSTRUCTION_RE = re.compile(
+    r"à dire au client|ne recopie|reformule|avec tes mots|ne les change|"
+    r"reprends? exactement|en gardant exactement|ne propose aucun|"
+    r"=== |faits pour ta réponse|consigne|sans insister",
+    re.IGNORECASE,
+)
+
+
+# Mise en forme « courrier » (formule d'appel + signature) que les petits modèles
+# produisent parfois — déplacée pour garder un ton « message » conversationnel.
+_LETTER_OPENING_RE = re.compile(
+    r"^\s*(?:ch[èe]re?s?\s+client(?:e|es|s)?|cher\s+client|"
+    r"(?:bonjour\s+)?(?:madame|monsieur|mademoiselle))\s*,?\s*\n+",
+    re.IGNORECASE,
+)
+_LETTER_SIGNATURE_RE = re.compile(
+    r"\n+\s*(?:(?:bien\s+)?cordialement|sinc[èe]rement|bien\s+à\s+vous|"
+    r"chaleureusement)\s*,?\s*(?:\n+\s*jenny\b[^\n]*)?\s*$",
+    re.IGNORECASE,
+)
+_LETTER_NAME_RE = re.compile(r"\n+\s*jenny\s*[!.]*\s*$", re.IGNORECASE)
+
+
+def strip_letter_format(text: str) -> str:
+    """Retire la formule d'appel (« Chère cliente, ») et la signature (« Bien
+    cordialement, Jenny ») : un message de chat n'est pas une lettre."""
+    out = _LETTER_OPENING_RE.sub("", text, count=1)
+    out = _LETTER_SIGNATURE_RE.sub("", out, count=1)
+    out = _LETTER_NAME_RE.sub("", out, count=1)
+    out = out.strip()
+    if out and out[0].islower():
+        out = out[0].upper() + out[1:]
+    return out if len(out) >= 10 else text
+
+
+def strip_repeated_greeting(text: str) -> str:
+    """Retire une salutation d'ouverture (« Bonjour ! … ») quand Jenny a déjà parlé.
+
+    Le petit modèle resalue souvent à chaque tour, ce qui fait « robotique ». On ne
+    retire la salutation QUE si le reste du message tient debout (≥15 caractères).
+    """
+    stripped = _OPENING_GREETING_RE.sub("", text, count=1).strip()
+    if len(stripped) >= 15:
+        # Recapitalise la première lettre pour une phrase propre.
+        return stripped[0].upper() + stripped[1:]
+    return text
+
+
+def drop_leaked_instructions(text: str) -> str:
+    """Supprime les phrases qui recopient une consigne interne (méta-fuite)."""
+    if not _LEAKED_INSTRUCTION_RE.search(text):
+        return text
+    sentences = re.split(r"(?<=[.!?…])\s+", text.strip())
+    kept = [s for s in sentences if not _LEAKED_INSTRUCTION_RE.search(s)]
+    cleaned = " ".join(kept).strip()
+    return cleaned if len(cleaned) >= 15 else text
+
+
+def polish_response(text: str, *, already_spoke: bool) -> str:
+    """Nettoyage final : identité + format courrier + fuites de consignes + salutation répétée."""
+    out = sanitize_identity(text)
+    out = strip_letter_format(out)
+    out = drop_leaked_instructions(out)
+    if already_spoke:
+        out = strip_repeated_greeting(out)
+    return out.strip()
+
+
 class ResponseGenerator:
     """Génère des réponses contextuelles via un LLM.
 
@@ -104,23 +183,23 @@ class ResponseGenerator:
             temperature = get_settings().llm_temperature
         self.temperature = temperature
 
-    async def generate(self, state: ConversationState) -> str:
+    async def generate(
+        self, state: ConversationState, on_token: TokenCallback | None = None
+    ) -> str:
         """Génère une réponse à partir de l'état conversationnel.
 
-        Args:
-            state: État complet de la conversation.
-
-        Returns:
-            Texte de la réponse générée.
+        Si ``on_token`` est fourni, la réponse est diffusée token par token via ce
+        callback (premier token rapide → le chat « répond » tout de suite). Le
+        texte retourné reste la version NETTOYÉE (garde-fou persona) : l'appelant
+        l'utilise comme version de référence après le flux brut.
         """
         # Si on a des documents RAG, utiliser le mode RAG
         if state.retrieved_documents:
-            return await self.generate_with_rag(state, state.retrieved_documents)
+            return await self.generate_with_rag(
+                state, state.retrieved_documents, on_token=on_token
+            )
 
-        # Construire le prompt système
         system_prompt = self.prompt_builder.build_system_prompt(state)
-
-        # Construire le prompt utilisateur avec contexte
         user_prompt = self.prompt_builder.build_user_prompt(state)
 
         logger.info(
@@ -129,37 +208,24 @@ class ResponseGenerator:
             agent=state.agent_used,
             turn=state.turn_count,
             model=self.llm.model_name,
+            streaming=on_token is not None,
         )
 
-        # Appeler le LLM (ton/créativité réglable via JENNY_LLM_TEMPERATURE)
-        response = await self.llm.generate(
-            prompt=user_prompt,
+        return await self._run_llm(
+            state=state,
+            user_prompt=user_prompt,
             system_prompt=system_prompt,
             temperature=self.temperature,
-            max_tokens=300,
+            on_token=on_token,
         )
-
-        # Si erreur, fallback template
-        if response.finish_reason == "error":
-            logger.warning("generator.llm_error_fallback", content=response.content)
-            return self._template_fallback(state)
-
-        return sanitize_identity(response.content)
 
     async def generate_with_rag(
         self,
         state: ConversationState,
         documents: list[dict],
+        on_token: TokenCallback | None = None,
     ) -> str:
-        """Génère une réponse enrichie avec des documents RAG.
-
-        Args:
-            state: État de la conversation.
-            documents: Documents pertinents retrouvés.
-
-        Returns:
-            Réponse contextualisée avec les documents.
-        """
+        """Génère une réponse enrichie avec des documents RAG (streaming optionnel)."""
         state.retrieved_documents = documents
 
         system_prompt = self.prompt_builder.build_rag_system_prompt(state)
@@ -169,20 +235,69 @@ class ResponseGenerator:
             "generator.generate_with_rag",
             num_documents=len(documents),
             model=self.llm.model_name,
+            streaming=on_token is not None,
         )
 
         # En mode RAG on reste plus factuel (température plafonnée).
+        return await self._run_llm(
+            state=state,
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            temperature=min(self.temperature, 0.5),
+            on_token=on_token,
+        )
+
+    async def _run_llm(
+        self,
+        *,
+        state: ConversationState,
+        user_prompt: str,
+        system_prompt: str,
+        temperature: float,
+        on_token: TokenCallback | None,
+    ) -> str:
+        """Appelle le LLM (streamé si ``on_token``), puis nettoie la sortie.
+
+        En streaming : on relaie chaque token BRUT au client pour la réactivité,
+        on accumule, et on renvoie la version nettoyée (le client remplacera par
+        cette version finale à la fin du flux). Repli automatique sur l'appel
+        non-streamé si le flux échoue ou revient vide.
+        """
+        already_spoke = any(
+            m.get("role") == "assistant" for m in state.message_history[:-1]
+        )
+
+        if on_token is not None:
+            acc: list[str] = []
+            try:
+                async for token in self.llm.generate_stream(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    temperature=temperature,
+                    max_tokens=300,
+                ):
+                    acc.append(token)
+                    try:
+                        await on_token(token)
+                    except Exception:  # le client a coupé : on continue d'accumuler
+                        pass
+            except Exception as e:
+                logger.warning("generator.stream_error", error=str(e))
+            raw = "".join(acc).strip()
+            if raw:
+                return polish_response(raw, already_spoke=already_spoke)
+            # Flux vide/échoué → on retombe sur l'appel classique ci-dessous.
+
         response = await self.llm.generate(
             prompt=user_prompt,
             system_prompt=system_prompt,
-            temperature=min(self.temperature, 0.5),
+            temperature=temperature,
             max_tokens=300,
         )
-
         if response.finish_reason == "error":
+            logger.warning("generator.llm_error_fallback", content=response.content)
             return self._template_fallback(state)
-
-        return sanitize_identity(response.content)
+        return polish_response(response.content, already_spoke=already_spoke)
 
     def _template_fallback(self, state: ConversationState) -> str:
         """Réponses templates quand le LLM est indisponible."""

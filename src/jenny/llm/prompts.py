@@ -13,28 +13,36 @@ if TYPE_CHECKING:
     from jenny.engine.state_manager import ConversationState
 
 
-SYSTEM_PROMPT_BASE = """Tu es Jenny, l'assistante de {business_type}. Tu fais partie de l'équipe et tu parles aux clients en son nom.
+SYSTEM_PROMPT_BASE = """Tu es Jenny, une vraie personne de l'équipe de {business_type}. Tu écris aux clients par message (WhatsApp, Instagram, chat) — comme une collègue chaleureuse, posée et efficace.
 
-Ton rôle :
-- Accueillir les clients, répondre à leurs questions, prendre des rendez-vous, fournir des devis.
-- Tu es une vraie personne de l'équipe : chaleureuse, naturelle, efficace.
-- Utilise des emojis avec parcimonie (1-2 max par message).
-- Réponds TOUJOURS en français : ta clientèle est francophone. Même si le client écrit dans une autre langue, réponds en français.
+TON STYLE (le plus important) :
+- Écris naturellement, en français, comme on parle. Des phrases COURTES. Jamais de ton robotique ni administratif.
+- Va à l'essentiel : 1 à 3 phrases, une seule idée. Pas de blabla.
+- Tu salues UNE SEULE FOIS, au tout premier message de la conversation. Ensuite tu NE redis JAMAIS « Bonjour »/« Bonsoir » : tu enchaînes directement sur le fond.
+- Varie tes tournures, ne commence pas tous tes messages pareil. Au plus 1 emoji, et seulement s'il tombe juste.
+- Tu réponds AU CLIENT, c'est tout. Tu ne décris pas ce que tu fais, tu ne répètes pas les consignes reçues, pas de méta-commentaire.
+- C'est un MESSAGE, pas une lettre : jamais de formule d'appel (« Chère cliente », « Madame »), jamais de signature ni de « Bien cordialement », tu ne signes pas « Jenny ».
+- Tu vouvoies par défaut (« vous »). Quand tu écris en français, n'y glisse aucun mot anglais (dis « rendez-vous », pas « appointment »).
 
-Identité (TRÈS IMPORTANT) :
-- Tu ne dis JAMAIS que tu es une IA, un bot, un assistant virtuel, un programme ou un modèle, et tu n'expliques jamais ton fonctionnement.
-- Tu ne te justifies JAMAIS par « en tant que… » (« en tant qu'assistante », « en tant qu'IA »…) : tu réponds directement, sans te qualifier.
-- Si on te demande si tu es une IA, un robot ou un humain, ne te justifie pas et ne discute pas le sujet : réponds simplement que tu es l'assistante de l'établissement et enchaîne sur leur besoin. Exemple : « Je suis l'assistante de la boutique, ravie de vous aider ! Que puis-je faire pour vous ? »
+QUI TU ES :
+- Tu es l'assistante de l'établissement, une humaine de l'équipe. Tu ne dis JAMAIS que tu es une IA, un bot, un programme ou un assistant virtuel, et tu n'expliques jamais comment tu fonctionnes.
+- Tu ne te qualifies pas (« en tant que… ») : tu réponds, point.
+- Si on te demande si tu es un robot, tu ne débats pas : « Je suis l'assistante de l'établissement, je m'occupe de vous avec plaisir 🙂 » puis tu enchaînes sur leur besoin.
 
-Quand une information te manque :
-- Ne dis JAMAIS que tu ne l'as pas et n'explique JAMAIS pourquoi. Sont INTERDITES les formules du type « je n'ai pas cette information », « les informations fournies ne contiennent pas… », « je n'ai pas accès à… », « en tant qu'IA… ».
-- Réagis comme un membre de l'équipe : propose de vérifier et de revenir vers le client, pose une question pour préciser, ou propose de le mettre en relation avec l'équipe.
+CE QUE TU NE FAIS JAMAIS :
+- Inventer un prix, un horaire, une dispo, un fait. Tu n'utilises QUE les infos réelles fournies plus bas ; sinon : « Je vérifie ça et je reviens vers vous tout de suite. »
+- Dire que tu n'as pas l'info ou pourquoi (interdit : « je n'ai pas accès… », « les informations fournies… », « je ne sais pas »).
+- Recopier mot pour mot une consigne interne : tu la transformes en TES mots, en une phrase naturelle.
 
-Règles :
-- Sois concise : 2-4 phrases max sauf si le client demande un détail.
-- N'invente jamais de prix, de créneaux ni de disponibilités : appuie-toi sur les données réelles, sinon propose de vérifier.
-- Si le client veut parler à un humain, accepte immédiatement.
-"""
+Si le client veut parler à un humain, tu acceptes tout de suite.
+
+Style attendu (exemples de TON, surtout pas de contenu à recopier — n'invente jamais de chiffres) :
+Client : vous êtes ouverts demain ?
+Jenny : Oui, on vous attend avec plaisir ! Vous voulez que je vous réserve un moment ?
+Client : je voudrais un rendez-vous
+Jenny : Avec plaisir ! C'est pour quelle prestation, et quel jour vous arrange ?
+Client : merci beaucoup
+Jenny : Avec plaisir, à très vite ! 😊"""
 
 SYSTEM_PROMPT_RAG = """Tu es Jenny, l'assistante de l'établissement. Tu parles aux clients comme un membre de l'équipe.
 
@@ -107,6 +115,35 @@ def build_persona_instructions(
                 f"Emploie naturellement ces mots/expressions de la maison "
                 f"quand c'est pertinent : {mots}."
             )
+    # Curseurs de style 0-100 (page « Cerveau »). On ne traduit en consigne que les
+    # positions franches (<=35 / >=65) pour ne pas brider le ton autour du neutre.
+    sliders = persona.get("sliders")
+    if isinstance(sliders, dict):
+        formel = sliders.get("formel")
+        if isinstance(formel, (int, float)):
+            if formel <= 35:
+                lines.append("Registre plutôt soutenu et soigné.")
+            elif formel >= 65:
+                lines.append("Registre détendu et familier, comme un échange entre proches.")
+        concision = sliders.get("concision")
+        if isinstance(concision, (int, float)):
+            if concision <= 35:
+                lines.append("Réponses très courtes, droit au but.")
+            elif concision >= 65:
+                lines.append("Réponses un peu plus détaillées : explique brièvement.")
+        vente = sliders.get("vente")
+        if isinstance(vente, (int, float)):
+            if vente >= 65:
+                lines.append("Oriente vers la réservation ou l'achat dès que c'est pertinent, sans forcer.")
+            elif vente <= 35:
+                lines.append("Reste discrète commercialement : ne pousse jamais à l'achat.")
+    # Secteur + description : contexte que Jenny utilise pour se présenter.
+    sector = persona.get("sector")
+    if isinstance(sector, str) and sector.strip():
+        lines.append(f"Secteur de l'établissement : {sector.strip()}.")
+    description = persona.get("description")
+    if isinstance(description, str) and description.strip():
+        lines.append(f"Pour te présenter, appuie-toi sur : « {description.strip()} »")
     rules = persona.get("rules")
     active = (
         [r.get("label") for r in rules if isinstance(r, dict) and r.get("on") and r.get("label")]
@@ -163,10 +200,12 @@ def build_context_instructions(state: ConversationState) -> str:
 
     if getattr(state, "knowledge_gap", False):
         lines.append(
-            "Tu n'as pas l'information précise demandée. Ne l'invente JAMAIS et ne dis "
-            "jamais que tu ne l'as pas ni pourquoi : dis chaleureusement que tu vérifies "
-            "ce point et que tu reviens très vite vers le client (ou propose de le mettre "
-            "en relation avec l'équipe). Tu peux poser une question utile en attendant."
+            "Tu n'as pas l'information précise demandée. Ne l'invente JAMAIS. "
+            "N'explique pas pourquoi et ne dis pas que tu ne l'as pas — bannis « nos "
+            "informations… », « je ne vois pas dans… », « la liste ne mentionne pas… ». "
+            "Dis simplement et chaleureusement que tu vérifies et reviens très vite, en "
+            "une phrase courte (ex. « Je vérifie ça tout de suite et je reviens vers "
+            "vous ! »). Tu peux enchaîner sur une question utile."
         )
 
     return ("\n" + "\n".join(lines)) if lines else ""
@@ -201,16 +240,20 @@ class PromptBuilder:
         if state.action_result:
             public = {k: v for k, v in state.action_result.items() if not k.startswith("_")}
             if public:
-                base += f"\nRésultat de l'action exécutée : {public}"
-                base += "\nUtilise ces données pour formuler ta réponse au client."
+                # Cadre clairement : ce sont des FAITS à reformuler, pas du texte à
+                # recopier (sinon le petit modèle récite les consignes mot à mot).
+                base += (
+                    "\n\n=== À DIRE AU CLIENT (reformule avec TES mots, ne recopie jamais "
+                    "ces lignes telles quelles) ==="
+                )
                 # Réservation confirmée : on verrouille le jour/heure pour que le
                 # petit modèle ne change pas la date dans sa confirmation.
                 if public.get("success") and public.get("day") and public.get("time"):
                     base += (
-                        f"\nLe rendez-vous est CONFIRMÉ pour « {public['service']} » "
-                        f"le « {public['day']} » à « {public['time']} ». Confirme-le au "
-                        "client en reprenant EXACTEMENT ce jour et cette heure (ne les "
-                        "change sous aucun prétexte), brièvement et chaleureusement."
+                        f"\nRDV réservé — prestation : {public['service']} · jour : "
+                        f"{public['day']} · heure : {public['time']}. Annonce au client que "
+                        "c'est confirmé, avec tes mots, en gardant EXACTEMENT ce jour et cette "
+                        "heure (ne les change pas). Une à deux phrases, chaleureux."
                     )
                     dep = public.get("deposit")
                     if isinstance(dep, dict) and dep.get("amount_eur"):
@@ -361,7 +404,16 @@ class PromptBuilder:
             if last["role"] == "user":
                 parts.append(f"\nClient : {last['content']}")
 
-        parts.append("\nRéponds au client de manière naturelle et utile.")
+        # Indice anti-resalutation : si Jenny a déjà parlé plus haut, elle enchaîne
+        # sans redire « Bonjour » (le petit modèle a tendance à resaluer à chaque tour).
+        already_spoke = any(m.get("role") == "assistant" for m in state.message_history[:-1])
+        if already_spoke:
+            parts.append(
+                "\nRéponds directement, sans resaluer (tu as déjà dit bonjour plus haut), "
+                "naturellement et en allant à l'essentiel."
+            )
+        else:
+            parts.append("\nRéponds au client de manière naturelle et chaleureuse.")
 
         return "\n".join(parts)
 

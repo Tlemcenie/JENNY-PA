@@ -167,9 +167,12 @@ async def chat(
 
 
 async def _run_engine_chat(
-    db, body: ConversationRequest, request: Request
+    db, body: ConversationRequest, request: Request, on_token=None
 ) -> EngineResponse:
-    """Cœur partagé : charge le contexte, exécute le moteur, persiste."""
+    """Cœur partagé : charge le contexte, exécute le moteur, persiste.
+
+    ``on_token`` (optionnel) reçoit chaque token de la réponse au fil de l'eau.
+    """
     _enforce_tenant(request, body.business_id)
     engine = get_engine()
 
@@ -195,7 +198,8 @@ async def _run_engine_chat(
             customer_facts=customer_facts,
             catalog=catalog or None,
             catalog_services=[p.name for p in prestations] or None,
-        )
+        ),
+        on_token=on_token,
     )
     await _persist_chat(db, body, result)
     await persist_engine_signals(
@@ -232,29 +236,57 @@ def _to_response(result: EngineResponse) -> ConversationResponse:
 async def chat_stream(
     request: Request, body: ConversationRequest, db: DbSession
 ) -> StreamingResponse:
-    """Variante en streaming (SSE) : la réponse s'affiche au fil de l'eau.
+    """Variante en streaming (SSE) : VRAI token-streaming.
 
-    La réponse complète est d'abord produite ET passée au garde-fou persona
-    (jamais « IA », pas de fuite) AVANT diffusion — on diffuse ensuite mot à mot
-    pour un rendu vivant, sans jamais risquer de laisser passer une formule
-    interdite en milieu de flux.
+    Les tokens du LLM sont relayés au client dès qu'ils arrivent (premier token
+    rapide → Jenny « répond » tout de suite). Le moteur produit en parallèle la
+    version FINALE nettoyée (garde-fou persona : jamais « IA », pas de fuite),
+    envoyée à la fin via le champ ``text`` — le client remplace alors l'affichage
+    brut par cette version sûre. En cas de pépin de flux, repli automatique.
     """
-    result = await _run_engine_chat(db, body, request)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def on_token(tok: str) -> None:
+        await queue.put({"token": tok})
+
+    async def run() -> None:
+        try:
+            result = await _run_engine_chat(db, body, request, on_token=on_token)
+            await queue.put({"__result__": result})
+        except Exception as exc:  # pragma: no cover - chemin d'erreur réseau
+            logger.error("conversation.stream_error", error=str(exc))
+            await queue.put({"__error__": str(exc)})
+        finally:
+            await queue.put(None)  # sentinelle de fin
+
+    task = asyncio.create_task(run())
 
     async def _sse():
-        text = result.response_text or ""
-        for word in text.split(" "):
-            yield f"data: {json.dumps({'token': word + ' '})}\n\n"
-            await asyncio.sleep(0.025)
-        meta = {
-            "done": True,
-            "intent": result.intent,
-            "action_result": result.action_result,
-            "requires_human": result.requires_human,
-            "needs_clarification": result.needs_clarification,
-            "knowledge_gap": result.knowledge_gap,
-        }
-        yield f"data: {json.dumps(meta)}\n\n"
+        result: EngineResponse | None = None
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                if "token" in item:
+                    yield f"data: {json.dumps({'token': item['token']})}\n\n"
+                elif "__result__" in item:
+                    result = item["__result__"]
+                elif "__error__" in item:
+                    yield f"data: {json.dumps({'error': True})}\n\n"
+            if result is not None:
+                meta = {
+                    "done": True,
+                    "text": result.response_text,  # version finale nettoyée (autorité)
+                    "intent": result.intent,
+                    "action_result": result.action_result,
+                    "requires_human": result.requires_human,
+                    "needs_clarification": result.needs_clarification,
+                    "knowledge_gap": result.knowledge_gap,
+                }
+                yield f"data: {json.dumps(meta)}\n\n"
+        finally:
+            await task  # s'assure que la persistance s'est terminée
 
     return StreamingResponse(
         _sse(),

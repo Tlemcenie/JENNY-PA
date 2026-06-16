@@ -34,8 +34,10 @@ from jenny.api.routes import (
     jenny_metrics,
     knowledge,
     knowledge_gaps,
+    llm_settings,
     messages,
     metrics,
+    nanogpt,
     notifications,
     owner_chat,
     payment_webhooks,
@@ -166,6 +168,8 @@ def create_app() -> FastAPI:
     app.include_router(copilot.router, prefix="/api/v1", tags=["copilot"])
     app.include_router(owner_chat.router, prefix="/api/v1", tags=["owner-assistant"])
     app.include_router(jenny_metrics.router, prefix="/api/v1", tags=["jenny-metrics"])
+    app.include_router(nanogpt.router, prefix="/api/v1", tags=["nanogpt"])
+    app.include_router(llm_settings.router, prefix="/api/v1", tags=["llm"])
     app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])
     app.include_router(audit.router, prefix="/api/v1", tags=["audit"])
     app.include_router(api_keys.router, prefix="/api/v1", tags=["api-keys"])

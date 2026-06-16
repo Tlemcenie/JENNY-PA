@@ -2,14 +2,22 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, AlertCircle, RotateCcw, Sparkles, Info, CalendarPlus } from "lucide-react";
+import { Send, AlertCircle, RotateCcw, CalendarPlus, Paperclip, ImageIcon } from "lucide-react";
 import { sendMessage, streamChat, type ConversationResponse, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { generateUUID } from "@/lib/utils";
 import { MessageBubble } from "./message-bubble";
 import { TypingIndicator } from "./typing-indicator";
-import { Button } from "@/components/ui/button";
+import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { ScheduleAppointmentDialog } from "@/components/customer/schedule-appointment-dialog";
+
+// Suggestions clientes (présentation) : elles ne font que pré-remplir l'input —
+// même comportement que l'état vide existant, aucune logique réseau ajoutée.
+const QUICK_SUGGESTIONS = [
+  "Quels sont vos horaires ?",
+  "Je voudrais prendre rendez-vous",
+  "Combien coûte une coupe ?",
+];
 
 interface ChatMessage {
   id: string;
@@ -117,8 +125,6 @@ export function ChatInterface() {
         },
         (meta) => {
           // Fin du stream : on attache les métadonnées (intent, agent…).
-          // Si aucun token n'est arrivé (réponse vide), on crée quand même la
-          // bulle pour ne pas laisser le fil sans réponse.
           const finalMeta = {
             intent: typeof meta.intent === "string" ? meta.intent : undefined,
             confidence:
@@ -127,6 +133,9 @@ export function ChatInterface() {
             phase:
               typeof meta.conversation_phase === "string" ? meta.conversation_phase : undefined,
           };
+          // Le back envoie la version FINALE nettoyée (garde-fou persona) dans
+          // `text` : elle fait autorité → on remplace l'affichage brut par elle.
+          const finalText = typeof meta.text === "string" ? meta.text : undefined;
           if (!firstTokenReceived) {
             firstTokenReceived = true;
             setIsTyping(false);
@@ -134,7 +143,7 @@ export function ChatInterface() {
               ...prev,
               {
                 id: jennyId,
-                content: "",
+                content: finalText ?? "",
                 isUser: false,
                 timestamp: jennyTimestamp,
                 meta: finalMeta,
@@ -143,7 +152,11 @@ export function ChatInterface() {
             return;
           }
           setMessages((prev) =>
-            prev.map((m) => (m.id === jennyId ? { ...m, meta: finalMeta } : m))
+            prev.map((m) =>
+              m.id === jennyId
+                ? { ...m, meta: finalMeta, content: finalText ?? m.content }
+                : m
+            )
           );
         }
       );
@@ -225,158 +238,343 @@ export function ChatInterface() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-white">
-      {/* Chat header */}
-      <div className="px-5 md:px-8 py-4 border-b border-jenny-divider">
-        <div className="flex items-center gap-3.5">
-          <div className="w-11 h-11 rounded-2xl bg-brand-gradient flex items-center justify-center shadow-sm shadow-jenny-coral/25">
-            <Sparkles className="w-5 h-5 text-white" />
+    <div
+      className="jx"
+      style={{ display: "grid", gridTemplateRows: "auto 1fr", height: "100%", background: "var(--surface)" }}
+    >
+      {/* ── En-tête du chat : avatar + nom + badge « EN LIGNE » + sous-titre réel ── */}
+      <div
+        style={{
+          padding: "16px 32px",
+          borderBottom: "1px solid var(--divider)",
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+        }}
+      >
+        <JennyAvatar size={46} tone="light" priority />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 15.5, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--text)" }}>
+              Jenny
+            </span>
+            <span
+              className="jmono"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "2px 9px",
+                background: "rgba(16,185,129,0.1)",
+                color: "var(--success)",
+                borderRadius: 999,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.06em",
+              }}
+            >
+              <span style={{ width: 5, height: 5, background: "var(--success)", borderRadius: "50%" }} />
+              EN LIGNE
+            </span>
           </div>
-          <div className="min-w-0 flex-1">
-            <h2 className="font-semibold text-[0.9375rem] text-jenny-text">Jenny</h2>
-            <p className="text-[0.75rem] text-jenny-text-secondary leading-snug truncate">
-              Votre assistante, connectée en direct
-            </p>
+          <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 1 }}>
+            Répond comme un membre de votre équipe · en direct
           </div>
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <button
+            type="button"
             onClick={() => setScheduleOpen(true)}
             title="Planifier un rendez-vous"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-jenny-divider text-[0.75rem] font-medium text-jenny-text-secondary hover:text-jenny-coral hover:border-jenny-coral/40 hover:bg-jenny-coral/[0.04] transition-all"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              height: 32,
+              padding: "0 12px",
+              borderRadius: "var(--r-btn)",
+              border: "1px solid var(--divider)",
+              background: "var(--surface)",
+              color: "var(--text-2)",
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
           >
-            <CalendarPlus className="w-3.5 h-3.5" />
+            <CalendarPlus style={{ width: 14, height: 14 }} />
             <span className="hidden sm:inline">Planifier un RDV</span>
           </button>
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-jenny-mint/60 text-[0.6875rem] font-medium text-jenny-text-secondary">
-            <div className="w-1.5 h-1.5 rounded-full bg-jenny-success" />
-            <code>/conversation/chat</code>
-          </div>
         </div>
       </div>
 
-      {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-5 md:px-8 py-6">
-        <div className="max-w-3xl mx-auto space-y-5">
-          {messages.length === 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center justify-center min-h-[50vh] text-center px-4"
-            >
-              <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-jenny-coral/10 via-jenny-coral/5 to-jenny-mint/40 flex items-center justify-center mb-7">
-                <Sparkles className="w-9 h-9 text-jenny-coral" />
-              </div>
-              <h3 className="text-xl md:text-2xl font-bold text-jenny-text mb-2.5 tracking-tight max-w-none">
-                Discutez avec Jenny
-              </h3>
-              <p className="text-jenny-text-secondary text-[0.9375rem] leading-relaxed max-w-lg mb-8">
-                Posez vos questions comme le ferait un client : Jenny comprend et répond
-                naturellement, en temps réel.
-              </p>
-              <div className="flex flex-wrap gap-2.5 justify-center mb-10">
-                {[
-                  "Quels sont vos horaires ?",
-                  "Je voudrais un devis",
-                  "Suivi de ma commande",
-                ].map((suggestion) => (
-                  <button
-                    key={suggestion}
-                    onClick={() => {
-                      setInput(suggestion);
-                      inputRef.current?.focus();
-                    }}
-                    className="px-4 py-2.5 rounded-xl bg-white border border-jenny-divider text-[0.875rem] text-jenny-text hover:border-jenny-coral/40 hover:bg-jenny-coral/[0.03] transition-all duration-150"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex items-start gap-2.5 p-4 rounded-xl bg-jenny-mint/30 border border-jenny-mint-dark/20 text-[0.8125rem] text-jenny-text-secondary max-w-lg text-left leading-relaxed">
-                <Info className="w-4 h-4 flex-shrink-0 mt-0.5 text-jenny-coral/70" />
-                <span>
-                  Ce chat utilise le vrai endpoint{" "}
-                  <code className="font-mono text-[0.75rem] bg-white/60 px-1.5 py-0.5 rounded-md">/api/v1/conversation/chat</code>.
-                  Les réponses dépendent du LLM configuré côté backend.
-                </span>
-              </div>
-            </motion.div>
-          )}
-
-          {messages.map((msg) =>
-            msg.error ? (
+      {/* ── Colonne de messages : fond dégradé, colonne centrée max 680 ── */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+          background: "linear-gradient(180deg, var(--bg-tint) 0%, var(--surface) 30%)",
+        }}
+      >
+        <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "24px 32px" }}>
+          <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 }}>
+            {messages.length === 0 ? (
               <motion.div
-                key={msg.id}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="flex items-start gap-3 max-w-[85%]"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  textAlign: "center",
+                  minHeight: "48vh",
+                  padding: "0 16px",
+                }}
               >
-                <div className="w-9 h-9 rounded-xl bg-jenny-error/8 flex items-center justify-center flex-shrink-0">
-                  <AlertCircle className="w-4 h-4 text-jenny-error" />
-                </div>
-                <div className="bg-jenny-error/[0.04] border border-jenny-error/15 rounded-2xl rounded-tl-lg px-4 py-3.5">
-                  <p className="text-[0.875rem] text-jenny-error leading-relaxed">{msg.content}</p>
-                  <button
-                    onClick={handleRetry}
-                    className="flex items-center gap-1.5 mt-2.5 text-[0.8125rem] text-jenny-error/80 hover:text-jenny-error transition-colors font-medium"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Réessayer
-                  </button>
+                <JennyAvatar size={80} tone="light" priority className="mb-7" />
+                <h3 className="jserif" style={{ fontSize: 30, lineHeight: 1.05, color: "var(--text)", marginBottom: 10 }}>
+                  Discutez avec <span style={{ fontStyle: "italic", color: "var(--coral)" }}>Jenny.</span>
+                </h3>
+                <p
+                  style={{
+                    fontSize: 14.5,
+                    lineHeight: 1.6,
+                    color: "var(--text-2)",
+                    maxWidth: 460,
+                    margin: "0 0 28px",
+                  }}
+                >
+                  Posez vos questions comme le ferait un client : Jenny comprend et répond
+                  naturellement, en temps réel.
+                </p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+                  {QUICK_SUGGESTIONS.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      className="jpill"
+                      onClick={() => {
+                        setInput(suggestion);
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
                 </div>
               </motion.div>
             ) : (
-              <MessageBubble
-                key={msg.id}
-                content={msg.content}
-                isUser={msg.isUser}
-                timestamp={msg.timestamp}
-                meta={msg.meta}
-              />
-            )
-          )}
+              <>
+                {/* Séparateur de date — étiquette mono entre deux filets */}
+                <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "2px 0 4px" }}>
+                  <div style={{ flex: 1, height: 1, background: "var(--divider)" }} />
+                  <span
+                    className="jmono"
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-3)",
+                      letterSpacing: "0.12em",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Aujourd&apos;hui — {messages[0]?.timestamp}
+                  </span>
+                  <div style={{ flex: 1, height: 1, background: "var(--divider)" }} />
+                </div>
 
-          <AnimatePresence>{isTyping && <TypingIndicator />}</AnimatePresence>
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
+                {messages.map((msg) =>
+                  msg.error ? (
+                    <motion.div
+                      key={msg.id}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      style={{ alignSelf: "flex-start", display: "flex", gap: 10, maxWidth: "84%" }}
+                    >
+                      <div
+                        style={{
+                          width: 32,
+                          height: 32,
+                          borderRadius: 8,
+                          flexShrink: 0,
+                          marginTop: 2,
+                          display: "grid",
+                          placeItems: "center",
+                          background: "color-mix(in srgb, var(--error) 10%, transparent)",
+                        }}
+                      >
+                        <AlertCircle style={{ width: 16, height: 16, color: "var(--error)" }} />
+                      </div>
+                      <div
+                        className="jbubble jbubble--them"
+                        style={{
+                          maxWidth: "100%",
+                          borderColor: "color-mix(in srgb, var(--error) 22%, var(--divider))",
+                        }}
+                      >
+                        <div style={{ color: "var(--error)" }}>{msg.content}</div>
+                        <button
+                          type="button"
+                          onClick={handleRetry}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 6,
+                            marginTop: 10,
+                            fontSize: 12.5,
+                            fontWeight: 600,
+                            color: "var(--error)",
+                            background: "transparent",
+                            border: "none",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <RotateCcw style={{ width: 13, height: 13 }} />
+                          Réessayer
+                        </button>
+                      </div>
+                    </motion.div>
+                  ) : (
+                    <MessageBubble
+                      key={msg.id}
+                      content={msg.content}
+                      isUser={msg.isUser}
+                      timestamp={msg.timestamp}
+                      meta={msg.meta}
+                    />
+                  )
+                )}
+              </>
+            )}
 
-      {/* Input area */}
-      <div className="border-t border-jenny-divider bg-white px-5 md:px-8 py-4">
-        {error && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            className="mb-3 p-3 rounded-xl bg-jenny-warning/8 border border-jenny-warning/15 text-jenny-warning text-[0.8125rem] flex items-center gap-2.5 leading-snug"
-          >
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            Connexion au backend instable
-          </motion.div>
-        )}
-        <div className="max-w-3xl mx-auto flex items-end gap-3">
-          <div className="flex-1 relative">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Écrivez votre message..."
-              rows={1}
-              className="w-full resize-none px-4 py-3.5 rounded-xl bg-jenny-bg border border-jenny-divider text-[0.9375rem] text-jenny-text placeholder:text-jenny-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral transition-all leading-relaxed"
-              style={{ maxHeight: 140 }}
-            />
+            <AnimatePresence>{isTyping && <TypingIndicator />}</AnimatePresence>
+            <div ref={messagesEndRef} />
           </div>
-          <Button
-            onClick={handleSend}
-            disabled={!input.trim() || isTyping}
-            size="md"
-            className="h-12 w-12 p-0 rounded-xl flex-shrink-0"
-          >
-            <Send className="w-[18px] h-[18px]" />
-          </Button>
         </div>
-        <p className="text-[0.6875rem] text-jenny-text-secondary/40 mt-2.5 text-center max-w-3xl mx-auto">
-          Maj+Entrée pour retour à la ligne &middot; Entrée pour envoyer
-        </p>
+
+        {/* ── Dock de saisie : pilules de suggestion + barre arrondie + envoi coral ── */}
+        <div style={{ padding: "14px 32px 20px", borderTop: "1px solid var(--divider)", background: "var(--surface)" }}>
+          <div style={{ maxWidth: 680, margin: "0 auto" }}>
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginBottom: 10,
+                  padding: "8px 12px",
+                  borderRadius: 12,
+                  fontSize: 12.5,
+                  color: "var(--warning)",
+                  background: "color-mix(in srgb, var(--warning) 10%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--warning) 22%, transparent)",
+                }}
+              >
+                <AlertCircle style={{ width: 15, height: 15, flexShrink: 0 }} />
+                Connexion au backend instable
+              </motion.div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+              {QUICK_SUGGESTIONS.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  className="jpill"
+                  onClick={() => {
+                    setInput(suggestion);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-end",
+                gap: 8,
+                padding: 8,
+                background: "var(--bg)",
+                border: "1px solid var(--divider)",
+                borderRadius: "calc(var(--r-card) * .85)",
+              }}
+            >
+              <button
+                type="button"
+                aria-label="Joindre un fichier"
+                style={{ display: "grid", placeItems: "center", width: 34, height: 34, border: "none", background: "transparent", cursor: "pointer" }}
+              >
+                <Paperclip style={{ width: 17, height: 17, color: "var(--text-2)" }} />
+              </button>
+              <button
+                type="button"
+                aria-label="Joindre une image"
+                style={{ display: "grid", placeItems: "center", width: 34, height: 34, border: "none", background: "transparent", cursor: "pointer" }}
+              >
+                <ImageIcon style={{ width: 17, height: 17, color: "var(--text-2)" }} />
+              </button>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Écrivez votre message à Jenny…"
+                rows={1}
+                style={{
+                  flex: 1,
+                  minHeight: 24,
+                  maxHeight: 140,
+                  resize: "none",
+                  background: "transparent",
+                  border: "none",
+                  outline: "none",
+                  fontFamily: "var(--font-sans)",
+                  fontSize: 14.5,
+                  lineHeight: 1.55,
+                  color: "var(--text)",
+                  paddingTop: 9,
+                  paddingBottom: 3,
+                }}
+              />
+              <button
+                type="button"
+                onClick={handleSend}
+                disabled={!input.trim() || isTyping}
+                aria-label="Envoyer"
+                style={{
+                  display: "grid",
+                  placeItems: "center",
+                  width: 40,
+                  height: 40,
+                  flexShrink: 0,
+                  padding: 0,
+                  borderRadius: "var(--r-btn)",
+                  border: "none",
+                  background: "var(--coral)",
+                  color: "#fff",
+                  cursor: !input.trim() || isTyping ? "not-allowed" : "pointer",
+                  opacity: !input.trim() || isTyping ? 0.5 : 1,
+                  boxShadow: "var(--shadow-pop)",
+                  transition: "opacity 0.16s ease, filter 0.16s ease",
+                }}
+              >
+                <Send style={{ width: 17, height: 17 }} />
+              </button>
+            </div>
+
+            <div
+              className="jmono"
+              style={{ fontSize: 10.5, color: "var(--text-3)", textAlign: "center", marginTop: 9, letterSpacing: "0.05em" }}
+            >
+              Maj+Entrée pour un retour à la ligne · Entrée pour envoyer
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Planifier un rendez-vous lié à la conversation courante (#27) */}

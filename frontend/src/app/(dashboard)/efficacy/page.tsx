@@ -12,6 +12,7 @@ import {
   HelpCircle,
   ArrowRight,
   Check,
+  Cpu,
 } from "lucide-react";
 import { getJennyMetrics, type JennyMetrics, ApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -211,8 +212,17 @@ export default function EfficacyPage() {
             Jenny, en <span className="italic text-jenny-coral">chiffres.</span>
           </h1>
           <p className="text-sm text-jenny-text-secondary mt-1">
-            La performance réelle de Jenny, mesurée sur vos conversations.
+            Évaluation de Jenny côté client — banc d&apos;essai automatique sur des
+            conversations types.
           </p>
+          <Link
+            href="/lab"
+            className="group mt-3 inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-jenny-coral hover:text-jenny-coral-dark transition-colors"
+          >
+            <Cpu className="w-3.5 h-3.5" />
+            Comparer les 3 modèles
+            <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+          </Link>
         </motion.div>
 
         {/* ── Score d'efficacité (banc d'essai) ── */}

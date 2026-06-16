@@ -83,10 +83,13 @@ test-results/
 .turbo/
 
 # ── Runtime local (NE PAS versionner) ──
-# Cluster Postgres natif, emails de dev écrits sur disque, rapports d'éval.
-var/pgdata/
-var/emails/
-var/eval/
+# Tout var/ : cluster Postgres natif, logs API/Ollama, emails de dev,
+# rapports d'éval, checkpoints d'entraînement locaux. Purement runtime.
+var/
+# Dump Redis (snapshot RDB local).
+dump.rdb
+# Images générées en vrac à la racine (brouillons, non utilisées par l'app).
+Gemini_Generated_Image_*.png
 *.tsbuildinfo
 
 # Bases SQLite de test (éphémères)

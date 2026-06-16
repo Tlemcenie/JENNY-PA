@@ -275,9 +275,67 @@ async def _handle_add_knowledge(db: AsyncSession, bid: UUID, message: str) -> di
 # ── Question ouverte (LLM avec contexte salon) ────────────────────────────────
 
 
-async def _handle_general(db: AsyncSession, bid: UUID, message: str) -> dict:
+async def _gather_owner_context(db: AsyncSession, bid: UUID) -> str:
+    """Instantané RÉEL du salon, injecté au LLM pour des réponses fondées
+    (sinon l'assistant répond « à côté » → effet « bête »)."""
     business = await db.get(Business, bid)
-    name = business.name if business else "ton salon"
+    tz = await _business_tz(db, business)
+    now = datetime.now(UTC)
+    today = datetime.now(tz).date()
+    today_start = datetime(today.year, today.month, today.day, tzinfo=tz).astimezone(UTC)
+    today_end = today_start + timedelta(days=1)
+    week_end = today_start + timedelta(days=7)
+
+    lines: list[str] = [f"Salon : {business.name if business else 'salon'}."]
+
+    try:
+        from jenny.services.prestation_service import load_active_prestations
+
+        prestations = await load_active_prestations(db, bid)
+        cat = "; ".join(
+            f"{p.name} {p.price_cents / 100:.0f}€"
+            f"{f'/{p.duration_minutes}min' if p.duration_minutes else ''}"
+            for p in prestations[:25]
+            if p.price_cents
+        )
+        if cat:
+            lines.append(f"Prestations & tarifs : {cat}.")
+    except Exception:  # pragma: no cover
+        prestations = []
+
+    async def _count(*conds) -> int:
+        return int(
+            (
+                await db.execute(
+                    select(func.count(Appointment.id)).where(
+                        Appointment.business_id == bid, *conds
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+
+    nc = Appointment.status.notin_(["cancelled", "blocked"])
+    today_n = await _count(nc, Appointment.start_at >= today_start, Appointment.start_at < today_end)
+    week_n = await _count(nc, Appointment.start_at >= today_start, Appointment.start_at < week_end)
+    upcoming = await _count(nc, Appointment.start_at >= now)
+    lines.append(
+        f"Rendez-vous : {today_n} aujourd'hui, {week_n} sur 7 jours, {upcoming} à venir au total."
+    )
+
+    n_clients = int(
+        (
+            await db.execute(
+                select(func.count(Customer.id)).where(Customer.business_id == bid)
+            )
+        ).scalar_one()
+        or 0
+    )
+    lines.append(f"Clients enregistrés : {n_clients}.")
+    return "\n".join(lines)
+
+
+async def _handle_general(db: AsyncSession, bid: UUID, message: str) -> dict:
     provider = None
     try:
         from jenny.llm.providers import get_default_llm_provider
@@ -285,27 +343,40 @@ async def _handle_general(db: AsyncSession, bid: UUID, message: str) -> dict:
         provider = get_default_llm_provider()
     except Exception:
         provider = None
+
+    context = await _gather_owner_context(db, bid)
+
     if provider is None:
         return {
-            "response": "Je suis là pour t'aider à gérer le salon : agenda, rendez-vous, infos. "
-            "Que veux-tu savoir ?",
+            "response": "Je suis là pour piloter le salon avec toi : agenda du jour, point sur tes "
+            "rendez-vous, chiffre d'affaires estimé, blocage de créneau, fiche client, ajout d'infos "
+            "à ta base. Que veux-tu ?",
             "action": "general",
             "data": {},
         }
+
+    # Jenny côté gérant : transparente, proactive, et SURTOUT fondée sur les vraies
+    # données du salon (injectées) → elle répond précisément au lieu de botter en touche.
     system = (
-        f"Tu es Jenny, l'assistante personnelle du gérant de {name} (un salon de coiffure). "
-        "Tu l'aides à gérer son activité : tu réponds à ses questions, tu fais des comptes "
-        "rendus, tu es directe, concrète et bienveillante. Tu peux le tutoyer. "
-        "Réponds TOUJOURS en français, en 2-4 phrases. Avec le gérant tu peux être transparente : "
-        "tu es son assistante. N'invente pas de chiffres : s'il demande des données précises, "
-        "propose de les lui sortir."
+        "Tu es Jenny, le bras droit du gérant de ce salon de coiffure (son assistante de "
+        "gestion, en toute transparence). Tu es vive, concrète et tu tutoies le gérant.\n"
+        "Tu connais l'état RÉEL du salon ci-dessous : appuie-toi dessus pour répondre "
+        "précisément (tarifs, nombre de RDV, charge, clients). Tu peux faire des calculs simples "
+        "à partir de ces données et donner des conseils de gestion actionnables (remplir les "
+        "créneaux creux, réduire les no-shows, fidéliser, mettre en avant une prestation rentable).\n"
+        "Tu peux AGIR via ces commandes — propose-les quand c'est pertinent : « agenda du jour », "
+        "« mon chiffre d'affaires », « bloque mardi de 14h à 16h », « annule/déplace le rdv de <nom> », "
+        "« historique de <nom> », « note que <info> » (ajout à la base).\n"
+        "N'invente JAMAIS un chiffre absent des données ; si une donnée manque, dis-le et propose "
+        "la commande pour l'obtenir. Réponds en français, 2 à 5 phrases, sans bla-bla.\n\n"
+        f"=== ÉTAT DU SALON (données réelles) ===\n{context}"
     )
     try:
         out = await provider.generate(
-            prompt=f"Le gérant te dit : {message}\nRéponds-lui utilement.",
+            prompt=f"Message du gérant : {message}",
             system_prompt=system,
-            temperature=0.5,
-            max_tokens=220,
+            temperature=0.4,
+            max_tokens=320,
         )
         text = out.content if out.finish_reason != "error" else None
     except Exception as exc:  # pragma: no cover
@@ -313,8 +384,8 @@ async def _handle_general(db: AsyncSession, bid: UUID, message: str) -> dict:
         text = None
     return {
         "response": text
-        or "Je suis là pour t'aider à piloter le salon. Demande-moi un point sur tes rendez-vous, "
-        "de bloquer un créneau, ou d'ajouter une info à ta base.",
+        or "Je peux te sortir un point sur tes rendez-vous, ton CA estimé, l'agenda du jour, ou "
+        "gérer un créneau. Dis-moi ce qu'il te faut.",
         "action": "general",
         "data": {},
     }

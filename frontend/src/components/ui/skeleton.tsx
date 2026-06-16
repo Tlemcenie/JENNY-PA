@@ -35,3 +35,29 @@ export function SkeletonCard() {
     </div>
   );
 }
+
+// Ligne de tableau « fantôme » : N cellules shimmer de largeurs variées.
+// Idéal pour le chargement d'une liste/journal (admin audit, conversations…).
+export function SkeletonRow({ cells = 4 }: { cells?: number }) {
+  // Largeurs cycliques pour un rendu naturel (pas toutes identiques).
+  const widths = ["w-2/3", "w-1/2", "w-3/4", "w-1/3", "w-5/6"];
+  return (
+    <div className="flex items-center gap-4 py-3">
+      {Array.from({ length: cells }).map((_, i) => (
+        <div key={i} className="flex-1">
+          <Skeleton className={cn("h-4", widths[i % widths.length])} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Carte compteur « fantôme » : libellé + grand nombre. Pour les grilles de KPI.
+export function SkeletonStat() {
+  return (
+    <div className="bg-jenny-surface rounded-2xl border border-jenny-divider p-5 space-y-3">
+      <Skeleton className="h-3 w-1/2" />
+      <Skeleton className="h-8 w-2/3" />
+    </div>
+  );
+}

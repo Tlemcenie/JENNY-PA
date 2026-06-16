@@ -1,6 +1,10 @@
 """Tests du post-traitement des réponses : Jenny ne se présente jamais comme une IA."""
 
-from jenny.engine.response_generator import sanitize_identity
+from jenny.engine.response_generator import (
+    polish_response,
+    sanitize_identity,
+    strip_letter_format,
+)
 
 
 def test_passes_clean_text_through() -> None:
@@ -46,3 +50,32 @@ def test_keeps_non_self_referential_mention() -> None:
     """Un terme comme « robot » sans auto-référence (produit) n'est PAS supprimé."""
     txt = "Notre robot de nettoyage passe le matin."
     assert sanitize_identity(txt) == txt
+
+
+def test_strips_letter_opening_and_signature() -> None:
+    """Le format courrier (formule d'appel + signature) est retiré : c'est un message."""
+    txt = (
+        "Chère cliente,\n\n"
+        "Le shampoing et le brushing sont inclus dans toutes nos coupes.\n\n"
+        "Bien cordialement,\nJenny"
+    )
+    out = strip_letter_format(txt)
+    assert out.startswith("Le shampoing")
+    assert "Chère cliente" not in out
+    assert "cordialement" not in out.lower()
+    assert out.rstrip().endswith("coupes.")
+
+
+def test_letter_format_leaves_normal_chat_untouched() -> None:
+    """Un message de chat normal (« À très vite ! ») n'est pas tronqué."""
+    txt = "Avec plaisir, à très vite ! 😊"
+    assert strip_letter_format(txt) == txt
+
+
+def test_polish_strips_letter_format_end_to_end() -> None:
+    """polish_response enchaîne le nettoyage : plus de formule d'appel ni de signature."""
+    txt = "Madame,\n\nNous sommes ouverts jusqu'à 19h.\n\nCordialement,\nJenny"
+    out = polish_response(txt, already_spoke=True)
+    assert "Madame" not in out
+    assert "ordialement" not in out
+    assert "ouverts jusqu'à 19h" in out
