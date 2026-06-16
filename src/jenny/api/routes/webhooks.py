@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable  # noqa: TC003
 from datetime import UTC, datetime
+from functools import partial
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -68,6 +69,7 @@ from jenny.engine.business_hours import is_open
 from jenny.engine.conversation_engine import ConversationEngine, EngineRequest
 from jenny.engine.factory import get_engine as _get_engine_factory
 from jenny.integrations.meta_signature import verify_meta_signature
+from jenny.services import channel_credentials_service as creds_svc
 from jenny.services.ingestion_service import MessageIngestionService
 from jenny.services.persona_loader import load_business_persona_fresh
 
@@ -387,6 +389,8 @@ async def _whatsapp_ingest_and_reply(
         # profil) : on rattache la conversation ET le futur RDV à CE client.
         customer_id = ing.conversation.customer_id
         handled = ing.conversation.assigned_to is not None
+        # Identifiants WhatsApp DE CE business (base chiffrée, sinon env global).
+        wa_creds = await creds_svc.resolve(session, business_id, "whatsapp")
 
     publish_conversation_event(
         business_id, conversation_id=conv_id, kind="inbound", channel="whatsapp"
@@ -404,7 +408,7 @@ async def _whatsapp_ingest_and_reply(
         return
 
     if await _outside_hours_auto_reply(
-        business_id, conv_id, "whatsapp", msg.from_, _whatsapp.send_reply
+        business_id, conv_id, "whatsapp", msg.from_, partial(_whatsapp.send_reply, creds=wa_creds)
     ):
         return
 
@@ -428,7 +432,7 @@ async def _whatsapp_ingest_and_reply(
     )
     try:
         out = await engine.process(req)
-        sent = await _whatsapp.send_reply(msg.from_, out.response_text)
+        sent = await _whatsapp.send_reply(msg.from_, out.response_text, creds=wa_creds)
         await _persist_outbound_reply(
             conv_id, business_id, "whatsapp", out.response_text, delivered=sent
         )
@@ -475,6 +479,7 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
         msg_id = ing.message.id
         customer_id = ing.conversation.customer_id
         handled = ing.conversation.assigned_to is not None
+        ig_creds = await creds_svc.resolve(session, business_id, "instagram")
 
     publish_conversation_event(
         business_id, conversation_id=conv_id, kind="inbound", channel="instagram"
@@ -492,7 +497,8 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
         return
 
     if await _outside_hours_auto_reply(
-        business_id, conv_id, "instagram", messaging.sender.id, _instagram.send_reply
+        business_id, conv_id, "instagram", messaging.sender.id,
+        partial(_instagram.send_reply, creds=ig_creds),
     ):
         return
 
@@ -516,7 +522,7 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
     )
     try:
         out = await engine.process(req)
-        sent = await _instagram.send_reply(messaging.sender.id, out.response_text)
+        sent = await _instagram.send_reply(messaging.sender.id, out.response_text, creds=ig_creds)
         await _persist_outbound_reply(
             conv_id, business_id, "instagram", out.response_text, delivered=sent
         )
@@ -535,6 +541,7 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
 
 @router.get("/whatsapp")
 async def whatsapp_verify(
+    db: DbSession,
     hub_mode: str = Query("", alias="hub.mode"),
     hub_verify_token: str = Query("", alias="hub.verify_token"),
     hub_challenge: str = Query("", alias="hub.challenge"),
@@ -542,11 +549,13 @@ async def whatsapp_verify(
     """Vérification du webhook WhatsApp par Meta.
 
     Meta envoie un GET avec hub.mode, hub.verify_token, hub.challenge.
-    On retourne le challenge en texte brut si le token est valide.
+    On retourne le challenge si le token est valide : token global d'environnement
+    OU verify token collé par un business (multi-tenant).
     """
-    result = _whatsapp.verify_webhook(hub_mode, hub_verify_token, hub_challenge)
-    if result:
-        return Response(content=result, media_type="text/plain")
+    if hub_mode == "subscribe" and await creds_svc.matches_verify_token(
+        db, "whatsapp", hub_verify_token
+    ):
+        return Response(content=hub_challenge, media_type="text/plain")
     return Response(status_code=403, content="Verification failed")
 
 
@@ -625,14 +634,16 @@ async def whatsapp_webhook(
 
 @router.get("/instagram")
 async def instagram_verify(
+    db: DbSession,
     hub_mode: str = Query("", alias="hub.mode"),
     hub_verify_token: str = Query("", alias="hub.verify_token"),
     hub_challenge: str = Query("", alias="hub.challenge"),
 ) -> Response:
-    """Vérification du webhook Instagram par Meta."""
-    result = _instagram.verify_webhook(hub_mode, hub_verify_token, hub_challenge)
-    if result:
-        return Response(content=result, media_type="text/plain")
+    """Vérification du webhook Instagram par Meta (token env OU business)."""
+    if hub_mode == "subscribe" and await creds_svc.matches_verify_token(
+        db, "instagram", hub_verify_token
+    ):
+        return Response(content=hub_challenge, media_type="text/plain")
     return Response(status_code=403, content="Verification failed")
 
 

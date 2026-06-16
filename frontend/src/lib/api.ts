@@ -61,6 +61,11 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
     throw new ApiError(res.status, res.statusText, data);
   }
 
+  // 204 No Content (ex. DELETE) → pas de corps JSON à parser.
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
   return res.json();
 }
 
@@ -533,11 +538,63 @@ export interface ChannelStatus {
   label: string;
   connected: boolean;
   builtin: boolean;
+  configurable?: boolean;
   account: string | null;
+  outbound_ready?: boolean;
+  last_error?: string | null;
+}
+
+export interface ChannelFieldSpec {
+  key: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+  placeholder: string;
+}
+
+export interface ChannelWebhookInfo {
+  channel: string;
+  url: string;
+  verify_token: string | null;
+  note: string | null;
+}
+
+export interface ChannelTestResult {
+  ok: boolean;
+  detail: string;
 }
 
 export async function listChannels(): Promise<ChannelStatus[]> {
   return request<ChannelStatus[]>("/api/v1/channels");
+}
+
+export async function getChannelFields(channel: string): Promise<ChannelFieldSpec[]> {
+  const res = await request<{ channel: string; fields: ChannelFieldSpec[] }>(
+    `/api/v1/channels/${channel}/fields`
+  );
+  return res.fields;
+}
+
+export async function getChannelWebhookInfo(channel: string): Promise<ChannelWebhookInfo> {
+  return request<ChannelWebhookInfo>(`/api/v1/channels/${channel}/webhook-info`);
+}
+
+export async function connectChannel(
+  channel: string,
+  payload: { display_name?: string; credentials: Record<string, string> }
+): Promise<ChannelStatus> {
+  return request<ChannelStatus>(`/api/v1/channels/${channel}/connect`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function disconnectChannel(channel: string): Promise<void> {
+  await request<void>(`/api/v1/channels/${channel}`, { method: "DELETE" });
+}
+
+export async function testChannel(channel: string): Promise<ChannelTestResult> {
+  return request<ChannelTestResult>(`/api/v1/channels/${channel}/test`, { method: "POST" });
 }
 
 // ==================== IMPORT CLIENTS ====================

@@ -1,8 +1,9 @@
 """Mapping canal Meta / autre → business."""
 
+import datetime as dt
 import uuid
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -35,5 +36,13 @@ class ChannelAccount(Base, TimestampMixin):
         comment="phone_number_id, page_id, etc.",
     )
     display_name: Mapped[str | None] = mapped_column(String(255), default=None)
+    # Identifiants par business (token Meta, SMTP/IMAP…). Chiffrés au repos si
+    # JENNY_MASTER_KEY est défini (sinon clair). None ⇒ on retombe sur l'env global.
+    credentials_: Mapped[dict | None] = mapped_column("credentials_", JSON, default=None)
+    # Dernière vérification de webhook réussie (challenge Meta) + dernier diagnostic.
+    webhook_verified_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_error: Mapped[str | None] = mapped_column(String(500), default=None)
 
     business = relationship("Business", backref="channel_accounts", lazy="selectin")

@@ -13,6 +13,8 @@ Configuration requise (variables d'env) :
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import httpx
 
 from jenny.connectors.base import BaseConnector, RawMessage
@@ -23,6 +25,9 @@ from jenny.connectors.whatsapp.schema import (
 )
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
+
+if TYPE_CHECKING:  # pragma: no cover
+    from jenny.services.channel_credentials_service import WhatsAppCreds
 
 logger = get_logger(__name__)
 
@@ -47,13 +52,17 @@ class WhatsAppConnector(BaseConnector):
     def channel_name(self) -> str:
         return "whatsapp"
 
-    def verify_webhook(self, mode: str, token: str, challenge: str) -> str | None:
+    def verify_webhook(
+        self, mode: str, token: str, challenge: str, creds: WhatsAppCreds | None = None
+    ) -> str | None:
         """Vérifie le webhook lors de l'enregistrement Meta.
 
         Meta envoie un GET avec hub.mode, hub.verify_token, hub.challenge.
-        On retourne le challenge si le token correspond.
+        On retourne le challenge si le token correspond. ``creds`` (par business)
+        prime sur la config globale d'environnement.
         """
-        if mode == "subscribe" and token == self.settings.whatsapp_verify_token:
+        expected = creds.verify_token if creds else self.settings.whatsapp_verify_token
+        if mode == "subscribe" and token == expected:
             logger.info("whatsapp.webhook.verified")
             return challenge
         logger.warning("whatsapp.webhook.verification_failed")
@@ -105,20 +114,29 @@ class WhatsAppConnector(BaseConnector):
         self._pending_messages.clear()
         return messages
 
-    async def send_reply(self, recipient_phone: str, content: str) -> bool:
+    async def send_reply(
+        self, recipient_phone: str, content: str, creds: WhatsAppCreds | None = None
+    ) -> bool:
         """Envoie un message texte via l'API WhatsApp Cloud.
 
         Args:
             recipient_phone: Numéro du destinataire (format international).
             content: Texte de la réponse.
+            creds: Identifiants par business (priment sur l'env). Si absents et
+                aucun token en env → envoi désactivé : on renvoie False sans lever
+                (état « non connecté » gracieux, comme l'acompte en mode manuel).
 
         Returns:
             True si l'envoi a réussi.
         """
-        url = (
-            f"{META_API_BASE}/{self.settings.whatsapp_api_version}"
-            f"/{self.settings.whatsapp_phone_number_id}/messages"
-        )
+        access_token = creds.access_token if creds else self.settings.whatsapp_access_token
+        phone_number_id = creds.phone_number_id if creds else self.settings.whatsapp_phone_number_id
+        api_version = creds.api_version if creds else self.settings.whatsapp_api_version
+        if not access_token or not phone_number_id:
+            logger.info("whatsapp.send.skipped_not_connected")
+            return False
+
+        url = f"{META_API_BASE}/{api_version}/{phone_number_id}/messages"
 
         outbound = WhatsAppOutboundMessage(
             to=recipient_phone,
@@ -126,7 +144,7 @@ class WhatsAppConnector(BaseConnector):
         )
 
         headers = {
-            "Authorization": f"Bearer {self.settings.whatsapp_access_token}",
+            "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
 
@@ -149,19 +167,19 @@ class WhatsAppConnector(BaseConnector):
             logger.error("whatsapp.message.failed", error=str(e))
             return False
 
-    async def health_check(self) -> bool:
-        """Vérifie la connectivité avec l'API WhatsApp."""
-        if not self.settings.whatsapp_access_token:
+    async def health_check(self, creds: WhatsAppCreds | None = None) -> bool:
+        """Vérifie la connectivité avec l'API WhatsApp (identifiants business ou env)."""
+        access_token = creds.access_token if creds else self.settings.whatsapp_access_token
+        phone_number_id = creds.phone_number_id if creds else self.settings.whatsapp_phone_number_id
+        api_version = creds.api_version if creds else self.settings.whatsapp_api_version
+        if not access_token or not phone_number_id:
             return False
         try:
-            url = (
-                f"{META_API_BASE}/{self.settings.whatsapp_api_version}"
-                f"/{self.settings.whatsapp_phone_number_id}"
-            )
+            url = f"{META_API_BASE}/{api_version}/{phone_number_id}"
             async with httpx.AsyncClient() as client:
                 r = await client.get(
                     url,
-                    headers={"Authorization": f"Bearer {self.settings.whatsapp_access_token}"},
+                    headers={"Authorization": f"Bearer {access_token}"},
                     timeout=5.0,
                 )
                 return r.status_code == 200

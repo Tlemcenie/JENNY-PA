@@ -680,7 +680,13 @@ async def reply_to_conversation(
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
 
-    delivered = await send_channel_reply(conv.channel, conv.external_conversation_id, body.text)
+    delivered = await send_channel_reply(
+        conv.channel,
+        conv.external_conversation_id,
+        body.text,
+        session=db,
+        business_id=conv.business_id,
+    )
 
     now = datetime.now(UTC)
     agent = principal.email or "Agent"

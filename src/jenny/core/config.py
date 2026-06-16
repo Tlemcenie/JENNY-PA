@@ -130,6 +130,16 @@ class Settings(BaseSettings):
     facebook_app_secret: str = ""
     skip_meta_signature: bool = False
 
+    # ── Origine PUBLIQUE de l'API (pour les URLs de webhook données à Meta) ──
+    # Vide ⇒ on dérive l'origine de la requête entrante. À définir derrière un
+    # proxy / en prod (ex. https://api.jenny.app).
+    public_api_base_url: str = ""
+
+    # ── Chiffrement au repos des identifiants de canal (Fernet) ──
+    # Vide ⇒ identifiants stockés en clair (dev / mono-tenant, HTTPS). En prod,
+    # définir une clé Fernet (base64 urlsafe 32 octets) pour chiffrer les tokens.
+    master_key: str = ""
+
     # ── Dev : business par défaut si aucun channel_accounts (WhatsApp / IG) ──
     default_business_id: str = ""
 
