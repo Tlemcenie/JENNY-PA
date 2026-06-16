@@ -26,6 +26,8 @@ dependencies = [
     # NB : pas de LangChain/LangGraph. L'orchestration agentique est maison
     # (jenny.engine.conversation_engine + jenny.agents.*). Les LLM passent par
     # jenny.llm.providers (Groq/Ollama/NanoGPT en httpx/torch directs).
+    # ── Documents (devis PDF) ──
+    "reportlab>=4.0,<5.0",
     # ── ML ──
     "mlflow>=2.19,<3.0",
     "torch>=2.5,<3.0",

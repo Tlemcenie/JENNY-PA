@@ -402,22 +402,58 @@ class TestQuotePipeline:
         assert data["response"]
 
     @pytest.mark.asyncio
-    async def test_generate_quote_action(self) -> None:
+    async def test_generate_quote_no_business(self) -> None:
+        """Sans contexte business : échec gracieux (aucun devis fantôme, pas de crash)."""
         from jenny.actions.handlers.generate_quote import GenerateQuoteAction
 
-        action = GenerateQuoteAction()
-        result = await action.execute(
-            {
-                "product": "Site vitrine 5 pages + SEO",
-                "email": "alice@e2e.jenny.ai",
-                "name": "Alice E2E",
-            }
+        result = await GenerateQuoteAction().execute(
+            {"service": "Coupe femme", "email": "alice@e2e.jenny.ai", "name": "Alice E2E"}
         )
-        assert result["success"] is True
-        data = result["data"]
-        assert data["quote_id"].startswith("DEV-")
-        assert data["status"] == "created"
-        assert data["validity_days"] == 30
+        assert result["success"] is False
+        assert result.get("message")
+
+    @pytest.mark.asyncio
+    async def test_generate_quote_action(self, db_tables: None) -> None:
+        """Devis RÉEL : depuis le catalogue, persisté, avec ventilation TVA (HT/TVA/TTC)."""
+        from sqlalchemy import select
+
+        from jenny.actions.handlers.generate_quote import GenerateQuoteAction
+        from jenny.domain.models.business import Business
+        from jenny.domain.models.prestation import Prestation
+        from jenny.domain.models.quote import Quote
+
+        bid = uuid4()
+        async with async_session_factory() as db:
+            db.add(Business(id=bid, name="Salon Test", slug=f"salon-{bid.hex[:8]}", email="salon@test.fr"))
+            db.add(
+                Prestation(
+                    business_id=bid,
+                    name="Coupe femme",
+                    price_cents=3900,
+                    duration_minutes=45,
+                    is_active=True,
+                )
+            )
+            await db.commit()
+
+        result = await GenerateQuoteAction().execute(
+            {"business_id": str(bid), "service": "Coupe femme", "name": "Alice E2E"}
+        )
+        assert result["success"] is True, result
+        assert result["reference"].startswith("DEV-")
+        assert result["total_eur"] == 39.0
+        assert result["validity_days"] == 30
+        assert result["status"] in {"draft", "sent"}
+
+        # Devis réellement persisté + ventilation TVA cohérente (HT + TVA == TTC).
+        async with async_session_factory() as db:
+            quote = (
+                await db.execute(select(Quote).where(Quote.reference == result["reference"]))
+            ).scalars().first()
+            assert quote is not None
+            assert quote.total_cents == 3900
+            assert quote.total_ht_cents + quote.total_tva_cents == quote.total_cents
+            assert quote.vat_rate == pytest.approx(0.20)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1182,7 +1218,8 @@ async def test_channels_and_customer_import(client: AsyncClient, db_tables: None
     channels = (await client.get("/api/v1/channels", headers=auth)).json()
     by_ch = {c["channel"]: c for c in channels}
     assert by_ch["form"]["connected"] is True  # intégré nativement
-    assert by_ch["snapchat"]["connected"] is False
+    # Canal listé mais non raccordé pour un business neuf (ni compte ni identifiants).
+    assert by_ch["messenger"]["connected"] is False
 
     csv_bytes = b"nom,email,telephone\nZoe Test,zoe-imp@x.com,0600000000\nLou Test,lou-imp@x.com,\n"
     res = await client.post(

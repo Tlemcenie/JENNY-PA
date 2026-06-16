@@ -195,13 +195,19 @@ class TestBusinessAgents:
         from jenny.db.repositories.support_ticket_repo import SupportTicketRepository
 
         bid = str(uuid4())
-        handlers = [
+        # Handlers autonomes : succès attendu (logique self-contained ou repo mocké).
+        self_contained = [
             (CheckOrderAction(), {"order_number": "CMD-123", "business_id": bid}),
             (ProcessPaymentAction(), {"order_number": "CMD-456", "amount": "99.99", "business_id": bid}),
-            (GenerateQuoteAction(), {"product": "iPhone 15", "email": "test@mail.com"}),
-            (CheckPlanningAction(), {"date": "15/03/2026"}),
             (CreateTicketAction(), {"email": "client@mail.com", "business_id": bid}),
             (BookAppointmentAction(), {"date": "20/03/2026"}),
+        ]
+        # Handlers à contexte réel (DB business/catalogue) : sans contexte complet ils
+        # DÉCLINENT proprement (success=False + message) au lieu d'inventer un résultat.
+        # C'est le comportement attendu depuis que devis et planning sont réels.
+        context_dependent = [
+            (GenerateQuoteAction(), {"product": "iPhone 15", "email": "test@mail.com"}),
+            (CheckPlanningAction(), {"date": "15/03/2026"}),
         ]
 
         fake_ticket = MagicMock()
@@ -223,10 +229,17 @@ class TestBusinessAgents:
                 return_value=fake_ticket,
             ),
         ):
-            for handler, params in handlers:
+            for handler, params in self_contained:
                 result = await handler.execute(params)
                 assert result["success"] is True, f"{handler.name} a échoué: {result}"
                 assert "message" in result, f"{handler.name} n'a pas de message"
+
+            # Enveloppe bien formée + dégradation gracieuse (pas de crash, pas de mock).
+            for handler, params in context_dependent:
+                result = await handler.execute(params)
+                assert isinstance(result, dict), f"{handler.name} n'a pas renvoyé un dict"
+                assert isinstance(result.get("success"), bool), f"{handler.name}: 'success' manquant"
+                assert result.get("message"), f"{handler.name} n'a pas de message"
 
 
 # ═══════════════════════════════════════════════════════════

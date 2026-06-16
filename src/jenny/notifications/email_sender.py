@@ -25,6 +25,7 @@ import html as html_lib
 import smtplib
 from dataclasses import dataclass, field
 from datetime import datetime
+from email.mime.application import MIMEApplication
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -53,6 +54,8 @@ class EmailMessage:
     reply_to: str | None = None
     cc: list[str] = field(default_factory=list)
     bcc: list[str] = field(default_factory=list)
+    # Pièces jointes : [{"filename", "content": bytes, "mimetype"}] (ex. devis PDF).
+    attachments: list[dict] = field(default_factory=list)
 
 
 EmailType = Literal[
@@ -278,6 +281,21 @@ class EmailSender:
                 root.attach(img)
             except OSError as e:
                 logger.warning("email.mascot_attach_failed", error=str(e))
+
+        # Pièces jointes (ex. devis PDF).
+        for att in email.attachments or []:
+            try:
+                content = att.get("content")
+                if not content:
+                    continue
+                _maintype, _, subtype = (att.get("mimetype") or "application/octet-stream").partition("/")
+                part = MIMEApplication(content, _subtype=subtype or "octet-stream")
+                part.add_header(
+                    "Content-Disposition", "attachment", filename=att.get("filename", "piece-jointe")
+                )
+                root.attach(part)
+            except (OSError, TypeError, ValueError) as e:
+                logger.warning("email.attachment_failed", error=str(e))
 
         return root
 

@@ -3,7 +3,7 @@
 import datetime as dt
 import uuid
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,7 +38,11 @@ class Quote(Base, TimestampMixin):
     reference: Mapped[str] = mapped_column(String(32), nullable=False)
     # Lignes du devis : [{"name", "price_eur", "duration_minutes"}].
     items: Mapped[list | None] = mapped_column(JSON, default=None)
+    # Montants : total_cents = TTC (prix catalogue). HT/TVA dérivés du taux.
     total_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_ht_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_tva_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    vat_rate: Mapped[float] = mapped_column(Float, default=0.20, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="EUR", nullable=False)
     # draft → sent → accepted | expired
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)

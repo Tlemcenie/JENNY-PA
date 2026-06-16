@@ -21,6 +21,7 @@ from jenny.core.logging import get_logger
 logger = get_logger(__name__)
 
 _VALIDITY_DAYS = 30
+_VAT_RATE = 0.20  # TVA française standard (prestations de coiffure)
 
 
 class GenerateQuoteAction(BaseAction):
@@ -80,7 +81,9 @@ class GenerateQuoteAction(BaseAction):
                 }
                 for p in matched
             ]
-            total_cents = sum(int(p.price_cents or 0) for p in matched)
+            total_cents = sum(int(p.price_cents or 0) for p in matched)  # prix catalogue = TTC
+            total_ht_cents = round(total_cents / (1 + _VAT_RATE))
+            total_tva_cents = total_cents - total_ht_cents
             service_label = " + ".join(p.name for p in matched)
 
             # Client : on récupère email/nom réels si on a un customer_id valide.
@@ -107,23 +110,26 @@ class GenerateQuoteAction(BaseAction):
                 reference=reference,
                 items=items,
                 total_cents=total_cents,
+                total_ht_cents=total_ht_cents,
+                total_tva_cents=total_tva_cents,
+                vat_rate=_VAT_RATE,
                 currency="EUR",
                 status="draft",
                 valid_until=valid_until,
             )
             db.add(quote)
 
-            # Envoi email (best-effort) si l'adresse est connue.
+            # Devis PDF (logo + lignes + ventilation HT/TVA/TTC) + email (best-effort).
             emailed = False
             if email:
-                emailed = await _send_quote_email(
+                emailed = await _send_quote_with_pdf(
                     to=email,
                     customer_name=name,
-                    business_name=(business.name if business else "Jenny"),
-                    service=service_label,
-                    total_eur=round(total_cents / 100, 2),
-                    valid_until=valid_until,
+                    business=business,
+                    items=items,
                     reference=reference,
+                    vat_rate=_VAT_RATE,
+                    valid_until=valid_until,
                 )
                 if emailed:
                     quote.status = "sent"
@@ -158,32 +164,145 @@ class GenerateQuoteAction(BaseAction):
             }
 
 
-async def _send_quote_email(
+def _eur(cents: int) -> str:
+    """Formate des centimes en euros à la française (1 234,50 €)."""
+    return f"{cents / 100:,.2f} €".replace(",", " ").replace(".", ",")
+
+
+def _quote_email_html(
+    *,
+    business_name: str,
+    customer_name: str,
+    reference: str,
+    items: list[dict],
+    vat_rate: float,
+    valid_until: dt.datetime,
+) -> str:
+    """Construit le corps HTML du mail de devis (DA Jenny, lignes + ventilation TVA)."""
+    from html import escape
+
+    from jenny.notifications.email_layout import (
+        BORDER,
+        CARD_SOFT,
+        CORAL,
+        CREAM,
+        MONO,
+        MUTED,
+        SANS,
+    )
+
+    total_ttc = 0
+    rows = []
+    for it in items:
+        ttc = round(float(it.get("price_eur", 0)) * 100)
+        total_ttc += ttc
+        dur = it.get("duration_minutes")
+        dur_txt = f" · {dur} min" if dur else ""
+        rows.append(
+            f'<tr><td style="padding:11px 0;border-bottom:1px solid {BORDER};'
+            f'font-family:{SANS};font-size:14px;color:{CREAM};">{escape(str(it.get("name", "")))}'
+            f'<span style="color:{MUTED};font-size:12px;">{dur_txt}</span></td>'
+            f'<td align="right" style="padding:11px 0;border-bottom:1px solid {BORDER};'
+            f'font-family:{SANS};font-size:14px;color:{CREAM};white-space:nowrap;">{_eur(ttc)}</td></tr>'
+        )
+
+    total_ht = round(total_ttc / (1 + vat_rate))
+    total_tva = total_ttc - total_ht
+    pct = round(vat_rate * 100)
+
+    lignes = "".join(rows)
+    return (
+        f'<div style="font-family:{SANS};font-size:15px;line-height:1.6;color:{MUTED};margin:0 0 18px;">'
+        f"Bonjour {escape(customer_name)},<br><br>"
+        f"Voici votre devis <b style=\"color:{CREAM};\">{escape(reference)}</b>. "
+        f"Le détail complet est dans le PDF joint."
+        f"</div>"
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="background:{CARD_SOFT};border:1px solid {BORDER};border-radius:16px;padding:8px 18px;">'
+        f"{lignes}"
+        f'<tr><td style="padding:12px 0 3px;font-family:{SANS};font-size:13px;color:{MUTED};">Total HT</td>'
+        f'<td align="right" style="padding:12px 0 3px;font-family:{SANS};font-size:13px;color:{MUTED};">{_eur(total_ht)}</td></tr>'
+        f'<tr><td style="padding:3px 0;font-family:{SANS};font-size:13px;color:{MUTED};">TVA {pct} %</td>'
+        f'<td align="right" style="padding:3px 0;font-family:{SANS};font-size:13px;color:{MUTED};">{_eur(total_tva)}</td></tr>'
+        f'<tr><td style="padding:8px 0 4px;font-family:{SANS};font-size:16px;font-weight:700;color:{CORAL};">Total TTC</td>'
+        f'<td align="right" style="padding:8px 0 4px;font-family:{SANS};font-size:16px;font-weight:700;color:{CORAL};">{_eur(total_ttc)}</td></tr>'
+        f"</table>"
+        f'<div style="font-family:{MONO};font-size:11px;letter-spacing:1px;color:{MUTED};margin:16px 0 0;text-transform:uppercase;">'
+        f"Valable jusqu'au {valid_until.strftime('%d/%m/%Y')}</div>"
+        f'<div style="font-family:{SANS};font-size:14px;line-height:1.6;color:{MUTED};margin:18px 0 0;">'
+        f"Pour accepter ce devis, répondez simplement à cet email. À très vite&nbsp;!<br>"
+        f"<b style=\"color:{CREAM};\">{escape(business_name)}</b></div>"
+    )
+
+
+async def _send_quote_with_pdf(
     *,
     to: str,
     customer_name: str,
-    business_name: str,
-    service: str,
-    total_eur: float,
-    valid_until: dt.datetime,
+    business,
+    items: list[dict],
     reference: str,
+    vat_rate: float,
+    valid_until: dt.datetime,
 ) -> bool:
-    """Envoie le devis par email (gabarit ``quote_sent``). Best-effort."""
+    """Génère le devis PDF et l'envoie en pièce jointe (email brandé). Best-effort."""
     try:
-        from jenny.notifications.email_sender import EmailSender
+        from jenny.notifications.email_layout import render_email
+        from jenny.notifications.email_sender import EmailMessage, EmailSender
+        from jenny.notifications.quote_pdf import build_quote_pdf
 
-        return await EmailSender().send_template(
-            "quote_sent",
-            to,
-            {
-                "business_name": business_name,
-                "customer_name": customer_name,
-                "service": service,
-                "price": f"{total_eur:.2f} €",
-                "validity": valid_until.strftime("%d/%m/%Y"),
-                "reference": reference,
-            },
+        business_name = getattr(business, "name", None) or "Votre salon"
+        business_email = getattr(business, "email", None)
+        business_phone = getattr(business, "phone", None)
+
+        pdf = build_quote_pdf(
+            reference=reference,
+            business_name=business_name,
+            business_email=business_email,
+            business_phone=business_phone,
+            customer_name=customer_name,
+            items=items,
+            vat_rate=vat_rate,
+            valid_until=valid_until,
         )
-    except Exception as exc:  # pragma: no cover - dépend du SMTP
+
+        content_html = _quote_email_html(
+            business_name=business_name,
+            customer_name=customer_name,
+            reference=reference,
+            items=items,
+            vat_rate=vat_rate,
+            valid_until=valid_until,
+        )
+        body_html = render_email(
+            preheader=f"Votre devis {reference} — {business_name}",
+            eyebrow="devis",
+            heading="Voici votre",
+            accent="devis.",
+            content_html=content_html,
+            app_name="Jenny",
+        )
+        body_text = (
+            f"Bonjour {customer_name},\n\n"
+            f"Voici votre devis {reference}. Le détail complet est dans le PDF joint.\n"
+            f"Valable jusqu'au {valid_until.strftime('%d/%m/%Y')}.\n\n"
+            f"Pour l'accepter, répondez simplement à cet email.\n{business_name}"
+        )
+
+        msg = EmailMessage(
+            to=to,
+            subject=f"📋 Votre devis {reference} — {business_name}",
+            body_text=body_text,
+            body_html=body_html,
+            attachments=[
+                {
+                    "filename": f"Devis-{reference}.pdf",
+                    "content": pdf,
+                    "mimetype": "application/pdf",
+                }
+            ],
+        )
+        return await EmailSender().send(msg)
+    except Exception as exc:  # pragma: no cover - dépend du SMTP / reportlab
         logger.warning("action.generate_quote.email_failed", error=str(exc))
         return False
