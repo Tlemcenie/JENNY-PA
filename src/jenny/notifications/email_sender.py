@@ -20,10 +20,12 @@ Configuration requise (variables d'env) :
 from __future__ import annotations
 
 import asyncio
+import base64
 import html as html_lib
 import smtplib
 from dataclasses import dataclass, field
 from datetime import datetime
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -31,8 +33,13 @@ from typing import Literal
 
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
+from jenny.notifications.email_layout import MASCOT_CID
 
 logger = get_logger(__name__)
+
+# Mascotte Jenny embarquée inline (CID) dans les emails HTML. Légère (~25 Ko),
+# packagée avec le backend (donc présente dans l'image Docker, src/ étant copié).
+_MASCOT_PATH = Path(__file__).resolve().parent / "assets" / "jenny-email.png"
 
 
 @dataclass
@@ -246,25 +253,33 @@ class EmailSender:
         )
 
     def _build_message(self, email: EmailMessage) -> MIMEMultipart:
-        """Construit le message MIME."""
-        msg = MIMEMultipart("alternative")
-        msg["From"] = f"{self.smtp_from_name} <{self.smtp_from_email}>"
-        msg["To"] = email.to
-        msg["Subject"] = email.subject
-
+        """Construit le message MIME (multipart/related : texte+HTML + mascotte inline)."""
+        root = MIMEMultipart("related")
+        root["From"] = f"{self.smtp_from_name} <{self.smtp_from_email}>"
+        root["To"] = email.to
+        root["Subject"] = email.subject
         if email.reply_to:
-            msg["Reply-To"] = email.reply_to
+            root["Reply-To"] = email.reply_to
         if email.cc:
-            msg["Cc"] = ", ".join(email.cc)
+            root["Cc"] = ", ".join(email.cc)
 
-        # Texte brut
-        msg.attach(MIMEText(email.body_text, "plain", "utf-8"))
-
-        # HTML (optionnel)
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText(email.body_text, "plain", "utf-8"))
         if email.body_html:
-            msg.attach(MIMEText(email.body_html, "html", "utf-8"))
+            alt.attach(MIMEText(email.body_html, "html", "utf-8"))
+        root.attach(alt)
 
-        return msg
+        # Mascotte Jenny en pièce jointe inline (CID) si le HTML la référence.
+        if email.body_html and f"cid:{MASCOT_CID}" in email.body_html and _MASCOT_PATH.exists():
+            try:
+                img = MIMEImage(_MASCOT_PATH.read_bytes(), _subtype="png")
+                img.add_header("Content-ID", f"<{MASCOT_CID}>")
+                img.add_header("Content-Disposition", "inline", filename="jenny.png")
+                root.attach(img)
+            except OSError as e:
+                logger.warning("email.mascot_attach_failed", error=str(e))
+
+        return root
 
     def _send_sync(self, email: EmailMessage) -> bool:
         """Envoi synchrone via SMTP."""
@@ -319,6 +334,13 @@ class EmailSender:
             content = email.body_html or (
                 f"<pre>{html_lib.escape(email.body_text)}</pre>"
             )
+            # Aperçu navigateur : on inline la mascotte en data-URI (le CID n'existe
+            # qu'au sein du mail réel).
+            if email.body_html and f"cid:{MASCOT_CID}" in content and _MASCOT_PATH.exists():
+                b64 = base64.b64encode(_MASCOT_PATH.read_bytes()).decode()
+                content = content.replace(
+                    f"cid:{MASCOT_CID}", f"data:image/png;base64,{b64}"
+                )
             # En-tête commenté : métadonnées + version texte (pratique en dev).
             meta = (
                 f"<!--\nTo: {email.to}\nSubject: {email.subject}\n\n"

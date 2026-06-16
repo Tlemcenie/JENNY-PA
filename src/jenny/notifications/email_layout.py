@@ -30,6 +30,11 @@ SERIF = "'Instrument Serif', Georgia, 'Times New Roman', serif"
 SANS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
 MONO = "'SF Mono', ui-monospace, Menlo, Consolas, monospace"
 
+# La mascotte Jenny est embarquée DANS l'email (pièce jointe inline, Content-ID) —
+# pas un lien externe (que les clients mail bloquent). EmailSender l'attache
+# automatiquement dès que le HTML référence `cid:jenny-mascot`.
+MASCOT_CID = "jenny-mascot"
+
 
 def code_boxes(code: str) -> str:
     """Le code de confirmation en grandes cases corail (centré)."""
@@ -115,19 +120,18 @@ def render_email(
   <tr>
     <td align="center">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:{CARD};border:1px solid {BORDER};border-radius:24px;overflow:hidden;">
-        <!-- Header : monogramme + wordmark serif -->
+        <!-- Header : mascotte Jenny (inline CID) + wordmark serif -->
         <tr>
-          <td style="padding:32px 36px 8px;text-align:center;">
+          <td style="padding:38px 36px 4px;text-align:center;">
             <table role="presentation" align="center" cellpadding="0" cellspacing="0" style="margin:0 auto;">
               <tr>
-                <td style="vertical-align:middle;padding-right:11px;">
-                  <div style="width:40px;height:40px;background:{CORAL};border-radius:13px;text-align:center;line-height:40px;font-family:{SERIF};font-size:24px;font-style:italic;color:#1A0A08;">J</div>
-                </td>
-                <td style="vertical-align:middle;">
-                  <span style="font-family:{SERIF};font-size:30px;color:{CREAM};letter-spacing:-0.5px;">{escape(app_name)}</span>
+                <td width="100" height="100" style="width:100px;height:100px;background:{CORAL_TINT};border:1px solid {BORDER};border-radius:50%;text-align:center;vertical-align:middle;">
+                  <img src="cid:{MASCOT_CID}" width="72" height="72" alt="{escape(app_name)}" style="display:inline-block;border:0;outline:none;text-decoration:none;vertical-align:middle;">
                 </td>
               </tr>
             </table>
+            <div style="font-family:{SERIF};font-size:32px;color:{CREAM};letter-spacing:-0.5px;margin:16px 0 0;">{escape(app_name)}</div>
+            <div style="font-family:{SANS};font-size:13px;color:{MUTED};margin:4px 0 0;">Votre assistante, jamais en pause.</div>
           </td>
         </tr>
         <!-- Corps -->
