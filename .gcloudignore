@@ -1,0 +1,46 @@
+# Contexte uploadé à Cloud Build (gcloud builds submit).
+# But : upload mince. Les Dockerfiles (api.prod / worker / frontend) ne copient
+# que src, ml, migrations, checkpoints/{intent,ner}, alembic.ini, pyproject, et
+# le source frontend. On exclut tout le reste (dev, caches, gros poids).
+
+# ── VCS / éditeurs ──
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.claude/
+
+# ── Python / venv / caches ──
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ── Node / build front (rebuild dans l'image) ──
+node_modules/
+frontend/node_modules/
+frontend/.next/
+.next/
+
+# ── Runtime local / données / logs ──
+var/
+dump.rdb
+*.log
+test.db
+data/
+
+# ── Poids lourds non nécessaires en prod (prod = Groq) ──
+checkpoints/nanogpt/
+nanogpt/
+*.mp4
+*.mov
+
+# On GARDE checkpoints/intent + checkpoints/ner (modèles intention/NER chargés au runtime).
