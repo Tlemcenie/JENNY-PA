@@ -46,6 +46,15 @@ class NERPredictor:
         config = checkpoint["config"]
         vocab = checkpoint["vocab"]
 
+        # Device figé au checkpoint (souvent 'mps' — entraînement Mac). On le re-résout
+        # au runtime, sinon .to('mps') plante sur Linux/CPU (prod Cloud Run).
+        if torch.cuda.is_available():
+            config.device = "cuda"
+        elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            config.device = "mps"
+        else:
+            config.device = "cpu"
+
         model = BiGRUNER(config)
         model.load_state_dict(checkpoint["model_state_dict"])
         model = model.to(config.device)

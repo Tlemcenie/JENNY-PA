@@ -51,6 +51,15 @@ class IntentPredictor:
         config = checkpoint["config"]
         vocab = checkpoint["vocab"]
 
+        # Le device est figé dans le checkpoint (souvent 'mps' — entraînement sur Mac).
+        # En prod (Linux/CPU) ou sur GPU, on le re-résout, sinon .to('mps') plante.
+        if torch.cuda.is_available():
+            config.device = "cuda"
+        elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            config.device = "mps"
+        else:
+            config.device = "cpu"
+
         model = IntentClassifier(config)
         model.load_state_dict(checkpoint["model_state_dict"])
         model = model.to(config.device)
