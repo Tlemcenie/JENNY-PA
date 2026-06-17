@@ -115,13 +115,14 @@ def build_action_registry(
 def build_agent_router(
     registry: ActionRegistry,
     calendar: GoogleCalendarService | None = None,
+    retriever: VectorRetriever | None = None,
 ) -> AgentRouter:
     """Enregistre les agents Jenny dans un AgentRouter."""
     cal = calendar or GoogleCalendarService()
     router = AgentRouter()
 
     router.register("fallback", FallbackAgent())
-    router.register("faq", FAQAgent(retriever=build_retriever()))
+    router.register("faq", FAQAgent(retriever=retriever or build_retriever()))
     router.register("action", ActionAgent(action_registry=registry))
     router.register("planning", PlanningAgent(action_registry=registry, calendar_service=cal))
     router.register("payment", PaymentAgent(action_registry=registry))
@@ -151,7 +152,9 @@ def build_engine(
     sm = state_manager or StateManager()
 
     registry = build_action_registry(calendar=cal)
-    router = build_agent_router(registry, calendar=cal)
+    # Un seul retriever partagé : l'agent FAQ ET le grounding RAG transverse du moteur.
+    retriever = build_retriever()
+    router = build_agent_router(registry, calendar=cal, retriever=retriever)
 
     provider = llm_provider if llm_provider is not None else get_default_llm_provider()
     response_generator = ResponseGenerator(provider) if provider is not None else None
@@ -164,6 +167,7 @@ def build_engine(
         ner_predictor=ner_predictor,
         agent_router=router,
         response_generator=response_generator,
+        retriever=retriever,
     )
 
     logger.info(

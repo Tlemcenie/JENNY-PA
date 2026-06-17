@@ -239,12 +239,16 @@ class ConversationEngine:
         ner_predictor: object | None = None,
         agent_router: object | None = None,
         response_generator: object | None = None,
+        retriever: object | None = None,
     ) -> None:
         self.state_manager = state_manager or StateManager()
         self.intent_predictor = intent_predictor
         self.ner_predictor = ner_predictor
         self.agent_router = agent_router
         self.response_generator = response_generator
+        # Retriever RAG transverse : permet de chercher dans la base de connaissances
+        # pour TOUTE question informative, même quand l'agent retenu n'est pas FAQ.
+        self.retriever = retriever
 
     async def process(
         self, request: EngineRequest, on_token: TokenCallback | None = None
@@ -448,6 +452,40 @@ class ConversationEngine:
         state.agent_used = agent_result.get("agent", "fallback")
         state.action_result = agent_result.get("action_result")
         state.retrieved_documents = agent_result.get("documents", [])
+
+        # ── Grounding RAG transverse ──
+        # Seul l'agent FAQ interroge la base de connaissances. Or une question
+        # informative est parfois mal classée (« vous avez un parking ? » → general,
+        # « accessible en fauteuil ? » → planning) et court-circuite le RAG. Si aucun
+        # document n'a été récupéré, que l'intention n'est pas purement sociale et
+        # qu'aucune action n'a abouti, on cherche dans la base : les passages assez
+        # pertinents (score ≥ seuil) sont injectés au générateur quel que soit l'agent
+        # → Jenny se base sur sa connaissance même quand l'intention est mal classée.
+        if (
+            not state.retrieved_documents
+            and self.retriever is not None
+            and intent not in ("greeting", "closing", "escalation")
+            and not (state.action_result or {}).get("success")
+        ):
+            try:
+                _hits = await self.retriever.search(
+                    request.message_text,
+                    business_id=state.business_id,
+                    top_k=3,
+                    score_threshold=0.5,
+                )
+                if _hits:
+                    state.retrieved_documents = [
+                        {"content": h.content, "score": h.score, "metadata": h.metadata}
+                        for h in _hits
+                    ]
+                    logger.info(
+                        "engine.rag_grounded",
+                        results=len(_hits),
+                        top_score=round(_hits[0].score, 3),
+                    )
+            except Exception as _e:  # pragma: no cover - dépend de l'embedder/IO
+                logger.warning("engine.rag_ground_failed", error=str(_e))
 
         # Suivi de confirmation : un RDV qui vient d'être réservé attend un « oui »
         # du client pour passer en confirmé ; une fois confirmé/annulé, on solde.
