@@ -21,9 +21,22 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/nanogpt", tags=["NanoGPT"])
 
-_METRICS = Path("var/nanogpt/metrics.jsonl")
-_STATUS = Path("var/nanogpt/status.json")
-_COMPARISON = Path("var/eval/comparison.json")
+# Données lab : écrites dans var/ par l'entraînement/éval (dev), MAIS var/ n'est pas
+# embarqué dans l'image de prod. On lit donc var/ en priorité (live/dev), sinon le
+# snapshot embarqué dans le paquet (src/jenny/assets/lab) → l'onglet marche partout,
+# quel que soit le répertoire de lancement (chemins absolus, pas relatifs au CWD).
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_BUNDLED = Path(__file__).resolve().parents[2] / "assets" / "lab"
+
+
+def _lab_path(rel_var: str, bundled_name: str) -> Path:
+    live = _REPO_ROOT / rel_var
+    return live if live.exists() else _BUNDLED / bundled_name
+
+
+_METRICS = _lab_path("var/nanogpt/metrics.jsonl", "metrics.jsonl")
+_STATUS = _lab_path("var/nanogpt/status.json", "status.json")
+_COMPARISON = _lab_path("var/eval/comparison.json", "comparison.json")
 
 
 class TrainingPoint(BaseModel):

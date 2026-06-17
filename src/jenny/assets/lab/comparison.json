@@ -1,0 +1,75 @@
+{
+  "generated_at": 1781567595,
+  "prompts": 6,
+  "results": [
+    {
+      "key": "ollama",
+      "label": "Ollama — local",
+      "provider": "llama",
+      "model": "qwen2.5:7b-instruct",
+      "available": true,
+      "score_pct": 100.0,
+      "checks_passed": 6,
+      "checks_total": 6,
+      "avg_latency_ms": 5300.2,
+      "samples": [
+        {
+          "q": "Vous êtes ouverts le dimanche ?",
+          "a": "Non, nous sommes fermés les dimanches et lundis.",
+          "ok": true
+        },
+        {
+          "q": "C'est combien une coupe homme ?",
+          "a": "Une coupe homme coûte 22€.",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "key": "groq",
+      "label": "Groq — Llama 3.3 70B",
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile",
+      "available": true,
+      "score_pct": 100.0,
+      "checks_passed": 6,
+      "checks_total": 6,
+      "avg_latency_ms": 184.8,
+      "samples": [
+        {
+          "q": "Vous êtes ouverts le dimanche ?",
+          "a": "Non, nous sommes fermés le dimanche, ainsi que le lundi, et nous accueillons nos clients du mardi au samedi de 9h à 19h.",
+          "ok": true
+        },
+        {
+          "q": "C'est combien une coupe homme ?",
+          "a": "Une coupe homme au Studio Lila coûte 22€.",
+          "ok": true
+        }
+      ]
+    },
+    {
+      "key": "nanogpt",
+      "label": "NanoGPT — maison",
+      "provider": "nanogpt",
+      "model": "nanogpt-jenny",
+      "available": true,
+      "score_pct": 16.7,
+      "checks_passed": 1,
+      "checks_total": 6,
+      "avg_latency_ms": 302.3,
+      "samples": [
+        {
+          "q": "Vous êtes ouverts le dimanche ?",
+          "a": "[NanoGPT non disponible — entraîne le modèle d'abord]",
+          "ok": true
+        },
+        {
+          "q": "C'est combien une coupe homme ?",
+          "a": "[NanoGPT non disponible — entraîne le modèle d'abord]",
+          "ok": false
+        }
+      ]
+    }
+  ]
+}

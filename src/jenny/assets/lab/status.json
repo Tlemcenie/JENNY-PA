@@ -1,0 +1,18 @@
+{
+  "state": "done",
+  "step": 3000,
+  "max_steps": 3000,
+  "device": "mps",
+  "params": 16889856,
+  "vocab_size": 16000,
+  "best_val_loss": 4.686,
+  "tokens_seen": 18432000,
+  "elapsed_s": 1641.9,
+  "total_tokens": 25548190,
+  "model": {
+    "n_layer": 6,
+    "n_head": 6,
+    "n_embd": 384,
+    "block_size": 256
+  }
+}
