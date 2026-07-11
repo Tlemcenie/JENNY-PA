@@ -41,11 +41,18 @@ async def _check_database() -> dict:
 
 
 async def _check_redis() -> dict:
-    """Vérifie la connectivité Redis."""
+    """Vérifie la connectivité Redis.
+
+    Redis est optionnel : sans ``JENNY_REDIS_URL`` (mode démo cloud, Redis
+    supprimé), l'app fonctionne en mémoire (state manager + rate limit) et la
+    readiness ne doit pas se dégrader.
+    """
+    settings = get_settings()
+    if not settings.redis_url:
+        return {"status": "skip", "type": "redis", "reason": "disabled (in-memory fallback)"}
     try:
         import redis.asyncio as aioredis
 
-        settings = get_settings()
         r = aioredis.from_url(settings.redis_url, socket_connect_timeout=2)
         pong = await r.ping()
         await r.aclose()

@@ -38,6 +38,7 @@ import { SkeletonCard } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 const categories = ["general", "horaires", "tarifs", "faq", "politique", "services", "equipe"];
 
@@ -61,6 +62,7 @@ export default function KnowledgePage() {
   const { user } = useAuth();
   const businessId = user?.business_id;
   const toast = useToast();
+  const confirm = useConfirm();
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [stats, setStats] = useState<{
     total_entries: number;
@@ -237,6 +239,14 @@ export default function KnowledgePage() {
   const handleDelete = async (entryId: string) => {
     if (!businessId) return;
     setMenuOpenId(null);
+    const ok = await confirm({
+      title: "Supprimer cette entrée ?",
+      message:
+        "Jenny ne pourra plus s'appuyer sur ce contenu pour répondre. Cette action est irréversible.",
+      confirmLabel: "Supprimer",
+      danger: true,
+    });
+    if (!ok) return;
     setDeletingId(entryId);
     try {
       await deleteKnowledgeEntry(businessId, entryId);

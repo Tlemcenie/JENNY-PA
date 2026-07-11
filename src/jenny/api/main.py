@@ -28,6 +28,7 @@ from jenny.api.routes import (
     copilot,
     customer_privacy,
     customers,
+    feedback,
     health,
     ingest,
     insights,
@@ -168,6 +169,7 @@ def create_app() -> FastAPI:
     app.include_router(copilot.router, prefix="/api/v1", tags=["copilot"])
     app.include_router(owner_chat.router, prefix="/api/v1", tags=["owner-assistant"])
     app.include_router(jenny_metrics.router, prefix="/api/v1", tags=["jenny-metrics"])
+    app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
     app.include_router(nanogpt.router, prefix="/api/v1", tags=["nanogpt"])
     app.include_router(llm_settings.router, prefix="/api/v1", tags=["llm"])
     app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])

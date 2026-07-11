@@ -204,6 +204,8 @@ export interface ConversationResponse {
   action_result: Record<string, unknown>;
   conversation_phase: string;
   requires_human: boolean;
+  // Id du message Jenny persisté → cible d'un feedback 👍/👎.
+  message_id: string | null;
 }
 
 export async function sendMessage(
@@ -227,6 +229,51 @@ export async function sendMessage(
 
 export async function getConversationStatus(conversationId: string) {
   return request(`/api/v1/conversation/status/${conversationId}`);
+}
+
+// ==================== FEEDBACK RÉPONSES (👍/👎) ====================
+
+export type FeedbackRating = 1 | -1;
+
+export interface FeedbackState {
+  message_id: string;
+  rating: number | null; // null = pas encore évalué
+  comment: string | null;
+}
+
+export interface FeedbackMetrics {
+  total_rated: number;
+  positive: number;
+  negative: number;
+  satisfaction_pct: number; // part de 👍 parmi les avis (0–100)
+  coverage_rated: number;
+  responses_total: number; // nombre total de réponses de Jenny
+  last_7_days: { positive: number; negative: number };
+  recent_comments: {
+    comment: string | null;
+    question: string | null;
+    answer: string | null;
+    created_at: string;
+  }[];
+}
+
+export async function submitFeedback(
+  messageId: string,
+  rating: FeedbackRating,
+  comment?: string
+): Promise<FeedbackState> {
+  return request<FeedbackState>("/api/v1/feedback", {
+    method: "POST",
+    body: { message_id: messageId, rating, comment: comment ?? null },
+  });
+}
+
+export async function getMessageFeedback(messageId: string): Promise<FeedbackState> {
+  return request<FeedbackState>(`/api/v1/feedback/message/${messageId}`);
+}
+
+export async function getFeedbackMetrics(): Promise<FeedbackMetrics> {
+  return request<FeedbackMetrics>("/api/v1/feedback/metrics");
 }
 
 // ==================== MESSAGES ====================
@@ -1613,6 +1660,13 @@ export interface JennyEvalSummary {
   by_criterion: Record<string, { pass: number; total: number; pct: number }>;
 }
 
+export interface SatisfactionBreakdown {
+  total_rated: number;
+  positive: number;
+  negative: number;
+  satisfaction_pct: number;
+}
+
 export interface JennyMetrics {
   conversations: number;
   messages: number;
@@ -1621,6 +1675,7 @@ export interface JennyMetrics {
   gaps: GapStats;
   top_open_questions: string[];
   last_eval: JennyEvalSummary | null;
+  satisfaction: SatisfactionBreakdown;
 }
 
 export async function getJennyMetrics(): Promise<JennyMetrics> {

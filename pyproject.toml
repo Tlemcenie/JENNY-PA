@@ -47,6 +47,7 @@ dependencies = [
     "rich>=13.0,<14.0",
     # ── LLM Data Generation ──
     "groq>=0.9,<1.0",
+    "sentence-transformers>=5.6.0",
 ]
 
 [project.optional-dependencies]

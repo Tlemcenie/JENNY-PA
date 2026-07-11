@@ -40,12 +40,16 @@ def _enforce_tenant(request: Request, business_id: UUID) -> None:
         raise HTTPException(status_code=403, detail="Accès refusé pour ce business")
 
 
-async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -> None:
+async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -> str | None:
     """Persiste la conversation et les messages (client + Jenny) en base.
 
     Robuste : une erreur de persistance n'empêche pas de renvoyer la réponse
     (le chat reste fonctionnel), mais elle est loggée pour investigation.
+
+    Retourne l'id du message SORTANT (réponse de Jenny) pour permettre au client
+    de rattacher un feedback 👍/👎 ; ``None`` si la persistance a échoué.
     """
+    outbound_id = uuid4()
     try:
         now = datetime.now(UTC)
         channel = body.channel or "api"
@@ -86,6 +90,7 @@ async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -
         )
         db.add(
             Message(
+                id=outbound_id,
                 conversation_id=conv.id,
                 business_id=body.business_id,
                 external_message_id=str(uuid4()),
@@ -101,9 +106,11 @@ async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -
         )
         conv.message_count = (conv.message_count or 0) + 2
         await db.commit()
+        return str(outbound_id)
     except Exception as e:
         await db.rollback()
         logger.error("conversation.persist_error", error=str(e))
+        return None
 
 
 # ── Schémas de requête / réponse ──
@@ -137,6 +144,8 @@ class ConversationResponse(BaseModel):
     detected_language: str | None = None
     knowledge_gap: bool = False
     gap_question: str | None = None
+    # Id du message sortant persisté → permet au client d'attacher un feedback 👍/👎.
+    message_id: str | None = None
 
 
 # ── Routes ──
@@ -162,13 +171,13 @@ async def chat(
 
     La conversation et les messages (client + Jenny) sont persistés en base.
     """
-    result = await _run_engine_chat(db, body, request)
-    return _to_response(result)
+    result, message_id = await _run_engine_chat(db, body, request)
+    return _to_response(result, message_id)
 
 
 async def _run_engine_chat(
     db, body: ConversationRequest, request: Request, on_token=None
-) -> EngineResponse:
+) -> tuple[EngineResponse, str | None]:
     """Cœur partagé : charge le contexte, exécute le moteur, persiste.
 
     ``on_token`` (optionnel) reçoit chaque token de la réponse au fil de l'eau.
@@ -201,7 +210,7 @@ async def _run_engine_chat(
         ),
         on_token=on_token,
     )
-    await _persist_chat(db, body, result)
+    message_id = await _persist_chat(db, body, result)
     await persist_engine_signals(
         db,
         business_id=body.business_id,
@@ -210,11 +219,12 @@ async def _run_engine_chat(
         channel=body.channel,
         result=result,
     )
-    return result
+    return result, message_id
 
 
-def _to_response(result: EngineResponse) -> ConversationResponse:
+def _to_response(result: EngineResponse, message_id: str | None = None) -> ConversationResponse:
     return ConversationResponse(
+        message_id=message_id,
         response=result.response_text,
         intent=result.intent,
         intent_confidence=result.intent_confidence,
@@ -251,8 +261,8 @@ async def chat_stream(
 
     async def run() -> None:
         try:
-            result = await _run_engine_chat(db, body, request, on_token=on_token)
-            await queue.put({"__result__": result})
+            result, message_id = await _run_engine_chat(db, body, request, on_token=on_token)
+            await queue.put({"__result__": result, "__message_id__": message_id})
         except Exception as exc:  # pragma: no cover - chemin d'erreur réseau
             logger.error("conversation.stream_error", error=str(exc))
             await queue.put({"__error__": str(exc)})
@@ -263,6 +273,7 @@ async def chat_stream(
 
     async def _sse():
         result: EngineResponse | None = None
+        message_id: str | None = None
         try:
             while True:
                 item = await queue.get()
@@ -272,6 +283,7 @@ async def chat_stream(
                     yield f"data: {json.dumps({'token': item['token']})}\n\n"
                 elif "__result__" in item:
                     result = item["__result__"]
+                    message_id = item.get("__message_id__")
                 elif "__error__" in item:
                     yield f"data: {json.dumps({'error': True})}\n\n"
             if result is not None:
@@ -283,6 +295,7 @@ async def chat_stream(
                     "requires_human": result.requires_human,
                     "needs_clarification": result.needs_clarification,
                     "knowledge_gap": result.knowledge_gap,
+                    "message_id": message_id,  # pour le feedback 👍/👎
                 }
                 yield f"data: {json.dumps(meta)}\n\n"
         finally:

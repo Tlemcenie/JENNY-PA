@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { intentLabel } from "@/lib/utils";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
+import { FeedbackButtons } from "./feedback-buttons";
 
 interface MessageBubbleProps {
   content: string;
@@ -14,9 +15,11 @@ interface MessageBubbleProps {
     agent?: string;
     phase?: string;
   };
+  // Id du message Jenny persisté : active la validation 👍/👎 sous la bulle.
+  messageId?: string;
 }
 
-export function MessageBubble({ content, isUser, timestamp, meta }: MessageBubbleProps) {
+export function MessageBubble({ content, isUser, timestamp, meta, messageId }: MessageBubbleProps) {
   // ── Message client (à droite) : bulle coral `.jbubble--me`, horodatage mono dessous.
   if (isUser) {
     return (
@@ -85,6 +88,10 @@ export function MessageBubble({ content, isUser, timestamp, meta }: MessageBubbl
               </>
             )}
           </div>
+        )}
+        {/* Validation de la réponse (uniquement une fois le message persisté). */}
+        {messageId && content.trim().length > 0 && (
+          <FeedbackButtons messageId={messageId} />
         )}
       </div>
     </motion.div>

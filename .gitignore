@@ -97,3 +97,7 @@ test.db
 *.db-journal
 *.sqlite
 *.sqlite3
+
+# Fichiers de verrouillage Office (ouverts dans PowerPoint/Word)
+~$*.pptx
+~$*.docx

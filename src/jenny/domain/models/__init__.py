@@ -22,6 +22,7 @@ from jenny.domain.models.document_category import DocumentCategory
 from jenny.domain.models.knowledge_gap import KnowledgeGap
 from jenny.domain.models.message import Message
 from jenny.domain.models.message_event import MessageEvent
+from jenny.domain.models.message_feedback import MessageFeedback
 from jenny.domain.models.notification import Notification
 from jenny.domain.models.order import Order
 from jenny.domain.models.payment_record import PaymentRecord
@@ -54,6 +55,7 @@ __all__ = [
     "KnowledgeGap",
     "Message",
     "MessageEvent",
+    "MessageFeedback",
     "Notification",
     "Order",
     "PaymentRecord",

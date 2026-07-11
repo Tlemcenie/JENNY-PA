@@ -313,7 +313,7 @@ export default function EfficacyPage() {
           variants={staggerContainer}
           initial="hidden"
           animate="show"
-          className="grid grid-cols-1 sm:grid-cols-3 gap-3"
+          className="grid grid-cols-2 lg:grid-cols-4 gap-3"
         >
           <StatCard
             icon={<MessageSquare className="w-5 h-5" />}
@@ -332,6 +332,26 @@ export default function EfficacyPage() {
             tint="#8B5CF6"
             label="Clients"
             value={<AnimatedNumber value={metrics.customers} />}
+          />
+          {/* Satisfaction : issue des 👍/👎 laissés sur les réponses de Jenny. */}
+          <StatCard
+            icon={<Gauge className="w-5 h-5" />}
+            tint="#10B981"
+            label="Satisfaction"
+            value={
+              metrics.satisfaction.total_rated === 0 ? (
+                "—"
+              ) : (
+                <>
+                  <AnimatedNumber value={metrics.satisfaction.satisfaction_pct} />%
+                </>
+              )
+            }
+            sub={
+              metrics.satisfaction.total_rated === 0
+                ? "aucun avis"
+                : `${metrics.satisfaction.positive} 👍 · ${metrics.satisfaction.negative} 👎`
+            }
           />
         </motion.div>
 

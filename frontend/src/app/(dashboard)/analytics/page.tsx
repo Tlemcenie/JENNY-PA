@@ -29,6 +29,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/shared/error-state";
+import { SatisfactionCard } from "@/components/dashboard/satisfaction-card";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { channelLabel, cn, formatMoney } from "@/lib/utils";
 import { fadeInUp, staggerContainer, staggerItem, easeOutExpo } from "@/lib/motion";
@@ -462,6 +463,11 @@ export default function AnalyticsPage() {
               <StackedVolumeChart daily={daily} byChannel={insights.by_channel} />
             )}
           </Card>
+        </motion.div>
+
+        {/* ── Satisfaction des réponses (feedback 👍/👎) ── */}
+        <motion.div variants={fadeInUp} initial="hidden" animate="show" className="mb-[18px]">
+          <SatisfactionCard />
         </motion.div>
 
         {/* ── 3 petits panneaux ── */}

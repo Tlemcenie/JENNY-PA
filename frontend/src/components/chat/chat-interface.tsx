@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, AlertCircle, RotateCcw, CalendarPlus, Paperclip, ImageIcon } from "lucide-react";
+import { Send, AlertCircle, RotateCcw, CalendarPlus } from "lucide-react";
 import { sendMessage, streamChat, type ConversationResponse, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { generateUUID } from "@/lib/utils";
@@ -30,6 +30,8 @@ interface ChatMessage {
     agent?: string;
     phase?: string;
   };
+  // Id serveur du message Jenny (persisté) → cible du feedback 👍/👎.
+  messageId?: string;
   error?: boolean;
 }
 
@@ -136,6 +138,8 @@ export function ChatInterface() {
           // Le back envoie la version FINALE nettoyée (garde-fou persona) dans
           // `text` : elle fait autorité → on remplace l'affichage brut par elle.
           const finalText = typeof meta.text === "string" ? meta.text : undefined;
+          const finalMessageId =
+            typeof meta.message_id === "string" ? meta.message_id : undefined;
           if (!firstTokenReceived) {
             firstTokenReceived = true;
             setIsTyping(false);
@@ -147,6 +151,7 @@ export function ChatInterface() {
                 isUser: false,
                 timestamp: jennyTimestamp,
                 meta: finalMeta,
+                messageId: finalMessageId,
               },
             ]);
             return;
@@ -154,7 +159,7 @@ export function ChatInterface() {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === jennyId
-                ? { ...m, meta: finalMeta, content: finalText ?? m.content }
+                ? { ...m, meta: finalMeta, content: finalText ?? m.content, messageId: finalMessageId }
                 : m
             )
           );
@@ -189,6 +194,7 @@ export function ChatInterface() {
             agent: response.agent_used,
             phase: response.conversation_phase,
           },
+          messageId: response.message_id ?? undefined,
         };
 
         setMessages((prev) => [...prev, jennyMsg]);
@@ -441,6 +447,7 @@ export function ChatInterface() {
                       isUser={msg.isUser}
                       timestamp={msg.timestamp}
                       meta={msg.meta}
+                      messageId={msg.messageId}
                     />
                   )
                 )}
@@ -506,20 +513,6 @@ export function ChatInterface() {
                 transition: "box-shadow .15s ease, border-color .15s ease",
               }}
             >
-              <button
-                type="button"
-                aria-label="Joindre un fichier"
-                style={{ display: "grid", placeItems: "center", width: 34, height: 34, border: "none", background: "transparent", cursor: "pointer" }}
-              >
-                <Paperclip style={{ width: 17, height: 17, color: "var(--text-2)" }} />
-              </button>
-              <button
-                type="button"
-                aria-label="Joindre une image"
-                style={{ display: "grid", placeItems: "center", width: 34, height: 34, border: "none", background: "transparent", cursor: "pointer" }}
-              >
-                <ImageIcon style={{ width: 17, height: 17, color: "var(--text-2)" }} />
-              </button>
               <textarea
                 ref={inputRef}
                 value={input}

@@ -7,6 +7,7 @@ import { Calendar, Eye, BarChart3 } from "lucide-react";
 import { getInsights, subscribeToConversationEvents, type Insights, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { OnboardingBanner } from "@/components/dashboard/onboarding-banner";
+import { SatisfactionCard } from "@/components/dashboard/satisfaction-card";
 
 // Charts recharts (lib lourde) chargés à la demande → bundle initial allégé.
 const MessageVolumeChart = dynamic(
@@ -542,6 +543,8 @@ export default function DashboardPage() {
 
         {/* Insights column */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          {/* Satisfaction des réponses de Jenny (feedback 👍/👎) */}
+          <SatisfactionCard />
           {/* Insight de Jenny (dérivé des vraies intentions/canaux) */}
           <div
             className="jcard"

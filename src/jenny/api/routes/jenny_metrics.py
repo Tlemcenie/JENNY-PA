@@ -18,6 +18,7 @@ from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.knowledge_gap import KnowledgeGap
 from jenny.domain.models.message import Message
+from jenny.domain.models.message_feedback import MessageFeedback
 
 logger = get_logger(__name__)
 
@@ -42,6 +43,13 @@ class EvalSummary(BaseModel):
     by_criterion: dict
 
 
+class SatisfactionBreakdown(BaseModel):
+    total_rated: int
+    positive: int
+    negative: int
+    satisfaction_pct: float  # part de 👍 parmi les avis
+
+
 class JennyMetrics(BaseModel):
     conversations: int
     messages: int
@@ -50,6 +58,9 @@ class JennyMetrics(BaseModel):
     gaps: GapBreakdown
     top_open_questions: list[str]
     last_eval: EvalSummary | None = None
+    satisfaction: SatisfactionBreakdown = SatisfactionBreakdown(
+        total_rated=0, positive=0, negative=0, satisfaction_pct=0.0
+    )
 
 
 @router.get("/metrics", response_model=JennyMetrics)
@@ -93,6 +104,17 @@ async def jenny_metrics(db: DbSession, principal: CurrentUser) -> JennyMetrics:
         )
     ).all()
 
+    # Satisfaction : agrégée depuis les 👍/👎 laissés sur les réponses de Jenny.
+    fb_pos = await _count(MessageFeedback, MessageFeedback.rating == 1)
+    fb_neg = await _count(MessageFeedback, MessageFeedback.rating == -1)
+    fb_total = fb_pos + fb_neg
+    satisfaction = SatisfactionBreakdown(
+        total_rated=fb_total,
+        positive=fb_pos,
+        negative=fb_neg,
+        satisfaction_pct=round(100.0 * fb_pos / fb_total, 1) if fb_total else 0.0,
+    )
+
     return JennyMetrics(
         conversations=await _count(Conversation),
         messages=await _count(Message),
@@ -101,6 +123,7 @@ async def jenny_metrics(db: DbSession, principal: CurrentUser) -> JennyMetrics:
         gaps=gaps,
         top_open_questions=[r[0] for r in top_rows],
         last_eval=_load_eval(),
+        satisfaction=satisfaction,
     )
 
 

@@ -30,6 +30,33 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _tokens(text: str) -> set[str]:
+    """Tokens alphanumériques minuscules (≥ 3 lettres) pour le score lexical."""
+    import re
+
+    return {t for t in re.findall(r"[a-zà-ÿ0-9]+", text.lower()) if len(t) >= 3}
+
+
+def _rerank(query: str, docs: list, top_k: int) -> list:
+    """Re-classe les candidats en combinant score vectoriel et recouvrement lexical.
+
+    La recherche vectorielle seule ramène parfois un passage « à côté » : un
+    bonus lexical (mots de la question présents dans le passage) recentre sur
+    les chunks qui parlent littéralement du sujet demandé. Score final :
+    0.7 · vectoriel + 0.3 · lexical.
+    """
+    q = _tokens(query)
+    if not q:
+        return docs[:top_k]
+    rescored = []
+    for d in docs:
+        lex = len(q & _tokens(d.content)) / len(q)
+        d.score = 0.7 * float(d.score) + 0.3 * lex
+        rescored.append(d)
+    rescored.sort(key=lambda d: d.score, reverse=True)
+    return rescored[:top_k]
+
+
 @dataclass
 class KnowledgeEntry:
     """Entrée logique dans la base de connaissances (groupe de chunks)."""
@@ -287,9 +314,19 @@ class KnowledgeBase:
         }
 
     async def search(self, query: str, top_k: int = 3) -> list[dict]:
-        """Recherche sémantique dans la base de connaissances du business."""
+        """Recherche sémantique dans la base de connaissances du business.
+
+        Récupère un pool de candidats via pgvector puis applique un re-ranking
+        lexical (si activé) pour améliorer la finesse avant de couper à top_k.
+        """
+        from jenny.core.config import get_settings
+
+        settings = get_settings()
         embedding = await self.embedder.embed_text(query)
+        fetch_k = max(top_k, settings.rag_rerank_candidates) if settings.rag_rerank else top_k
         docs = await self.vector_store.search(
-            self.session, self.business_id, embedding, top_k=top_k
+            self.session, self.business_id, embedding, top_k=fetch_k
         )
+        if settings.rag_rerank:
+            docs = _rerank(query, docs, top_k)
         return [{"content": d.content, "score": d.score, "metadata": d.metadata} for d in docs]

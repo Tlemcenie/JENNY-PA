@@ -49,6 +49,7 @@ import {
   type Appointment,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useFocusTrap } from "@/lib/use-focus-trap";
 import { cn } from "@/lib/utils";
 import { easeOutExpo, fadeInUp } from "@/lib/motion";
@@ -137,6 +138,7 @@ function emptyForm(day: Date): CreateForm {
 
 export default function CalendarPage() {
   const toast = useToast();
+  const confirm = useConfirm();
 
   const [view, setView] = useState<CalendarView>("month");
   const [cursor, setCursor] = useState<Date>(() => new Date()); // ancre du mois / de la semaine
@@ -372,6 +374,13 @@ export default function CalendarPage() {
 
   const removeAppointment = async () => {
     if (!selected) return;
+    const ok = await confirm({
+      title: "Supprimer ce rendez-vous ?",
+      message: `« ${selected.title} » sera définitivement supprimé de l'agenda. Cette action est irréversible.`,
+      confirmLabel: "Supprimer",
+      danger: true,
+    });
+    if (!ok) return;
     setActionBusy(true);
     try {
       await deleteAppointment(selected.id);

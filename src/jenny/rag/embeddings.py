@@ -50,13 +50,23 @@ class SentenceTransformerEmbedder(BaseEmbedder):
     Fonctionne sur M1 Pro via MPS.
     """
 
+    # Dimensions connues (évite de charger le modèle juste pour connaître la dim,
+    # ce que fait PgVectorStore à la construction).
+    _KNOWN_DIMS: ClassVar[dict[str, int]] = {
+        "all-MiniLM-L6-v2": 384,
+        "paraphrase-multilingual-MiniLM-L12-v2": 384,
+        "paraphrase-multilingual-mpnet-base-v2": 768,
+        "distiluse-base-multilingual-cased-v2": 512,
+    }
+
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = "paraphrase-multilingual-mpnet-base-v2",
     ) -> None:
         self.model_name = model_name
         self._model = None
-        self._dimension = 384  # Défaut pour MiniLM
+        base = model_name.split("/")[-1]
+        self._dimension = self._KNOWN_DIMS.get(base, 768)
 
     @property
     def dimension(self) -> int:

@@ -65,8 +65,15 @@ class Settings(BaseSettings):
     ner_model_path: str = "checkpoints/ner/best_model.pt"
 
     # ── Embeddings RAG ──
-    embeddings_backend: str = "ollama"  # ollama, sentence-transformer, openai
-    embeddings_model: str = "nomic-embed-text"
+    # Défaut : sentence-transformer multilingue (768-dim, FR), 100 % en-process.
+    # Aucun service externe requis → le RAG fonctionne partout (local ET cloud),
+    # sans dépendre d'Ollama (absent de Cloud Run). Reste compatible avec la
+    # colonne pgvector existante (vector(768)) : pas de migration.
+    embeddings_backend: str = "sentence-transformer"  # ollama, sentence-transformer, openai
+    embeddings_model: str = "paraphrase-multilingual-mpnet-base-v2"
+    # Re-ranking lexical après la recherche vectorielle (améliore la finesse).
+    rag_rerank: bool = True
+    rag_rerank_candidates: int = 12  # nb de candidats récupérés avant re-ranking
 
     # ── MLflow ──
     mlflow_tracking_uri: str = "http://localhost:5000"
