@@ -63,8 +63,11 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         self,
         model_name: str = "paraphrase-multilingual-mpnet-base-v2",
     ) -> None:
+        import threading
+
         self.model_name = model_name
         self._model = None
+        self._load_lock = threading.Lock()  # embed_* charge depuis des threads
         base = model_name.split("/")[-1]
         self._dimension = self._KNOWN_DIMS.get(base, 768)
 
@@ -73,13 +76,23 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         return self._dimension
 
     def _load_model(self) -> None:
-        """Charge le modèle Sentence Transformer (lazy loading)."""
-        if self._model is None:
+        """Charge le modèle Sentence Transformer (lazy loading, thread-safe)."""
+        with self._load_lock:
+            if self._model is not None:
+                return
             try:
                 from sentence_transformers import SentenceTransformer
 
                 self._model = SentenceTransformer(self.model_name)
-                self._dimension = self._model.get_sentence_embedding_dimension()
+                # Renommée en get_embedding_dimension (sentence-transformers ≥ 5) ;
+                # repli PARESSEUX sur l'ancien nom (un getattr à 3 arguments
+                # évaluerait l'ancien attribut même quand le nouveau existe —
+                # et planterait le jour où l'ancien est supprimé).
+                get_dim = (
+                    getattr(self._model, "get_embedding_dimension", None)
+                    or self._model.get_sentence_embedding_dimension
+                )
+                self._dimension = get_dim()
                 logger.info(
                     "embedder.sentence_transformer.loaded",
                     model=self.model_name,
@@ -93,17 +106,29 @@ class SentenceTransformerEmbedder(BaseEmbedder):
                 raise
 
     async def embed_text(self, text: str) -> list[float]:
-        """Génère un embedding local via Sentence Transformers."""
-        self._load_model()
+        """Génère un embedding local via Sentence Transformers.
+
+        Chargement et encode sont CPU-bound (torch) : on les pousse dans un
+        thread pour ne pas geler l'event loop (SSE, autres requêtes) pendant
+        l'inférence — c'est le chemin chaud du chat depuis que ce backend est
+        le défaut.
+        """
+        import asyncio
+
+        await asyncio.to_thread(self._load_model)
         assert self._model is not None
-        embedding = self._model.encode(text, convert_to_numpy=True)
+        embedding = await asyncio.to_thread(self._model.encode, text, convert_to_numpy=True)
         return embedding.tolist()
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Batch d'embeddings via Sentence Transformers (optimisé)."""
-        self._load_model()
+        import asyncio
+
+        await asyncio.to_thread(self._load_model)
         assert self._model is not None
-        embeddings = self._model.encode(texts, convert_to_numpy=True, batch_size=32)
+        embeddings = await asyncio.to_thread(
+            self._model.encode, texts, convert_to_numpy=True, batch_size=32
+        )
         return embeddings.tolist()
 
 
@@ -245,9 +270,7 @@ def get_embedder(backend: str = "ollama", **kwargs) -> BaseEmbedder:
         return OpenAIEmbedder(**kwargs)
     if backend == "sentence-transformer":
         return SentenceTransformerEmbedder(**kwargs)
-    raise ValueError(
-        f"Backend inconnu : {backend}. Options : ollama, sentence-transformer, openai"
-    )
+    raise ValueError(f"Backend inconnu : {backend}. Options : ollama, sentence-transformer, openai")
 
 
 def get_default_embedder() -> BaseEmbedder:

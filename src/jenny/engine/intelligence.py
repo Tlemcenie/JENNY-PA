@@ -72,9 +72,7 @@ def language_name(code: str | None) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Intentions purement relationnelles : on ne demande jamais de précision.
-_NO_CLARIFY_INTENTS = frozenset(
-    {"greeting", "small_talk", "closing", "escalation"}
-)
+_NO_CLARIFY_INTENTS = frozenset({"greeting", "small_talk", "closing", "escalation"})
 
 # En dessous de cette confiance, une demande non triviale est jugée mal comprise.
 CLARIFY_CONFIDENCE_FLOOR = 0.4
@@ -187,12 +185,15 @@ KNOWLEDGE_SEEKING_INTENTS = frozenset(
 )
 
 # Score de pertinence RAG minimal pour considérer qu'on a une VRAIE réponse.
-# Mesuré sur nomic-embed-text (cf. banc d'essai) : une question DONT la réponse est
-# dans la base score ≥ 0.70 ; une question hors-sujet mais « du même commerce »
-# (parking dans un resto, permis moto dans une auto-école…) plafonne à ~0.63. Le
-# seuil 0.62 sépare proprement les deux → Jenny propose de vérifier au lieu
-# d'INVENTER un fait absent de la base. Mieux vaut différer que mentir au client.
-GAP_SCORE_FLOOR = 0.62
+# ⚠️ Calibré sur l'échelle BLENDÉE du retriever (0.7·cosinus mpnet + 0.3·lexical,
+# cf. rag/rerank.py) — recalibrer si le modèle d'embeddings ou le blend change,
+# et RÉ-INDEXER la base (scripts/reindex_kb.py) à chaque changement de modèle.
+# Mesuré le 2026-07-11 sur la KB de démo (paraphrase-multilingual-mpnet-base-v2) :
+# question DONT la réponse est en base → 0.36 à 0.67 ; question hors-sujet
+# (pneus, piano, chambres d'hôtel…) → ≤ 0.36. Le seuil 0.38 rejette tout le
+# hors-sujet mesuré → Jenny propose de vérifier au lieu d'INVENTER un fait
+# absent de la base. Mieux vaut différer que mentir au client.
+GAP_SCORE_FLOOR = 0.38
 
 
 def _action_has_concrete_result(action_result: dict | None) -> bool:
@@ -206,9 +207,7 @@ def _action_has_concrete_result(action_result: dict | None) -> bool:
     if meaningful.get("success") is True:
         return True
     # Présence d'une charge utile non vide (statut commande, créneaux, devis…).
-    return any(
-        bool(v) for k, v in meaningful.items() if k not in {"success", "error", "message"}
-    )
+    return any(bool(v) for k, v in meaningful.items() if k not in {"success", "error", "message"})
 
 
 def is_knowledge_gap(
@@ -310,13 +309,19 @@ def clean_question(text: str, max_len: int = 280) -> str:
 # ces faits sont persistés, on évite donc le bruit.
 _APOS = r"['’]"  # apostrophe droite ou typographique  # noqa: RUF001
 _FACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bje\s+suis\s+allergique\s+(?:[àa]|au|aux)\s+([^.,;!?\n]{2,60})", re.I), "constraint"),
+    (
+        re.compile(r"\bje\s+suis\s+allergique\s+(?:[àa]|au|aux)\s+([^.,;!?\n]{2,60})", re.I),
+        "constraint",
+    ),
     (re.compile(r"\bje\s+pr[ée]f[èe]re\s+([^.,;!?\n]{2,70})", re.I), "preference"),
     (re.compile(rf"\bj{_APOS}?\s*aime\s+(?:bien\s+)?([^.,;!?\n]{{2,70}})", re.I), "preference"),
     (re.compile(rf"\bje\s+n{_APOS}?\s*aime\s+pas\s+([^.,;!?\n]{{2,70}})", re.I), "preference"),
     (re.compile(rf"\bj{_APOS}?\s*[ée]vite\s+([^.,;!?\n]{{2,60}})", re.I), "constraint"),
     (re.compile(rf"\bje\s+m{_APOS}?\s*appelle\s+([A-Za-zÀ-ž][\w'-]{{1,40}})", re.I), "contact"),
-    (re.compile(r"\bje\s+suis\s+(?:cliente?|client)\s+(depuis\s+[^.,;!?\n]{2,40})", re.I), "context"),
+    (
+        re.compile(r"\bje\s+suis\s+(?:cliente?|client)\s+(depuis\s+[^.,;!?\n]{2,40})", re.I),
+        "context",
+    ),
 ]
 
 # Conjonctions qui terminent un fait (évite de capturer deux idées en une).

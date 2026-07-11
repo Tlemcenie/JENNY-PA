@@ -17,9 +17,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
+from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
 from jenny.rag.embeddings import get_default_embedder
 from jenny.rag.ingestion import DocumentIngester
+from jenny.rag.rerank import rerank as _rerank
 from jenny.rag.vector_store import PgVectorStore
 
 if TYPE_CHECKING:
@@ -28,33 +30,6 @@ if TYPE_CHECKING:
     from jenny.rag.embeddings import BaseEmbedder
 
 logger = get_logger(__name__)
-
-
-def _tokens(text: str) -> set[str]:
-    """Tokens alphanumériques minuscules (≥ 3 lettres) pour le score lexical."""
-    import re
-
-    return {t for t in re.findall(r"[a-zà-ÿ0-9]+", text.lower()) if len(t) >= 3}
-
-
-def _rerank(query: str, docs: list, top_k: int) -> list:
-    """Re-classe les candidats en combinant score vectoriel et recouvrement lexical.
-
-    La recherche vectorielle seule ramène parfois un passage « à côté » : un
-    bonus lexical (mots de la question présents dans le passage) recentre sur
-    les chunks qui parlent littéralement du sujet demandé. Score final :
-    0.7 · vectoriel + 0.3 · lexical.
-    """
-    q = _tokens(query)
-    if not q:
-        return docs[:top_k]
-    rescored = []
-    for d in docs:
-        lex = len(q & _tokens(d.content)) / len(q)
-        d.score = 0.7 * float(d.score) + 0.3 * lex
-        rescored.append(d)
-    rescored.sort(key=lambda d: d.score, reverse=True)
-    return rescored[:top_k]
 
 
 @dataclass
@@ -99,9 +74,7 @@ class KnowledgeBase:
         self.business_id = str(business_id)
         self.session = session
         self.embedder = embedder or get_default_embedder()
-        self.vector_store = vector_store or PgVectorStore(
-            embedding_dim=self.embedder.dimension
-        )
+        self.vector_store = vector_store or PgVectorStore(embedding_dim=self.embedder.dimension)
         self.ingester = ingester or DocumentIngester()
 
     async def _ingest(
@@ -139,9 +112,7 @@ class KnowledgeBase:
                 }
             )
 
-        count = await self.vector_store.add_chunks(
-            self.session, self.business_id, chunk_dicts
-        )
+        count = await self.vector_store.add_chunks(self.session, self.business_id, chunk_dicts)
         await self.session.commit()
         return count
 
@@ -319,8 +290,6 @@ class KnowledgeBase:
         Récupère un pool de candidats via pgvector puis applique un re-ranking
         lexical (si activé) pour améliorer la finesse avant de couper à top_k.
         """
-        from jenny.core.config import get_settings
-
         settings = get_settings()
         embedding = await self.embedder.embed_text(query)
         fetch_k = max(top_k, settings.rag_rerank_candidates) if settings.rag_rerank else top_k

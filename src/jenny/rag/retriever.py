@@ -89,15 +89,31 @@ class VectorRetriever:
             logger.warning("retriever.embed_error", error=str(e))
             return []
 
+        # Re-ranking lexical (partagé, cf. rag/rerank.py) : on récupère un pool
+        # de candidats SANS seuil, on blende vectoriel + lexical, PUIS on coupe
+        # au seuil sur le score blendé — l'échelle sur laquelle les seuils du
+        # moteur (grounding, GAP_SCORE_FLOOR) sont calibrés.
+        from jenny.core.config import get_settings
+
+        settings = get_settings()
+        fetch_k = max(top_k, settings.rag_rerank_candidates) if settings.rag_rerank else top_k
+
         factory = self._get_session_factory()
         async with factory() as session:
             stored = await self.vector_store.search(
                 session=session,
                 business_id=business_id,
                 query_embedding=query_embedding,
-                top_k=top_k,
-                score_threshold=score_threshold,
+                top_k=fetch_k,
+                score_threshold=0.0 if settings.rag_rerank else score_threshold,
             )
+
+        if settings.rag_rerank:
+            from jenny.rag.rerank import rerank
+
+            stored = rerank(query, stored, top_k)
+            if score_threshold:
+                stored = [d for d in stored if d.score >= score_threshold]
 
         results = [
             RetrievedDocument(

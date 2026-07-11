@@ -6,17 +6,17 @@ import { submitFeedback, type FeedbackRating } from "@/lib/api";
 
 interface FeedbackButtonsProps {
   messageId: string;
-  initialRating?: number | null;
 }
 
 /**
  * Validation simple d'une réponse de Jenny : pouce haut / pouce bas.
  * Sur un pouce bas, on propose (facultatif) un court commentaire d'amélioration.
  * Optimiste : l'UI réagit tout de suite, l'appel réseau suit ; en cas d'échec
- * on revient à l'état précédent.
+ * on revient à l'état précédent. (Pas d'hydratation d'un vote passé : le chat
+ * de test repart de zéro à chaque visite, un message n'est donc noté qu'une fois.)
  */
-export function FeedbackButtons({ messageId, initialRating = null }: FeedbackButtonsProps) {
-  const [rating, setRating] = useState<number | null>(initialRating);
+export function FeedbackButtons({ messageId }: FeedbackButtonsProps) {
+  const [rating, setRating] = useState<number | null>(null);
   const [showComment, setShowComment] = useState(false);
   const [comment, setComment] = useState("");
   const [saved, setSaved] = useState(false);

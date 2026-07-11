@@ -468,11 +468,14 @@ class ConversationEngine:
             and not (state.action_result or {}).get("success")
         ):
             try:
+                # Seuil sur l'échelle blendée du retriever (cf. GAP_SCORE_FLOOR) :
+                # légèrement sous le floor pour injecter les passages limites au
+                # générateur tout en laissant le floor décider de la lacune.
                 _hits = await self.retriever.search(
                     request.message_text,
                     business_id=state.business_id,
                     top_k=3,
-                    score_threshold=0.5,
+                    score_threshold=0.35,
                 )
                 if _hits:
                     state.retrieved_documents = [

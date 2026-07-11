@@ -37,8 +37,11 @@ class Settings(BaseSettings):
     # ── Database ──
     database_url: str = "postgresql+asyncpg://jenny:jenny_secret@localhost:5432/jenny"
 
-    # ── Redis ──
-    redis_url: str = "redis://localhost:6379/0"
+    # ── Redis (OPTIONNEL) ──
+    # Vide = pas de Redis : state manager, rate limit et readiness basculent en
+    # mémoire (mode démo cloud sans Memorystore). Le local le définit toujours
+    # (.env / scripts/start_stack.sh) — Redis est opt-in, plus opt-out.
+    redis_url: str = ""
 
     # ── Rate limiting (webhooks / ingest) ──
     rate_limit_enabled: bool = True

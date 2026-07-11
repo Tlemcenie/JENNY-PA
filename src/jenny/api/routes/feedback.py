@@ -9,11 +9,13 @@ Simple par choix produit : une évaluation binaire (+1 / -1), pas d'étoiles.
 """
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
+from sqlalchemy.exc import IntegrityError
 
 from jenny.api.dependencies import CurrentUser, DbSession
 from jenny.core.logging import get_logger
@@ -30,7 +32,8 @@ router = APIRouter(prefix="/feedback", tags=["feedback"])
 
 class FeedbackPayload(BaseModel):
     message_id: UUID
-    rating: int = Field(..., description="+1 (pouce haut) ou -1 (pouce bas)")
+    # Contraint dans le schéma (et donc l'OpenAPI) plutôt que revalidé à la main.
+    rating: Literal[1, -1] = Field(..., description="+1 (pouce haut) ou -1 (pouce bas)")
     comment: str | None = Field(default=None, max_length=1000)
 
 
@@ -51,6 +54,38 @@ class FeedbackMetrics(BaseModel):
     recent_comments: list[dict]  # derniers commentaires négatifs (à améliorer)
 
 
+# ── Agrégation partagée ──
+
+
+async def satisfaction_counts(db, business_id: UUID) -> tuple[int, int, int, int, int, float]:
+    """Compteurs de satisfaction d'un business, en UN SEUL scan de la table.
+
+    Renvoie ``(total, positifs, négatifs, positifs_7j, négatifs_7j, pct)``.
+    Source de vérité UNIQUE du « % de satisfaction » : utilisée par
+    ``/feedback/metrics`` (carte Satisfaction) ET ``/jenny/metrics`` (page
+    Efficacité) pour que les deux surfaces affichent le même chiffre.
+    """
+    since = datetime.now(UTC) - timedelta(days=7)
+
+    def _count_if(cond) -> object:
+        return func.coalesce(func.sum(case((cond, 1), else_=0)), 0)
+
+    counts = (
+        await db.execute(
+            select(
+                func.count(),
+                _count_if(MessageFeedback.rating == 1),
+                _count_if(MessageFeedback.rating == -1),
+                _count_if((MessageFeedback.rating == 1) & (MessageFeedback.created_at >= since)),
+                _count_if((MessageFeedback.rating == -1) & (MessageFeedback.created_at >= since)),
+            ).where(MessageFeedback.business_id == business_id)
+        )
+    ).one()
+    total, positive, negative, pos_7, neg_7 = (int(c or 0) for c in counts)
+    pct = round(100.0 * positive / total, 1) if total else 0.0
+    return total, positive, negative, pos_7, neg_7, pct
+
+
 # ── Routes ──
 
 
@@ -59,16 +94,19 @@ async def submit_feedback(
     payload: FeedbackPayload, db: DbSession, principal: CurrentUser
 ) -> FeedbackState:
     """Enregistre ou met à jour l'avis 👍/👎 d'un message (réponse de Jenny)."""
-    if payload.rating not in (1, -1):
-        raise HTTPException(status_code=422, detail="rating doit valoir +1 ou -1.")
-
     msg = await db.get(Message, payload.message_id)
     if msg is None:
         raise HTTPException(status_code=404, detail="Message introuvable.")
 
     # Sécurité multi-tenant : on n'évalue que les messages de son propre business.
-    if principal.business_id is not None and msg.business_id != principal.business_id:
+    # Un principal sans business n'a de périmètre sur aucun message.
+    if principal.business_id is None or msg.business_id != principal.business_id:
         raise HTTPException(status_code=403, detail="Message hors de votre périmètre.")
+
+    # Seules les réponses de Jenny (sortantes) sont évaluables : noter un message
+    # client fausserait la satisfaction (responses_total ne compte que l'outbound).
+    if msg.direction != "outbound":
+        raise HTTPException(status_code=422, detail="Seules les réponses de Jenny sont évaluables.")
 
     existing = await db.scalar(
         select(MessageFeedback).where(MessageFeedback.message_id == payload.message_id)
@@ -84,8 +122,26 @@ async def submit_feedback(
         db.add(existing)
     else:
         existing.rating = payload.rating
-        existing.comment = payload.comment
-    await db.commit()
+        # Un simple re-clic 👍/👎 (sans texte) ne doit pas effacer un commentaire
+        # déjà saisi — on n'écrase que si un commentaire est explicitement fourni.
+        if payload.comment is not None:
+            existing.comment = payload.comment
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Deux clics quasi simultanés sur le même message : les deux requêtes
+        # passent le SELECT sans trouver de ligne, la seconde viole la contrainte
+        # unique. On rejoue en UPDATE sur la ligne gagnante.
+        await db.rollback()
+        existing = await db.scalar(
+            select(MessageFeedback).where(MessageFeedback.message_id == payload.message_id)
+        )
+        if existing is None:  # pragma: no cover - course perdue ET ligne disparue
+            raise HTTPException(status_code=409, detail="Conflit d'écriture, réessayez.") from None
+        existing.rating = payload.rating
+        if payload.comment is not None:
+            existing.comment = payload.comment
+        await db.commit()
     logger.info("feedback.submit", message_id=str(payload.message_id), rating=payload.rating)
     return FeedbackState(
         message_id=payload.message_id, rating=existing.rating, comment=existing.comment
@@ -93,16 +149,23 @@ async def submit_feedback(
 
 
 @router.get("/message/{message_id}", response_model=FeedbackState)
-async def get_message_feedback(message_id: UUID, db: DbSession, principal: CurrentUser) -> FeedbackState:
+async def get_message_feedback(
+    message_id: UUID, db: DbSession, principal: CurrentUser
+) -> FeedbackState:
     """Renvoie l'avis courant pour un message (ou rating=None si aucun).
 
     Scopé au business courant : on ne lit jamais l'avis d'un message appartenant
-    à une autre entreprise (isolation multi-tenant).
+    à une autre entreprise (isolation multi-tenant). Même règle que le POST :
+    un principal sans business n'a de périmètre sur aucun message.
     """
-    query = select(MessageFeedback).where(MessageFeedback.message_id == message_id)
-    if principal.business_id is not None:
-        query = query.where(MessageFeedback.business_id == principal.business_id)
-    fb = await db.scalar(query)
+    if principal.business_id is None:
+        raise HTTPException(status_code=403, detail="Message hors de votre périmètre.")
+    fb = await db.scalar(
+        select(MessageFeedback).where(
+            MessageFeedback.message_id == message_id,
+            MessageFeedback.business_id == principal.business_id,
+        )
+    )
     if fb is None:
         return FeedbackState(message_id=message_id, rating=None)
     return FeedbackState(message_id=message_id, rating=fb.rating, comment=fb.comment)
@@ -114,28 +177,26 @@ async def feedback_metrics(db: DbSession, principal: CurrentUser) -> FeedbackMet
     bid = principal.business_id
     if bid is None:
         return FeedbackMetrics(
-            total_rated=0, positive=0, negative=0, satisfaction_pct=0.0,
-            coverage_rated=0, responses_total=0,
-            last_7_days={"positive": 0, "negative": 0}, recent_comments=[],
+            total_rated=0,
+            positive=0,
+            negative=0,
+            satisfaction_pct=0.0,
+            coverage_rated=0,
+            responses_total=0,
+            last_7_days={"positive": 0, "negative": 0},
+            recent_comments=[],
         )
 
-    base = select(func.count()).select_from(MessageFeedback).where(
-        MessageFeedback.business_id == bid
+    total, positive, negative, pos_7, neg_7, satisfaction = await satisfaction_counts(db, bid)
+
+    responses_total = (
+        await db.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(Message.business_id == bid, Message.direction == "outbound")
+        )
+        or 0
     )
-    total = await db.scalar(base) or 0
-    positive = await db.scalar(base.where(MessageFeedback.rating == 1)) or 0
-    negative = await db.scalar(base.where(MessageFeedback.rating == -1)) or 0
-
-    responses_total = await db.scalar(
-        select(func.count()).select_from(Message).where(
-            Message.business_id == bid, Message.direction == "outbound"
-        )
-    ) or 0
-
-    since = datetime.now(UTC) - timedelta(days=7)
-    recent = base.where(MessageFeedback.created_at >= since)
-    pos_7 = await db.scalar(recent.where(MessageFeedback.rating == 1)) or 0
-    neg_7 = await db.scalar(recent.where(MessageFeedback.rating == -1)) or 0
 
     # Dernières réponses jugées « à revoir » : on renvoie le contexte complet
     # (question du client + réponse de Jenny + commentaire) pour que le gérant
@@ -177,7 +238,6 @@ async def feedback_metrics(db: DbSession, principal: CurrentUser) -> FeedbackMet
             }
         )
 
-    satisfaction = round(100.0 * positive / total, 1) if total else 0.0
     return FeedbackMetrics(
         total_rated=total,
         positive=positive,

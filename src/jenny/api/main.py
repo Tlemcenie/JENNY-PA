@@ -61,22 +61,26 @@ logger = get_logger(__name__)
 
 
 async def _warmup_models() -> None:
-    """Précharge les modèles Ollama (chat + embeddings) au démarrage.
+    """Précharge LLM local et embedder RAG au démarrage (tâche de fond).
 
     Évite le cold-start sur le PREMIER message reçu (WhatsApp, etc.) : le modèle
-    est déjà chargé en mémoire, la réponse part « au tac au tac ». Sans objet
-    pour les providers cloud (Groq/OpenAI). Best-effort : n'interrompt jamais.
+    est déjà chargé en mémoire, la réponse part « au tac au tac ». Deux cas
+    indépendants :
+    - LLM Ollama : uniquement pour le provider « llama » (sans objet Groq/OpenAI) ;
+    - embedder RAG : le sentence-transformer (défaut, in-process) met plusieurs
+      secondes à charger torch + poids → à chauffer QUEL QUE SOIT le provider
+      LLM, notamment en prod Cloud Run (Groq). Best-effort : n'interrompt jamais.
     """
     settings = get_settings()
-    if settings.llm_provider != "llama":
-        return
     try:
-        from jenny.llm.providers import get_default_llm_provider
+        if settings.llm_provider == "llama":
+            from jenny.llm.providers import get_default_llm_provider
+
+            provider = get_default_llm_provider()
+            if provider is not None:
+                await provider.generate("ping", max_tokens=1)
         from jenny.rag.embeddings import get_default_embedder
 
-        provider = get_default_llm_provider()
-        if provider is not None:
-            await provider.generate("ping", max_tokens=1)
         await get_default_embedder().embed_text("ping")
         logger.info("jenny.llm_warmup.done", model=settings.llm_model)
     except Exception as exc:
@@ -177,9 +181,7 @@ def create_app() -> FastAPI:
     app.include_router(api_keys.router, prefix="/api/v1", tags=["api-keys"])
     app.include_router(appointments.router, prefix="/api/v1", tags=["appointments"])
     app.include_router(prestations.router, prefix="/api/v1", tags=["prestations"])
-    app.include_router(
-        pending_questions.router, prefix="/api/v1", tags=["pending-questions"]
-    )
+    app.include_router(pending_questions.router, prefix="/api/v1", tags=["pending-questions"])
     app.include_router(admin.router, prefix="/api/v1", tags=["admin"])
     app.include_router(search.router, prefix="/api/v1", tags=["search"])
     app.include_router(public_booking.router, prefix="/api/v1", tags=["public-booking"])

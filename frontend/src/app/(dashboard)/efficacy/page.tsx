@@ -339,7 +339,7 @@ export default function EfficacyPage() {
             tint="#10B981"
             label="Satisfaction"
             value={
-              metrics.satisfaction.total_rated === 0 ? (
+              !metrics.satisfaction || metrics.satisfaction.total_rated === 0 ? (
                 "—"
               ) : (
                 <>
@@ -348,7 +348,7 @@ export default function EfficacyPage() {
               )
             }
             sub={
-              metrics.satisfaction.total_rated === 0
+              !metrics.satisfaction || metrics.satisfaction.total_rated === 0
                 ? "aucun avis"
                 : `${metrics.satisfaction.positive} 👍 · ${metrics.satisfaction.negative} 👎`
             }

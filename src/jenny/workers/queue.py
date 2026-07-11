@@ -34,7 +34,14 @@ async def close_arq_pool() -> None:
 
 
 async def enqueue_normalize_message(message_id: str) -> None:
-    """Enfile la normalisation d'un message après ingestion."""
+    """Enfile la normalisation d'un message après ingestion.
+
+    Sans Redis configuré (mode démo cloud), il n'y a ni file ni worker : on
+    saute proprement au lieu de logger une erreur par webhook entrant.
+    """
+    if not get_settings().redis_url:
+        logger.debug("arq.enqueue.skipped_no_redis", message_id=message_id)
+        return
     pool = await get_arq_pool()
     await pool.enqueue_job("normalize_message", message_id)
     ARQ_JOBS.labels(job_name="normalize_message").inc()

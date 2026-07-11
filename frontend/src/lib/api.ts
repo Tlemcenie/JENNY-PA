@@ -268,10 +268,6 @@ export async function submitFeedback(
   });
 }
 
-export async function getMessageFeedback(messageId: string): Promise<FeedbackState> {
-  return request<FeedbackState>(`/api/v1/feedback/message/${messageId}`);
-}
-
 export async function getFeedbackMetrics(): Promise<FeedbackMetrics> {
   return request<FeedbackMetrics>("/api/v1/feedback/metrics");
 }

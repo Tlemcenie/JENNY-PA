@@ -13,12 +13,12 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from jenny.api.dependencies import CurrentUser, DbSession
+from jenny.api.routes.feedback import satisfaction_counts
 from jenny.core.logging import get_logger
 from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.knowledge_gap import KnowledgeGap
 from jenny.domain.models.message import Message
-from jenny.domain.models.message_feedback import MessageFeedback
 
 logger = get_logger(__name__)
 
@@ -104,15 +104,14 @@ async def jenny_metrics(db: DbSession, principal: CurrentUser) -> JennyMetrics:
         )
     ).all()
 
-    # Satisfaction : agrégée depuis les 👍/👎 laissés sur les réponses de Jenny.
-    fb_pos = await _count(MessageFeedback, MessageFeedback.rating == 1)
-    fb_neg = await _count(MessageFeedback, MessageFeedback.rating == -1)
-    fb_total = fb_pos + fb_neg
+    # Satisfaction : agrégée depuis les 👍/👎 — MÊME calcul que /feedback/metrics
+    # (helper partagé), pour que dashboard et page Efficacité affichent le même %.
+    fb_total, fb_pos, fb_neg, _pos7, _neg7, fb_pct = await satisfaction_counts(db, bid)
     satisfaction = SatisfactionBreakdown(
         total_rated=fb_total,
         positive=fb_pos,
         negative=fb_neg,
-        satisfaction_pct=round(100.0 * fb_pos / fb_total, 1) if fb_total else 0.0,
+        satisfaction_pct=fb_pct,
     )
 
     return JennyMetrics(

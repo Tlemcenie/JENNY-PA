@@ -78,6 +78,9 @@ case "$cmd" in
     echo "▶ Suppression de Redis ($REDIS)…"
     gcloud redis instances delete "$REDIS" --region="$REGION" \
       --project "$PROJECT" --quiet
+    echo "▶ Nettoyage de JENNY_REDIS_URL sur l'API (sinon /ready resterait degraded)…"
+    gcloud run services update "$API" --region="$REGION" --project "$PROJECT" \
+      --update-env-vars="JENNY_REDIS_URL=" --quiet
     echo "✅ Redis supprimé. L'app bascule en mémoire automatiquement."
     ;;
 
