@@ -94,14 +94,24 @@ class BookAppointmentDBAction(BaseAction):
             if day is None:
                 return {"success": False, "message": "Date non comprise.", "missing": ["date"]}
 
-            # Fermeture exceptionnelle (congé/férié) → on propose le prochain jour ouvert.
-            if await is_day_closed(db, bid, day):
+            # Fermeture (congé/férié OU jour de fermeture hebdo) → prochain jour ouvert.
+            if await is_day_closed(db, bid, day, business=business):
                 alts = await next_free_slots(db, bid, duration, from_day=day)
+                if not alts:
+                    # Fermé ET rien à proposer ensuite (longue fermeture, agenda
+                    # saturé…) : même traitement que « salon complet » → Jenny
+                    # proposera la liste d'attente.
+                    return {
+                        "success": False,
+                        "no_slots": True,
+                        "service": service_name,
+                        "message": "Aucun créneau disponible prochainement.",
+                    }
                 return {
                     "success": False,
                     "closed": True,
                     "service": service_name,
-                    "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
+                    "alternatives_text": format_slots_fr(alts, tz, with_day=True),
                     "message": "Le salon est fermé ce jour-là.",
                 }
 

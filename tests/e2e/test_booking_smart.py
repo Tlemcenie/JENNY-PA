@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
@@ -51,6 +52,18 @@ def _tomorrow_word() -> str:
     return "demain"
 
 
+# « demain » est interprété par le moteur dans le fuseau du salon (Europe/Paris) :
+# les RDV seedés doivent l'être dans le MÊME fuseau, sinon la fenêtre 00h-02h
+# Paris (où date UTC ≠ date Paris) fait tomber le seed la veille du jour réservé.
+_PARIS = ZoneInfo("Europe/Paris")
+
+
+def _tomorrow_paris_at(hour: int) -> datetime:
+    """Demain à ``hour`` h, heure de Paris, converti en UTC."""
+    local = datetime.now(_PARIS) + timedelta(days=1)
+    return local.replace(hour=hour, minute=0, second=0, microsecond=0).astimezone(UTC)
+
+
 class TestMultiPrestation:
     @pytest.mark.asyncio
     async def test_two_services_combined(self, db_tables: None) -> None:
@@ -73,9 +86,8 @@ class TestAntiDouble:
             cust = Customer(business_id=biz.id, full_name="Léa")
             s.add(cust)
             await s.flush()
-            start = datetime.now(UTC) + timedelta(days=1, hours=1)
-            # Place le RDV existant à 10h demain.
-            tz_start = start.replace(hour=10, minute=0, second=0, microsecond=0)
+            # Place le RDV existant à 10h demain (heure de Paris, comme « demain »).
+            tz_start = _tomorrow_paris_at(10)
             s.add(Appointment(
                 business_id=biz.id, customer_id=cust.id, title="Coupe", channel="chat",
                 start_at=tz_start, end_at=tz_start + timedelta(minutes=30),
@@ -97,7 +109,7 @@ class TestAntiDouble:
             cust = Customer(business_id=biz.id, full_name="Léa")
             s.add(cust)
             await s.flush()
-            start = (datetime.now(UTC) + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+            start = _tomorrow_paris_at(10)
             s.add(Appointment(
                 business_id=biz.id, customer_id=cust.id, title="Coupe", channel="chat",
                 start_at=start, end_at=start + timedelta(minutes=30),

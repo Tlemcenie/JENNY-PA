@@ -188,12 +188,65 @@ KNOWLEDGE_SEEKING_INTENTS = frozenset(
 # ⚠️ Calibré sur l'échelle BLENDÉE du retriever (0.7·cosinus mpnet + 0.3·lexical,
 # cf. rag/rerank.py) — recalibrer si le modèle d'embeddings ou le blend change,
 # et RÉ-INDEXER la base (scripts/reindex_kb.py) à chaque changement de modèle.
-# Mesuré le 2026-07-11 sur la KB de démo (paraphrase-multilingual-mpnet-base-v2) :
-# question DONT la réponse est en base → 0.36 à 0.67 ; question hors-sujet
-# (pneus, piano, chambres d'hôtel…) → ≤ 0.36. Le seuil 0.38 rejette tout le
-# hors-sujet mesuré → Jenny propose de vérifier au lieu d'INVENTER un fait
-# absent de la base. Mieux vaut différer que mentir au client.
-GAP_SCORE_FLOOR = 0.38
+# Mesuré les 2026-07-11/12 sur la KB de démo (paraphrase-multilingual-mpnet-base-v2,
+# échelle BLENDÉE du retriever partagé — 0.7·cos + 0.3·lexical) :
+# question DONT la réponse est en base → 0.457 à 0.674 ; hors-sujet franc
+# (pneus, piano…) → ≤ 0.36 ; « même commerce mais service ABSENT » (extensions,
+# épilation, permis moto…) → 0.32 à 0.52. Les bandes se CHEVAUCHENT : aucun
+# scalaire ne sépare. D'où trois étages :
+#   < FLOOR            → lacune ;
+#   [FLOOR, STRONG)    → bande ambiguë : lacune si un mot DISTINCTIF de la
+#                        question (« moto », « extensions ») est absent des
+#                        documents (_subject_uncovered) ;
+#   ≥ STRONG           → réponse considérée présente.
+# Mieux vaut différer que mentir au client.
+# NB : 0.40 (et pas plus haut) car les KB à documents COURTS (une ligne, comme
+# celles du banc d'essai) donnent des cosinus plus bas à question égale — un
+# floor à 0.45 y créait de fausses lacunes (« balayage 80€ » présent, score 0.41).
+# La bande + veto de sujet couvre les négatifs durs au-dessus de 0.40.
+GAP_SCORE_FLOOR = 0.40
+GAP_SCORE_STRONG = 0.60
+
+# Mots non discriminants pour le veto de sujet : outils grammaticaux, verbes
+# d'offre génériques, et vocabulaire temporel (souvent absent du texte de la
+# base alors que la réponse y est — « samedi matin » vs « 9h30-19h00 »).
+_SUBJECT_STOPWORDS = frozenset(
+    {
+        "vous", "nous", "votre", "notre", "vos", "leurs", "elle", "elles",
+        "avec", "pour", "dans", "chez", "cette", "cela", "quoi", "quel",
+        "quelle", "quels", "quelles", "comment", "combien", "quand", "est",
+        "sont", "etes", "êtes", "avez", "aussi", "bien", "tout", "toute",
+        "faites", "faire", "posez", "poser", "proposez", "proposer",
+        "vendez", "vendre", "utilisez", "utiliser", "prenez", "prendre",
+        "peut", "peux", "pouvez", "possible", "besoin", "savoir", "voudrais",
+        "matin", "soir", "midi", "apres", "après", "week", "weekend",
+        "aujourd", "demain", "semaine", "heure", "heures", "jour", "jours",
+        "prix", "tarif", "tarifs", "combien", "coute", "coûte",
+        "jusqu", "jusque", "depuis", "entre", "pendant", "chaque", "encore",
+        "servez", "servons", "ouvrez", "fermez", "restez", "ouvert", "ouverts",
+        "ouverte", "ouvertes",
+    }
+)
+
+
+def _subject_uncovered(message: str, docs: list[dict]) -> bool:
+    """Vrai si un mot distinctif de la question est ABSENT des documents.
+
+    Détecte le cas « même commerce mais service absent » : « posez-vous des
+    extensions ? » matche sémantiquement un document « prestations : coupe,
+    coloration… » (score moyen) alors que le SUJET demandé n'y figure pas.
+    Comparaison par PRÉFIXE (4 lettres) : tolère pluriels, élisions et
+    conjugaisons (« servez » ↔ « servons », « colorations » ↔ « coloration »).
+    """
+    tokens = {
+        t
+        for t in re.findall(r"[a-zà-ÿ0-9]+", (message or "").lower())
+        if len(t) >= 4 and t not in _SUBJECT_STOPWORDS
+    }
+    if not tokens:
+        return False
+    blob = " ".join((d.get("content") or "").lower() for d in docs[:3])
+    return any(t[:4] not in blob for t in tokens)
 
 
 def _action_has_concrete_result(action_result: dict | None) -> bool:
@@ -215,12 +268,14 @@ def is_knowledge_gap(
     intent: str,
     documents: list[dict] | None,
     action_result: dict | None,
+    message: str = "",
 ) -> bool:
     """Détermine si Jenny n'a aucune réponse fiable à fournir.
 
     Vrai lorsque l'intention attend une information, qu'aucune action n'a produit
     de résultat concret, et que la base de connaissances ne renvoie rien de
-    suffisamment pertinent (vide ou scores trop bas).
+    suffisamment pertinent : score sous le plancher, ou score moyen SANS que le
+    sujet demandé apparaisse dans les documents (cf. ``_subject_uncovered``).
     """
     if intent not in KNOWLEDGE_SEEKING_INTENTS:
         return False
@@ -230,7 +285,11 @@ def is_knowledge_gap(
     if not docs:
         return True
     top_score = max((d.get("score") or 0.0) for d in docs)
-    return top_score < GAP_SCORE_FLOOR
+    if top_score < GAP_SCORE_FLOOR:
+        return True
+    if top_score < GAP_SCORE_STRONG and _subject_uncovered(message, docs):
+        return True
+    return False
 
 
 # Formules de « je n'ai pas la réponse, je vérifie » : le signal le plus fiable
@@ -242,7 +301,11 @@ _DEFLECTION_RE = re.compile(
     r"l['’]?[ée]quipe\s+(?:vous|te|pourra|reviendra|saura)|je\s+me\s+rapproche|"  # noqa: RUF001
     # Renvoyer vers l'équipe / son numéro est aussi une déflexion (= je n'ai pas l'info).
     r"contact\w*\s+(?:l['’]\s*|la\s+|notre\s+|directement\s+)*[ée]quipe|"  # noqa: RUF001
-    r"(?:leur|son)\s+num[ée]ro|num[ée]ro\s+de\s+t[ée]l[ée]phone",
+    r"(?:leur|son)\s+num[ée]ro|num[ée]ro\s+de\s+t[ée]l[ée]phone|"
+    # « contactez-nous directement / venez en boutique pour ça » = même aveu.
+    r"(?:nous|le)\s+contacter\s+directement|contacter\s+directement\s+(?:le|la|notre)|"
+    r"recommande\s+de\s+(?:nous\s+)?contacter|venir\s+dans\s+notre\s+[ée]tablissement|"
+    r"renseigner\s+aupr[èe]s",
     re.I,
 )
 

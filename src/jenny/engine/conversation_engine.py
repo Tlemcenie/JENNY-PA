@@ -78,9 +78,14 @@ _MGMT_RESCHED_RE = re.compile(
 _MGMT_CONFIRM_RE = re.compile(
     r"\bje\s+confirme|c['’]est\s+confirm|je\s+valide|je\s+maintiens", re.I  # noqa: RUF001
 )
-# Question qui porte sur le catalogue (prestations/tarifs) : couverte par le
-# catalogue injecté au prompt, donc jamais une « lacune de connaissance ».
-_CATALOG_TOPIC_RE = re.compile(r"prestation|tarif|prix|service|catalogue", re.I)
+# Question GÉNÉRIQUE sur le catalogue (« vos prestations », « la grille des
+# tarifs ») : couverte par le catalogue injecté au prompt, donc jamais une
+# « lacune de connaissance ». Volontairement étroit : « le prix du permis moto »
+# (service ABSENT du catalogue) doit rester une lacune à signaler au gérant.
+_CATALOG_TOPIC_RE = re.compile(
+    r"(?:vos|tes|les|des)\s+(?:prestations|tarifs|services|prix)\b|catalogue|grille\s+tarifaire",
+    re.I,
+)
 
 _AFFIRM_RE = re.compile(
     r"^\s*(oui|ouais|ok|d['’]accord|c['’]est\s+(?:bon|parfait)|[çc]a\s+me\s+va|"  # noqa: RUF001
@@ -609,6 +614,7 @@ class ConversationEngine:
             intent=intent,
             documents=state.retrieved_documents,
             action_result=state.action_result,
+            message=request.message_text,
         )
         # Le catalogue de prestations EST dans le prompt : une question de prix/devis
         # — ou toute question qui PARLE des prestations/tarifs (« infos sur vos

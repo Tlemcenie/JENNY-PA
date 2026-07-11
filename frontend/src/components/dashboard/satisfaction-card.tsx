@@ -15,13 +15,12 @@ import { truncate } from "@/lib/utils";
 export function SatisfactionCard({ className }: { className?: string }) {
   const [data, setData] = useState<FeedbackMetrics | null>(null);
   const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let alive = true;
     getFeedbackMetrics()
       .then((m) => alive && setData(m))
-      .catch(() => alive && setFailed(true))
+      .catch(() => {}) // data reste null → état « indisponible »
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
@@ -38,7 +37,7 @@ export function SatisfactionCard({ className }: { className?: string }) {
     );
   }
 
-  if (failed || !data) {
+  if (!data) {
     return (
       <Card className={`p-6 ${className ?? ""}`}>
         <div className="flex items-center gap-2" style={{ color: "var(--text-2)" }}>

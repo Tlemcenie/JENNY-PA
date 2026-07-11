@@ -61,7 +61,12 @@ class EvalRetriever:
             for c, v, m in self._docs
         ]
         scored.sort(key=lambda h: h.score, reverse=True)
-        return scored[:top_k]
+        # MÊME échelle que la prod : re-ranking lexical partagé (rag/rerank.py).
+        # Sans lui, les scores d'éval (cosinus brut) ne vivent pas sur l'échelle
+        # sur laquelle GAP_SCORE_FLOOR/STRONG sont calibrés → banc d'essai faussé.
+        from jenny.rag.rerank import rerank
+
+        return rerank(query, scored, top_k)
 
 
 class EvalRouter(AgentRouter):
