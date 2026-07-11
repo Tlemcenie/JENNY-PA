@@ -22,6 +22,7 @@ from jenny.actions.handlers.manage_appointment import ManageAppointmentAction
 from jenny.actions.handlers.order_check import CheckOrderAction
 from jenny.actions.handlers.process_payment import ProcessPaymentAction
 from jenny.actions.handlers.set_customer_name import SetCustomerNameAction
+from jenny.actions.handlers.set_customer_phone import SetCustomerPhoneAction
 from jenny.actions.registry import ActionRegistry
 from jenny.agents.action_agent import ActionAgent
 from jenny.agents.fallback_agent import FallbackAgent
@@ -105,6 +106,7 @@ def build_action_registry(
     registry.register(JoinWaitlistAction(), intents=["join_waitlist"])
     # Enregistrement du nom du client (après « c'est à quel nom ? »).
     registry.register(SetCustomerNameAction(), intents=["set_customer_name"])
+    registry.register(SetCustomerPhoneAction(), intents=["set_customer_phone"])
     registry.register(CreateTicketAction(), intents=["complaint", "support"])
     registry.register(ProcessPaymentAction(), intents=["payment"])
     registry.register(GenerateQuoteAction(), intents=["quote"])

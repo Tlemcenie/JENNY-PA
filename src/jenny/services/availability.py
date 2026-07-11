@@ -79,8 +79,20 @@ def _candidate_slots(business: Business, day: date, duration_min: int) -> list[d
     return out
 
 
-async def is_day_closed(db: AsyncSession, business_id: UUID, day: date) -> bool:
-    """Vrai si le salon est fermé exceptionnellement ce jour-là (congé, férié…)."""
+async def is_day_closed(
+    db: AsyncSession,
+    business_id: UUID,
+    day: date,
+    *,
+    business: Business | None = None,
+) -> bool:
+    """Vrai si le salon est fermé ce jour-là.
+
+    Couvre les DEUX cas : fermeture exceptionnelle (congé, férié…) ET fermeture
+    hebdomadaire (pas de fenêtre d'ouverture ce jour de la semaine — ex. lundi).
+    Sans cette seconde branche, « déplace mon RDV à lundi » réservait un jour
+    où le salon n'ouvre jamais.
+    """
     from jenny.domain.models.business_closure import BusinessClosure
 
     try:
@@ -95,10 +107,20 @@ async def is_day_closed(db: AsyncSession, business_id: UUID, day: date) -> bool:
                 .limit(1)
             )
         ).first()
-        return row is not None
+        if row is not None:
+            return True
     except Exception as exc:  # pragma: no cover - dépend de l'environnement DB
         logger.warning("availability.closure_check_error", error=str(exc))
         return False
+
+    # Fermeture hebdomadaire : aucune fenêtre d'ouverture pour ce jour de semaine.
+    if business is None:
+        from jenny.domain.models.business import Business as _Business
+
+        business = await db.get(_Business, business_id)
+    hours = (business.business_hours if business else None) or _DEFAULT_HOURS
+    window = hours.get(_DAY_KEYS[day.weekday()])
+    return not (window and len(window) == 2)
 
 
 async def free_slots_for_day(

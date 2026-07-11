@@ -82,6 +82,9 @@ class ConversationState:
     awaiting_waitlist: bool = False
     # RDV pris pour un client sans nom → le prochain message est son NOM à enregistrer.
     awaiting_name: bool = False
+    # Fiche créée sans téléphone → le prochain message contenant un numéro est
+    # son TÉLÉPHONE de rappel à enregistrer.
+    awaiting_phone: bool = False
 
     # ── Entités / Slots ──
     slots: dict[str, ExtractedSlot] = field(default_factory=dict)
@@ -210,6 +213,7 @@ class ConversationState:
             "awaiting_confirmation": self.awaiting_confirmation,
             "awaiting_waitlist": self.awaiting_waitlist,
             "awaiting_name": self.awaiting_name,
+            "awaiting_phone": self.awaiting_phone,
             "slots": {
                 k: {
                     "name": v.name,
@@ -251,6 +255,7 @@ class ConversationState:
             awaiting_confirmation=data.get("awaiting_confirmation", False),
             awaiting_waitlist=data.get("awaiting_waitlist", False),
             awaiting_name=data.get("awaiting_name", False),
+            awaiting_phone=data.get("awaiting_phone", False),
             phase=ConversationPhase(data.get("phase", "greeting")),
             turn_count=data.get("turn_count", 0),
             retrieved_documents=data.get("retrieved_documents", []),

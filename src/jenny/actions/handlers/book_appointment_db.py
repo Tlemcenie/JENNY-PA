@@ -135,6 +135,18 @@ class BookAppointmentDBAction(BaseAction):
             start = local_naive.replace(tzinfo=tz).astimezone(UTC)
             end = start + timedelta(minutes=duration)
 
+            # Créneau déjà passé (ex. « samedi 10h » demandé le samedi soir) : on ne
+            # réserve JAMAIS dans le passé — on propose la suite réelle du planning.
+            if start <= datetime.now(UTC):
+                alts = await next_free_slots(db, bid, duration, from_day=datetime.now(tz).date())
+                return {
+                    "success": False,
+                    "past": True,
+                    "service": service_name,
+                    "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
+                    "message": "Ce créneau est déjà passé.",
+                }
+
             clash = (
                 await db.execute(
                     select(Appointment.id).where(
@@ -270,8 +282,10 @@ class BookAppointmentDBAction(BaseAction):
             await db.commit()
             await db.refresh(appt)
 
-            # ── Nom manquant (ex. WhatsApp sans nom de profil) → on le demandera ──
-            ask_name = False
+            # ── Nom manquant → on le demandera au tour suivant ──
+            # Deux cas : client existant sans nom (WhatsApp sans profil), ou chat
+            # anonyme (aucun client rattaché) — le salon doit pouvoir rappeler.
+            ask_name = customer_id is None
             if customer_id:
                 cust = await db.get(Customer, customer_id)
                 if cust is not None and not (cust.full_name or "").strip():

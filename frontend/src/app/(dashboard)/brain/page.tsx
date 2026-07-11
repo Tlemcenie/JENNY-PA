@@ -61,9 +61,9 @@ interface Rule {
 const DEFAULT_SLIDERS: Sliders = { formel: 70, concision: 45, vente: 60 };
 const DEFAULT_RULES: Rule[] = [
   { label: "Toujours répondre en français sauf si le client écrit en anglais", on: true },
-  { label: "Ne jamais promettre une livraison < 48h", on: true },
-  { label: "Toujours proposer un produit similaire si rupture", on: true },
-  { label: "Transférer à un humain si demande de remboursement > 200€", on: true },
+  { label: "Ne jamais promettre un créneau sans vérifier l'agenda", on: true },
+  { label: "Toujours proposer une alternative si le créneau est pris", on: true },
+  { label: "Transférer à un humain si réclamation sérieuse", on: true },
   { label: "Ne jamais mentionner les concurrents", on: false },
 ];
 
@@ -102,12 +102,13 @@ export default function BrainPage() {
   const [tone, setTone] = useState<ToneId>("cool");
   const [sliders, setSliders] = useState<Sliders>(DEFAULT_SLIDERS);
   const [tutoiement, setTutoiement] = useState(true);
+  // Vocabulaire par défaut ADAPTÉ AU MÉTIER (ces mots sont injectés dans les
+  // prompts de Jenny : un vocabulaire hors-sujet fuit dans ses réponses).
   const [vocab, setVocab] = useState<string[]>([
-    "l'atelier",
-    "maison",
-    "cuir tannage végétal",
-    "pièce unique",
-    "fait main",
+    "le salon",
+    "prestation",
+    "diagnostic offert",
+    "soin sur-mesure",
   ]);
   const [vocabDraft, setVocabDraft] = useState("");
 

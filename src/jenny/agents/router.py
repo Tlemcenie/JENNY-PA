@@ -51,6 +51,7 @@ INTENT_AGENT_MAP: dict[str, str] = {
     "manage_appointment": "action",
     "join_waitlist": "action",
     "set_customer_name": "action",
+    "set_customer_phone": "action",
     "complaint": "faq",
     "faq": "faq",
     "escalation": "escalation",

@@ -163,8 +163,32 @@ async def _handle_report(db: AsyncSession, bid: UUID) -> dict:
     msg = "\n".join(parts)
     if upcoming == 0:
         msg = "Ton agenda est vide pour le moment — aucun rendez-vous à venir."
-    # Le suivi des paiements n'est pas encore en place (hors périmètre actuel).
-    msg += "\n\n(Le suivi des paiements arrivera plus tard.)"
+
+    # Acomptes anti-no-show : le VRAI suivi des paiements (PaymentRecord).
+    from jenny.domain.models.payment_record import PaymentRecord
+
+    async def _dep(status: str) -> tuple[int, int]:
+        row = (
+            await db.execute(
+                select(
+                    func.count(PaymentRecord.id),
+                    func.coalesce(func.sum(PaymentRecord.amount_minor), 0),
+                ).where(
+                    PaymentRecord.business_id == bid,
+                    PaymentRecord.status == status,
+                    PaymentRecord.order_reference.like("acompte:%"),
+                )
+            )
+        ).one()
+        return int(row[0] or 0), int(row[1] or 0)
+
+    dep_pending_n, dep_pending_cents = await _dep("pending")
+    dep_paid_n, dep_paid_cents = await _dep("paid")
+    if dep_pending_n or dep_paid_n:
+        msg += (
+            f"\n• Acomptes : {dep_paid_n} encaissé(s) ({dep_paid_cents / 100:.0f}€), "
+            f"{dep_pending_n} en attente ({dep_pending_cents / 100:.0f}€)"
+        )
     return {
         "response": msg,
         "action": "report",
@@ -174,6 +198,10 @@ async def _handle_report(db: AsyncSession, bid: UUID) -> dict:
             "upcoming": upcoming,
             "confirmed": confirmed,
             "scheduled": scheduled,
+            "deposits_paid": dep_paid_n,
+            "deposits_paid_eur": dep_paid_cents / 100,
+            "deposits_pending": dep_pending_n,
+            "deposits_pending_eur": dep_pending_cents / 100,
         },
     }
 

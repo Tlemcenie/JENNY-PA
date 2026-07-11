@@ -41,12 +41,19 @@ class SetCustomerNameAction(BaseAction):
     async def execute(self, params: dict) -> dict:
         business_id = params.get("business_id")
         customer_id = params.get("customer_id")
+        appointment_id = params.get("appointment_id")
         raw = params.get("name") or ""
         clean = _clean_name(raw)
-        if not business_id or not customer_id or len(clean) < 2:
+        if not business_id or len(clean) < 2 or not (customer_id or appointment_id):
             return {"success": False, "named": False}
         try:
-            return await self._save(UUID(str(customer_id)), clean)
+            if customer_id:
+                return await self._save(UUID(str(customer_id)), clean)
+            # Chat anonyme : le RDV vient d'être pris SANS client — on crée la fiche
+            # avec le nom donné et on la rattache au rendez-vous de la conversation.
+            return await self._create_and_attach(
+                UUID(str(business_id)), UUID(str(appointment_id)), clean
+            )
         except Exception as exc:  # pragma: no cover - dépend de l'environnement DB
             logger.error("action.set_name.error", error=str(exc))
             return {"success": False, "named": False}
@@ -63,5 +70,33 @@ class SetCustomerNameAction(BaseAction):
             if not (cust.full_name or "").strip():
                 cust.full_name = clean
                 await db.commit()
+            ask_phone = not (cust.phone or "").strip()
         logger.info("action.set_name.ok", customer_id=str(customer_id))
-        return {"success": True, "named": True, "name": clean}
+        return {
+            "success": True,
+            "named": True,
+            "name": clean,
+            "ask_phone": ask_phone,
+            "customer_id": str(customer_id),
+        }
+
+    async def _create_and_attach(self, bid: UUID, appointment_id: UUID, clean: str) -> dict:
+        from jenny.db.session import async_session_factory
+        from jenny.domain.models.appointment import Appointment
+        from jenny.domain.models.customer import Customer
+
+        async with async_session_factory() as db:
+            appt = await db.get(Appointment, appointment_id)
+            if appt is None or appt.business_id != bid:
+                return {"success": False, "named": False}
+            if appt.customer_id is not None:
+                # Un client existe déjà (course rare) : on complète son nom si vide.
+                return await self._save(appt.customer_id, clean)
+            cust = Customer(business_id=bid, full_name=clean)
+            db.add(cust)
+            await db.flush()
+            appt.customer_id = cust.id
+            await db.commit()
+            cid = str(cust.id)
+        logger.info("action.set_name.created", customer_id=cid, appointment_id=str(appointment_id))
+        return {"success": True, "named": True, "name": clean, "ask_phone": True, "customer_id": cid}

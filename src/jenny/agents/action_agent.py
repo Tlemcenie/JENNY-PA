@@ -36,6 +36,7 @@ REQUIRED_SLOTS: dict[str, list[str]] = {
     "join_waitlist": [],
     # Enregistrement du nom : le nom est déjà dans le slot.
     "set_customer_name": [],
+    "set_customer_phone": [],
     "complaint": [],  # Pas de slot requis pour enregistrer
 }
 

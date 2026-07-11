@@ -78,6 +78,10 @@ _MGMT_RESCHED_RE = re.compile(
 _MGMT_CONFIRM_RE = re.compile(
     r"\bje\s+confirme|c['’]est\s+confirm|je\s+valide|je\s+maintiens", re.I  # noqa: RUF001
 )
+# Question qui porte sur le catalogue (prestations/tarifs) : couverte par le
+# catalogue injecté au prompt, donc jamais une « lacune de connaissance ».
+_CATALOG_TOPIC_RE = re.compile(r"prestation|tarif|prix|service|catalogue", re.I)
+
 _AFFIRM_RE = re.compile(
     r"^\s*(oui|ouais|ok|d['’]accord|c['’]est\s+(?:bon|parfait)|[çc]a\s+me\s+va|"  # noqa: RUF001
     r"carr[ée]ment|volontiers|parfait|nickel)\b",
@@ -174,6 +178,18 @@ _GREETING_WORDS = (
 )
 _GREETING_PREFIX_RE = re.compile(
     rf"^\s*\b(?:{_GREETING_WORDS})\b(?:[\s,;:!.…-]+\b(?:{_GREETING_WORDS})\b)*[\s,;:!.…-]*",
+    re.IGNORECASE,
+)
+
+# Politesse de fin masquant une question (« super merci. vous êtes ouverts
+# jusqu'à quelle heure ? » → closing, la question est écrasée). Même principe
+# que le démasquage de salutation, côté remerciements.
+_THANKS_WORDS = (
+    r"merci(?:\s+beaucoup|\s+bien)?|super|parfait|top|g[ée]nial|nickel|"
+    r"c['’]est\s+not[ée]|d['’]accord|ok(?:ay)?"
+)
+_THANKS_PREFIX_RE = re.compile(
+    rf"^\s*\b(?:{_THANKS_WORDS})\b(?:[\s,;:!.…-]+\b(?:{_THANKS_WORDS})\b)*[\s,;:!.…-]*",
     re.IGNORECASE,
 )
 
@@ -396,11 +412,29 @@ class ConversationEngine:
             and looks_like_name(request.message_text)
         )
         state.awaiting_name = False
+
+        # ── Capture du téléphone : Jenny vient de demander un numéro de rappel ──
+        from jenny.actions.handlers.set_customer_phone import extract_phone
+
+        _phone_in_msg = extract_phone(request.message_text)
+        phoning = (
+            getattr(state, "awaiting_phone", False)
+            and not joining_waitlist
+            and not mgmt_op
+            and not naming
+            and _phone_in_msg is not None
+        )
+        state.awaiting_phone = False
         if naming:
             intent = "set_customer_name"
             intent_confidence = 0.95
             state.pending_intent = None
             state.set_slot("name", request.message_text.strip())
+        elif phoning:
+            intent = "set_customer_phone"
+            intent_confidence = 0.95
+            state.pending_intent = None
+            state.set_slot("phone", _phone_in_msg)
         elif mgmt_op:
             intent = "manage_appointment"
             intent_confidence = 0.9
@@ -505,6 +539,22 @@ class ConversationEngine:
         # RDV pris pour un client sans nom → le prochain message sera son nom.
         if _ar.get("ask_name"):
             state.awaiting_name = True
+        # RDV pris dans CETTE conversation → on retient son id : le client anonyme
+        # du chat peut alors confirmer/annuler/déplacer SON rendez-vous, et le nom
+        # donné ensuite s'y rattache (fiche client créée à la volée).
+        if _ar.get("appointment_id"):
+            state.set_slot("appointment_id", str(_ar["appointment_id"]))
+        # Fiche client créée/complétée par set_customer_name : on adopte son id
+        # pour la suite de la conversation, et on demande le numéro si absent.
+        if _ar.get("named") and _ar.get("customer_id"):
+            try:
+                from uuid import UUID as _UUID
+
+                state.customer_id = _UUID(str(_ar["customer_id"]))
+            except (ValueError, TypeError):
+                pass
+        if _ar.get("ask_phone"):
+            state.awaiting_phone = True
 
         # ── Slot-filling prioritaire : une action attend une info manquante ──
         # (ex. RDV coiffeur sans la prestation/le jour/l'heure). Jenny la demande,
@@ -525,6 +575,13 @@ class ConversationEngine:
             # attend l'heure → on GARDE la main jusqu'à la réservation effective,
             # et l'action a déjà la bonne consigne (pas de clarification générique).
             state.pending_intent = "appointment"
+            needs_clarification = True
+            clarification_reason = "booking_in_progress"
+        elif intent == "manage_appointment" and not (state.action_result or {}).get("success"):
+            # Déplacement/annulation en cours (« vers quand ? », jour fermé, conflit…) :
+            # le prochain message (« lundi 14h ») complète CETTE opération au lieu de
+            # partir en fallback qui « confirmerait » verbalement sans rien faire.
+            state.pending_intent = "manage_appointment"
             needs_clarification = True
             clarification_reason = "booking_in_progress"
         else:
@@ -554,8 +611,14 @@ class ConversationEngine:
             action_result=state.action_result,
         )
         # Le catalogue de prestations EST dans le prompt : une question de prix/devis
-        # n'est donc PAS une lacune (Jenny doit citer le tarif, pas dire « je vérifie »).
-        if gap and intent in ("pricing", "quote") and state.business_catalog:
+        # — ou toute question qui PARLE des prestations/tarifs (« infos sur vos
+        # prestations » classé faq) — n'est donc PAS une lacune (Jenny doit citer le
+        # catalogue, pas dire « je vérifie », et le gérant ne doit pas voir de fausse
+        # « question sans réponse » dans sa page Apprentissage).
+        if gap and state.business_catalog and (
+            intent in ("pricing", "quote")
+            or _CATALOG_TOPIC_RE.search(request.message_text or "")
+        ):
             gap = False
         gap_question: str | None = None
         # On n'enregistre pas de lacune si on va déjà demander une clarification :
@@ -627,12 +690,18 @@ class ConversationEngine:
         """
         result = await self._classify_text(text)
 
-        if result["intent"] in GREETING_INTENTS:
-            remainder = self._strip_leading_greeting(text)
+        # Même démasquage pour « merci/super » suivi d'une vraie question
+        # (« super merci. vous êtes ouverts jusqu'à quelle heure ? » → closing,
+        # et la question serait traitée sans grounding → réponse inventée).
+        masked_intents = (
+            GREETING_INTENTS | {"closing"} if "?" in text else GREETING_INTENTS
+        )
+        if result["intent"] in masked_intents:
+            remainder = self._strip_leading_greeting(text) or self._strip_leading_thanks(text)
             if remainder:
                 sub = await self._classify_text(remainder)
                 if (
-                    sub["intent"] not in GREETING_INTENTS
+                    sub["intent"] not in masked_intents
                     and sub["confidence"] >= GREETING_OVERRIDE_FLOOR
                 ):
                     logger.info(
@@ -713,6 +782,19 @@ class ConversationEngine:
         reclassement (sinon un prénom serait pris pour une intention).
         """
         remainder = _GREETING_PREFIX_RE.sub("", text, count=1).strip()
+        if not remainder or remainder == text.strip():
+            return ""
+        if len(re.findall(r"\w+", remainder)) < 2:
+            return ""
+        return remainder
+
+    def _strip_leading_thanks(self, text: str) -> str:
+        """Retire un remerciement en tête (« super merci. ») et renvoie le reste.
+
+        Mêmes garde-fous que ``_strip_leading_greeting`` : on ne reclasse que si
+        un vrai reste de message subsiste (deux mots minimum).
+        """
+        remainder = _THANKS_PREFIX_RE.sub("", text, count=1).strip()
         if not remainder or remainder == text.strip():
             return ""
         if len(re.findall(r"\w+", remainder)) < 2:

@@ -30,18 +30,35 @@ class ManageAppointmentAction(BaseAction):
         op = params.get("operation") or "cancel"
         bid = params.get("business_id")
         cid = params.get("customer_id")
+        # Chat anonyme : le RDV pris DANS cette conversation reste gérable via son
+        # id (posé en slot au moment de la réservation) — pas besoin d'identifier.
+        aid = params.get("appointment_id")
         if not bid:
             return {"success": False, "message": "Contexte business absent.", "operation": op}
-        if not cid:
-            # Chat anonyme : on ne peut pas retrouver le RDV sans identifier le client.
+        if not cid and not aid:
+            # Ni client ni RDV de conversation : impossible de retrouver la réservation.
             return {"success": False, "needs_identification": True, "operation": op}
         try:
-            return await self._manage(UUID(str(bid)), UUID(str(cid)), op, params)
+            return await self._manage(
+                UUID(str(bid)),
+                UUID(str(cid)) if cid else None,
+                op,
+                params,
+                appointment_id=UUID(str(aid)) if aid else None,
+            )
         except Exception as exc:  # pragma: no cover - dépend de l'environnement DB
             logger.error("action.manage_appt.error", error=str(exc))
             return {"success": False, "operation": op, "message": "Action non aboutie."}
 
-    async def _manage(self, bid: UUID, cid: UUID, op: str, params: dict) -> dict:
+    async def _manage(
+        self,
+        bid: UUID,
+        cid: UUID | None,
+        op: str,
+        params: dict,
+        *,
+        appointment_id: UUID | None = None,
+    ) -> dict:
         from sqlalchemy import select
 
         from jenny.db.session import async_session_factory
@@ -55,19 +72,30 @@ class ManageAppointmentAction(BaseAction):
         async with async_session_factory() as db:
             business = await db.get(Business, bid)
             tz = business_tz(business)
-            appt = (
-                await db.execute(
-                    select(Appointment)
-                    .where(
-                        Appointment.business_id == bid,
-                        Appointment.customer_id == cid,
-                        Appointment.status.notin_(["cancelled", "blocked"]),
-                        Appointment.start_at >= now,
+            appt = None
+            if cid is not None:
+                appt = (
+                    await db.execute(
+                        select(Appointment)
+                        .where(
+                            Appointment.business_id == bid,
+                            Appointment.customer_id == cid,
+                            Appointment.status.notin_(["cancelled", "blocked"]),
+                            Appointment.start_at >= now,
+                        )
+                        .order_by(Appointment.start_at.asc())
+                        .limit(1)
                     )
-                    .order_by(Appointment.start_at.asc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
+                ).scalar_one_or_none()
+            if appt is None and appointment_id is not None:
+                # Repli conversation : le RDV pris dans CE fil de discussion.
+                cand = await db.get(Appointment, appointment_id)
+                if (
+                    cand is not None
+                    and cand.business_id == bid
+                    and cand.status not in ("cancelled", "blocked")
+                ):
+                    appt = cand
             if appt is None:
                 return {"success": False, "no_appointment": True, "operation": op}
 
@@ -98,7 +126,61 @@ class ManageAppointmentAction(BaseAction):
             hh = new_time.hour if new_time else cur.hour
             mm = new_time.minute if new_time else cur.minute
             new_local = datetime(day.year, day.month, day.day, hh, mm, tzinfo=tz)
-            appt.start_at = new_local.astimezone(UTC)
+            new_start = new_local.astimezone(UTC)
+
+            # Mêmes garde-fous qu'à la réservation : jamais dans le passé, jamais un
+            # jour de fermeture, jamais sur un créneau déjà pris. Sinon Jenny
+            # « accepterait » verbalement un déplacement impossible.
+            from jenny.services.availability import (
+                format_slots_fr,
+                is_day_closed,
+                next_free_slots,
+            )
+
+            dur_minutes = max(int(duration.total_seconds() // 60), 15)
+            if new_start <= now:
+                alts = await next_free_slots(
+                    db, bid, dur_minutes, from_day=now.astimezone(tz).date()
+                )
+                return {
+                    "success": False,
+                    "operation": "reschedule",
+                    "past": True,
+                    "when": when,
+                    "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
+                }
+            if await is_day_closed(db, bid, day):
+                alts = await next_free_slots(db, bid, dur_minutes, from_day=day)
+                return {
+                    "success": False,
+                    "operation": "reschedule",
+                    "closed": True,
+                    "when": when,
+                    "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
+                }
+            new_end = new_start + duration
+            clash = (
+                await db.execute(
+                    select(Appointment.id).where(
+                        Appointment.business_id == bid,
+                        Appointment.id != appt.id,
+                        Appointment.status.notin_(["cancelled"]),
+                        Appointment.start_at < new_end,
+                        Appointment.end_at > new_start,
+                    )
+                )
+            ).first()
+            if clash is not None:
+                alts = await next_free_slots(db, bid, dur_minutes, from_day=day)
+                return {
+                    "success": False,
+                    "operation": "reschedule",
+                    "conflict": True,
+                    "when": when,
+                    "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
+                }
+
+            appt.start_at = new_start
             appt.end_at = appt.start_at + duration
             # L'ancien créneau se libère → on prévient la liste d'attente.
             await notify_waitlist_for_freed_slot(

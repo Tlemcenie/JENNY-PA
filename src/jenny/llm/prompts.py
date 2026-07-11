@@ -294,6 +294,17 @@ class PromptBuilder:
                         f"\nLe client vient de te donner son nom : « {nm} ». Remercie-le "
                         "chaleureusement et confirme que c'est bien noté, en une phrase."
                     )
+                    if public.get("ask_phone"):
+                        base += (
+                            "\nPuis demande-lui gentiment un numéro de téléphone pour le "
+                            "rappel du rendez-vous (une courte question, à la fin)."
+                        )
+                elif public.get("phoned"):
+                    base += (
+                        "\nLe client vient de te donner son numéro de téléphone : il est "
+                        "bien enregistré pour le rappel du rendez-vous. Remercie-le en une "
+                        "phrase courte (ne répète pas le numéro en entier)."
+                    )
                 elif public.get("propose_slots") and public.get("slots_text"):
                     base += (
                         f"\nVoici les créneaux RÉELLEMENT libres pour « {public['service']} » : "
@@ -327,6 +338,16 @@ class PromptBuilder:
                            else " et propose une autre date.")
                         + " NE propose AUCUN créneau hors de cette liste."
                     )
+                elif public.get("past"):
+                    alt = public.get("alternatives_text")
+                    base += (
+                        "\nLe créneau demandé est DÉJÀ PASSÉ (rien n'a été réservé) : "
+                        "signale-le gentiment"
+                        + (f" et propose plutôt ces créneaux à venir : {alt}." if alt
+                           else " et demande un autre moment.")
+                        + " NE confirme AUCUNE réservation et NE propose AUCUN créneau "
+                        "hors de cette liste."
+                    )
                 elif public.get("no_slots"):
                     base += (
                         "\nAucun créneau n'est libre prochainement pour cette prestation : "
@@ -351,6 +372,33 @@ class PromptBuilder:
                         base += (
                             f"\nLe client veut déplacer son rendez-vous (actuellement {when}) mais "
                             "n'a pas précisé vers quand : demande-lui le nouveau jour/heure souhaité."
+                        )
+                    elif public.get("closed"):
+                        alt = public.get("alternatives_text")
+                        base += (
+                            "\nLe déplacement demandé tombe un jour de FERMETURE : le rendez-vous "
+                            f"reste pour l'instant {when}. Dis-le clairement (rien n'a été déplacé)"
+                            + (f" et propose plutôt ces créneaux : {alt}." if alt
+                               else " et demande une autre date.")
+                            + " NE confirme AUCUN déplacement."
+                        )
+                    elif public.get("past"):
+                        alt = public.get("alternatives_text")
+                        base += (
+                            "\nLe créneau demandé est DÉJÀ PASSÉ : le rendez-vous reste pour "
+                            f"l'instant {when}. Dis-le gentiment (rien n'a été déplacé)"
+                            + (f" et propose plutôt ces créneaux : {alt}." if alt
+                               else " et demande un autre moment.")
+                            + " NE confirme AUCUN déplacement."
+                        )
+                    elif public.get("conflict"):
+                        alt = public.get("alternatives_text")
+                        base += (
+                            "\nLe créneau demandé est déjà pris : le rendez-vous reste pour "
+                            f"l'instant {when}. Dis-le gentiment (rien n'a été déplacé)"
+                            + (f" et propose plutôt ces créneaux libres : {alt}." if alt
+                               else " et propose un autre horaire.")
+                            + " NE confirme AUCUN déplacement."
                         )
                     elif public.get("success") and op == "cancel":
                         base += (
