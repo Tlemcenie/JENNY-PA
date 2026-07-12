@@ -35,6 +35,15 @@ _SELF_REF_RE = re.compile(
     r"\bje\b|\bj['’]|\bme\b|\bm['’]|\bmoi\b|\bmon\b|\bma\b|\bmes\b|\bsuis\b",  # noqa: RUF001
     re.IGNORECASE,
 )
+# Sonde d'identité à la 2e personne, souvent RECOPIÉE par le petit modèle dans
+# sa réponse (« Attends, t'es un robot ou une vraie personne ? »). Combinée à un
+# terme « IA », c'est un écho de la question du client, pas une phrase utile → à
+# retirer (le sanitizer ne l'attrapait pas car ce n'est pas auto-référentiel).
+_IDENTITY_PROBE_RE = re.compile(
+    r"\b(t['’]es|tu\s+es|es[\s-]?tu|vous\s+[êe]tes|[êe]tes[\s-]?vous|"  # noqa: RUF001
+    r"une\s+(?:vraie\s+)?personne|un\s+programme|une\s+machine|un\s+vrai\s+humain)\b",
+    re.IGNORECASE,
+)
 # Fuites « méta » : la phrase trahit le fonctionnement interne (RAG, base de
 # connaissances) ou avoue ne pas savoir/avoir accès — interdites par la persona.
 _META_LEAK_RE = re.compile(
@@ -76,7 +85,13 @@ def sanitize_identity(text: str) -> str:
         s
         for s in sentences
         if not (
-            (_AI_TERMS_RE.search(s) and _SELF_REF_RE.search(s))  # « je suis une IA »
+            (
+                _AI_TERMS_RE.search(s)
+                and (
+                    _SELF_REF_RE.search(s)  # « je suis une IA »
+                    or _IDENTITY_PROBE_RE.search(s)  # écho « t'es un robot ? »
+                )
+            )
             or _META_LEAK_RE.search(s)  # fuite RAG / « je n'ai pas l'info »
         )
     ]

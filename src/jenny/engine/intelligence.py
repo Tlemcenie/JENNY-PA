@@ -190,41 +190,141 @@ KNOWLEDGE_SEEKING_INTENTS = frozenset(
 # et RÉ-INDEXER la base (scripts/reindex_kb.py) à chaque changement de modèle.
 # Mesuré les 2026-07-11/12 sur la KB de démo (paraphrase-multilingual-mpnet-base-v2,
 # échelle BLENDÉE du retriever partagé — 0.7·cos + 0.3·lexical) :
-# question DONT la réponse est en base → 0.457 à 0.674 ; hors-sujet franc
+# question DONT la réponse est en base → 0.39 à 0.67 ; hors-sujet franc
 # (pneus, piano…) → ≤ 0.36 ; « même commerce mais service ABSENT » (extensions,
 # épilation, permis moto…) → 0.32 à 0.52. Les bandes se CHEVAUCHENT : aucun
-# scalaire ne sépare. D'où trois étages :
-#   < FLOOR            → lacune ;
-#   [FLOOR, STRONG)    → bande ambiguë : lacune si un mot DISTINCTIF de la
-#                        question (« moto », « extensions ») est absent des
-#                        documents (_subject_uncovered) ;
-#   ≥ STRONG           → réponse considérée présente.
-# Mieux vaut différer que mentir au client.
-# NB : 0.40 (et pas plus haut) car les KB à documents COURTS (une ligne, comme
-# celles du banc d'essai) donnent des cosinus plus bas à question égale — un
-# floor à 0.45 y créait de fausses lacunes (« balayage 80€ » présent, score 0.41).
-# La bande + veto de sujet couvre les négatifs durs au-dessus de 0.40.
-GAP_SCORE_FLOOR = 0.40
+# scalaire ne sépare. On combine donc score ET couverture lexicale du SUJET :
+#   < HARD_FLOOR                       → lacune (vraiment rien de pertinent) ;
+#   [HARD_FLOOR, STRONG) & sujet ABSENT des docs → lacune (négatif « même métier
+#       mais service absent » : « moto », « extensions »… absents des passages) ;
+#   sinon (sujet présent OU score ≥ STRONG) → réponse présente.
+# La couverture du sujet SAUVE les vraies questions dont le score frôle le
+# plancher (« et vous faites les colorations ? » 0.39, doc « …colorations »
+# présent) — c'était une source de fausses lacunes. Mieux vaut différer que
+# mentir, mais pas au prix de faux « je vérifie » sur du contenu présent.
+GAP_SCORE_HARD_FLOOR = 0.30
 GAP_SCORE_STRONG = 0.60
+# Rétrocompat (référencé par d'anciens tests / lectures) : borne basse de la bande.
+GAP_SCORE_FLOOR = GAP_SCORE_HARD_FLOOR
 
 # Mots non discriminants pour le veto de sujet : outils grammaticaux, verbes
-# d'offre génériques, et vocabulaire temporel (souvent absent du texte de la
-# base alors que la réponse y est — « samedi matin » vs « 9h30-19h00 »).
+# d'offre génériques, vocabulaire temporel (souvent absent du texte de la base
+# alors que la réponse y est — « samedi matin » vs « 9h30-19h00 »), et POLITESSES
+# (le message brut « super merci ! et vous faites les colorations ? » ne doit pas
+# faire compter « super »/« merci » comme sujet distinctif absent des documents).
 _SUBJECT_STOPWORDS = frozenset(
     {
-        "vous", "nous", "votre", "notre", "vos", "leurs", "elle", "elles",
-        "avec", "pour", "dans", "chez", "cette", "cela", "quoi", "quel",
-        "quelle", "quels", "quelles", "comment", "combien", "quand", "est",
-        "sont", "etes", "êtes", "avez", "aussi", "bien", "tout", "toute",
-        "faites", "faire", "posez", "poser", "proposez", "proposer",
-        "vendez", "vendre", "utilisez", "utiliser", "prenez", "prendre",
-        "peut", "peux", "pouvez", "possible", "besoin", "savoir", "voudrais",
-        "matin", "soir", "midi", "apres", "après", "week", "weekend",
-        "aujourd", "demain", "semaine", "heure", "heures", "jour", "jours",
-        "prix", "tarif", "tarifs", "combien", "coute", "coûte",
-        "jusqu", "jusque", "depuis", "entre", "pendant", "chaque", "encore",
-        "servez", "servons", "ouvrez", "fermez", "restez", "ouvert", "ouverts",
-        "ouverte", "ouvertes",
+        # Politesses / salutations / remerciements (jamais un « sujet »).
+        "bonjour",
+        "bonsoir",
+        "salut",
+        "coucou",
+        "hello",
+        "merci",
+        "super",
+        "genial",
+        "génial",
+        "parfait",
+        "nickel",
+        "cool",
+        "svp",
+        "stp",
+        "plait",
+        "plaît",
+        "hey",
+        "voila",
+        "voilà",
+        "alors",
+        "donc",
+        "juste",
+        "aussi",
+        "vraiment",
+        "peut-etre",
+        "peutetre",
+        "vous",
+        "nous",
+        "votre",
+        "notre",
+        "vos",
+        "leurs",
+        "elle",
+        "elles",
+        "avec",
+        "pour",
+        "dans",
+        "chez",
+        "cette",
+        "cela",
+        "quoi",
+        "quel",
+        "quelle",
+        "quels",
+        "quelles",
+        "comment",
+        "combien",
+        "quand",
+        "est",
+        "sont",
+        "etes",
+        "êtes",
+        "avez",
+        "bien",
+        "tout",
+        "toute",
+        "faites",
+        "faire",
+        "posez",
+        "poser",
+        "proposez",
+        "proposer",
+        "vendez",
+        "vendre",
+        "utilisez",
+        "utiliser",
+        "prenez",
+        "prendre",
+        "peut",
+        "peux",
+        "pouvez",
+        "possible",
+        "besoin",
+        "savoir",
+        "voudrais",
+        "matin",
+        "soir",
+        "midi",
+        "apres",
+        "après",
+        "week",
+        "weekend",
+        "aujourd",
+        "demain",
+        "semaine",
+        "heure",
+        "heures",
+        "jour",
+        "jours",
+        "prix",
+        "tarif",
+        "tarifs",
+        "coute",
+        "coûte",
+        "jusqu",
+        "jusque",
+        "depuis",
+        "entre",
+        "pendant",
+        "chaque",
+        "encore",
+        "servez",
+        "servons",
+        "ouvrez",
+        "fermez",
+        "restez",
+        "ouvert",
+        "ouverts",
+        "ouverte",
+        "ouvertes",
     }
 )
 
@@ -285,11 +385,14 @@ def is_knowledge_gap(
     if not docs:
         return True
     top_score = max((d.get("score") or 0.0) for d in docs)
-    if top_score < GAP_SCORE_FLOOR:
+    # Rien de vraiment pertinent : lacune franche.
+    if top_score < GAP_SCORE_HARD_FLOOR:
         return True
-    if top_score < GAP_SCORE_STRONG and _subject_uncovered(message, docs):
-        return True
-    return False
+    # Score correct mais < STRONG : lacune UNIQUEMENT si le sujet demandé est
+    # absent des passages (négatif « même métier, service absent »). Si le sujet
+    # EST présent, la couverture lexicale prime même à score modeste → pas une
+    # lacune (évite les faux « je vérifie » sur du contenu réellement en base).
+    return top_score < GAP_SCORE_STRONG and _subject_uncovered(message, docs)
 
 
 # Formules de « je n'ai pas la réponse, je vérifie » : le signal le plus fiable

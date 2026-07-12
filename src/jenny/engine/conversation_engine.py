@@ -76,7 +76,8 @@ _MGMT_RESCHED_RE = re.compile(
     re.I,
 )
 _MGMT_CONFIRM_RE = re.compile(
-    r"\bje\s+confirme|c['’]est\s+confirm|je\s+valide|je\s+maintiens", re.I  # noqa: RUF001
+    r"\bje\s+confirme|c['’]est\s+confirm|je\s+valide|je\s+maintiens",  # noqa: RUF001
+    re.I,
 )
 # Question GÉNÉRIQUE sur le catalogue (« vos prestations », « la grille des
 # tarifs ») : couverte par le catalogue injecté au prompt, donc jamais une
@@ -107,6 +108,19 @@ _STRONG_APPOINTMENT_RE = re.compile(
 # Signal de DEVIS explicite : force « quote » → un VRAI devis persisté/envoyé,
 # même si le petit modèle classe le message en « faq/pricing ».
 _STRONG_QUOTE_RE = re.compile(r"\b(devis|estimation|chiffrage|chiffrer)\b", re.I)
+
+# Vrais signaux de RÉCLAMATION (mécontentement). Sert à NE PAS écraser un
+# « complaint » légitime par l'override RDV : « je veux réserver mais votre
+# dernière coupe était ratée » reste une réclamation. En leur absence, un
+# « complaint » sur une demande de RDV est une ERREUR du petit modèle (fréquente)
+# → l'override RDV doit primer (sinon la réservation n'est jamais exécutée et
+# Jenny « confirme » un rendez-vous inexistant).
+_COMPLAINT_SIGNAL_RE = re.compile(
+    r"\b(d[ée]çu\w*|décevant|nul\w*|rat[ée]\w*|catastroph\w*|scandal\w*|honteu\w*|"
+    r"inadmissible|inacceptable|rembours\w*|me\s+plain\w*|r[ée]clamation|mécontent\w*|"
+    r"insatisfait\w*|jamais\s+content|horrible|lamentable|arnaqu\w*|abus\w*)\b",
+    re.I,
+)
 
 
 # Capture du nom : un message qui ressemble à un nom propre (pas une commande,
@@ -191,7 +205,7 @@ _GREETING_PREFIX_RE = re.compile(
 # que le démasquage de salutation, côté remerciements.
 _THANKS_WORDS = (
     r"merci(?:\s+beaucoup|\s+bien)?|super|parfait|top|g[ée]nial|nickel|"
-    r"c['’]est\s+not[ée]|d['’]accord|ok(?:ay)?"
+    r"c['’]est\s+not[ée]|d['’]accord|ok(?:ay)?"  # noqa: RUF001
 )
 _THANKS_PREFIX_RE = re.compile(
     rf"^\s*\b(?:{_THANKS_WORDS})\b(?:[\s,;:!.…-]+\b(?:{_THANKS_WORDS})\b)*[\s,;:!.…-]*",
@@ -321,11 +335,36 @@ class ConversationEngine:
         # « réserver », « rdv ») force « appointment » même si le petit modèle est
         # (sur)confiant sur autre chose. Indispensable pour un app coiffeur : la
         # prise de RDV est le cœur du métier et le modèle s'y trompe souvent.
-        if _STRONG_APPOINTMENT_RE.search(request.message_text or "") and intent_result[
-            "intent"
-        ] not in ("appointment", "manage_appointment", "escalation", "complaint"):
+        # On écrase aussi un « complaint » MAL classé (le modèle prend souvent une
+        # prise de RDV pour une réclamation) — sauf si le message porte un VRAI
+        # signal de mécontentement, auquel cas la réclamation est légitime.
+        _msg_txt = request.message_text or ""
+        _model_intent = intent_result["intent"]
+        _blocks_appt_override = _model_intent in (
+            "appointment",
+            "manage_appointment",
+            "escalation",
+        ) or (_model_intent == "complaint" and _COMPLAINT_SIGNAL_RE.search(_msg_txt))
+        # Second signal, SANS mot-clé : « [prestation du catalogue] + [jour/heure] »
+        # est une prise de RDV évidente (« coupe femme demain 14h », « un balayage
+        # samedi à 10h ») que le petit modèle classe souvent en faq/pricing/greeting.
+        # On force alors « appointment » — c'est le cœur du métier, mieux vaut
+        # réserver que rater la demande. (Une opération de gestion — annuler/déplacer —
+        # est traitée plus bas et reste prioritaire.)
+        _has_when = False
+        if not _blocks_appt_override:
+            from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
+
+            _has_when = bool(parse_fr_date(_msg_txt) or parse_fr_time(_msg_txt))
+        _has_service = bool(
+            request.catalog_services and match_catalog_services(_msg_txt, request.catalog_services)
+        )
+        _strong_appt = bool(_STRONG_APPOINTMENT_RE.search(_msg_txt))
+        if (_strong_appt or (_has_when and _has_service)) and not _blocks_appt_override:
             logger.info(
-                "engine.intent.appointment_override", was=intent_result["intent"]
+                "engine.intent.appointment_override",
+                was=intent_result["intent"],
+                via="keyword" if _strong_appt else "service+when",
             )
             intent_result = {
                 **intent_result,
@@ -336,9 +375,12 @@ class ConversationEngine:
 
         # Override : « devis »/« estimation »/« chiffrage » → quote (devis réel),
         # sauf si c'est déjà une prise de RDV / réclamation / escalade.
-        if _STRONG_QUOTE_RE.search(request.message_text or "") and intent_result[
-            "intent"
-        ] not in ("appointment", "manage_appointment", "escalation", "complaint"):
+        if _STRONG_QUOTE_RE.search(request.message_text or "") and intent_result["intent"] not in (
+            "appointment",
+            "manage_appointment",
+            "escalation",
+            "complaint",
+        ):
             logger.info("engine.intent.quote_override", was=intent_result["intent"])
             intent_result = {
                 **intent_result,
@@ -357,6 +399,7 @@ class ConversationEngine:
         # Si une action attendait des infos, on garde SON intention tant que le
         # client ne change pas franchement de sujet : « mardi », « à 14h »…
         # complètent la prise de RDV même si le modèle les lit « closing »/« general ».
+        _resume_appointment_after_info = False
         if state.pending_intent and state.pending_intent != intent:
             from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
 
@@ -372,14 +415,19 @@ class ConversationEngine:
             # (sauf si elle apporte aussi un jour/une heure). La prise de RDV reste
             # en attente (pending_intent) et pourra reprendre au message suivant.
             info_interrupt = intent in _INFO_REQUEST_INTENTS and not provides_appt_info
-            if not hard_interrupt and not info_interrupt and (
-                provides_appt_info
-                or intent_confidence < 0.85
-                or intent in _CONTINUABLE_INTENTS
-            ):
-                logger.info(
-                    "engine.dialogue.continue", pending=state.pending_intent, read=intent
+            # Mémorise qu'on interrompt une RÉSERVATION en cours pour répondre à une
+            # question : il faudra RESTAURER le pending_intent en fin de tour (sinon
+            # le « 11h » suivant repart de zéro au lieu de finir la réservation).
+            if info_interrupt and state.pending_intent == "appointment":
+                _resume_appointment_after_info = True
+            if (
+                not hard_interrupt
+                and not info_interrupt
+                and (
+                    provides_appt_info or intent_confidence < 0.85 or intent in _CONTINUABLE_INTENTS
                 )
+            ):
+                logger.info("engine.dialogue.continue", pending=state.pending_intent, read=intent)
                 intent = state.pending_intent
                 intent_confidence = max(intent_confidence, 0.6)
 
@@ -407,6 +455,26 @@ class ConversationEngine:
                 request.message_text, getattr(state, "awaiting_confirmation", False)
             )
         )
+
+        # Report NATUREL sans mot-clé : une fois un RDV pris DANS ce fil, un nouveau
+        # créneau seul (« jeudi 14h », « plutôt vendredi même heure ») déplace CE
+        # rdv — sinon le message retombe en general/planning et Jenny « confirme »
+        # un déplacement fictif. On exige un jour/heure ET l'absence d'une NOUVELLE
+        # prestation (sinon c'est un second RDV, pas un report) et d'un nom.
+        if mgmt_op is None and not joining_waitlist:
+            _appt_slot = state.slots.get("appointment_id")
+            if _appt_slot is not None and _appt_slot.filled:
+                from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
+
+                _m = request.message_text or ""
+                _new_when = bool(parse_fr_date(_m) or parse_fr_time(_m))
+                _new_service = bool(
+                    request.catalog_services
+                    and match_catalog_services(_m, request.catalog_services)
+                )
+                if _new_when and not _new_service and not looks_like_name(_m):
+                    logger.info("engine.reschedule.implicit", appt="known")
+                    mgmt_op = "reschedule"
 
         # ── Capture du nom : Jenny vient de demander « c'est à quel nom ? » ──
         # Le prochain message est alors le nom du client (sauf commande explicite).
@@ -589,6 +657,10 @@ class ConversationEngine:
             state.pending_intent = "manage_appointment"
             needs_clarification = True
             clarification_reason = "booking_in_progress"
+        elif _resume_appointment_after_info:
+            # On vient de répondre à une question (prix…) au milieu d'une réservation :
+            # on GARDE la réservation en attente pour que le « 11h » suivant la finisse.
+            state.pending_intent = "appointment"
         else:
             # Action complète (ou pas d'action) → on libère le dialogue.
             state.pending_intent = None
@@ -621,9 +693,13 @@ class ConversationEngine:
         # prestations » classé faq) — n'est donc PAS une lacune (Jenny doit citer le
         # catalogue, pas dire « je vérifie », et le gérant ne doit pas voir de fausse
         # « question sans réponse » dans sa page Apprentissage).
-        if gap and state.business_catalog and (
-            intent in ("pricing", "quote")
-            or _CATALOG_TOPIC_RE.search(request.message_text or "")
+        if (
+            gap
+            and state.business_catalog
+            and (
+                intent in ("pricing", "quote")
+                or _CATALOG_TOPIC_RE.search(request.message_text or "")
+            )
         ):
             gap = False
         gap_question: str | None = None
@@ -699,9 +775,7 @@ class ConversationEngine:
         # Même démasquage pour « merci/super » suivi d'une vraie question
         # (« super merci. vous êtes ouverts jusqu'à quelle heure ? » → closing,
         # et la question serait traitée sans grounding → réponse inventée).
-        masked_intents = (
-            GREETING_INTENTS | {"closing"} if "?" in text else GREETING_INTENTS
-        )
+        masked_intents = GREETING_INTENTS | {"closing"} if "?" in text else GREETING_INTENTS
         if result["intent"] in masked_intents:
             remainder = self._strip_leading_greeting(text) or self._strip_leading_thanks(text)
             if remainder:
