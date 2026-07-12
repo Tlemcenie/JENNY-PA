@@ -5,7 +5,36 @@ from jenny.engine.response_generator import (
     sanitize_identity,
     strip_letter_format,
     strip_model_artifacts,
+    trim_filler_closing,
 )
+
+
+def test_trims_empty_closing_filler() -> None:
+    assert (
+        trim_filler_closing(
+            "Une coupe femme coûte 39€. N'hésitez pas si vous avez d'autres questions !"
+        )
+        == "Une coupe femme coûte 39€."
+    )
+    assert (
+        trim_filler_closing("On fait le balayage à 80€. Je reste à votre disposition.")
+        == "On fait le balayage à 80€."
+    )
+
+
+def test_keeps_real_question_closing() -> None:
+    txt = "Oui, on est ouverts samedi ! Vous voulez que je vous réserve un moment ?"
+    assert trim_filler_closing(txt) == txt
+
+
+def test_keeps_single_short_closing() -> None:
+    assert trim_filler_closing("Avec plaisir, à très vite !") == "Avec plaisir, à très vite !"
+
+
+def test_does_not_trim_deflection() -> None:
+    # La déflexion sert à la détection de lacune → ne jamais la retirer.
+    txt = "Je vérifie ça et je reviens vers vous tout de suite."
+    assert trim_filler_closing(txt) == txt
 
 
 def test_strips_chat_template_token_and_cjk() -> None:

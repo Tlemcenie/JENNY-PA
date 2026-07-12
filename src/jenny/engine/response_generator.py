@@ -62,8 +62,7 @@ _META_LEAK_RE = re.compile(
     re.IGNORECASE,
 )
 _IDENTITY_FALLBACK = (
-    "Je suis l'assistante de l'établissement, ravie de vous aider ! "
-    "Que puis-je faire pour vous ?"
+    "Je suis l'assistante de l'établissement, ravie de vous aider ! Que puis-je faire pour vous ?"
 )
 
 
@@ -185,13 +184,69 @@ def strip_model_artifacts(text: str) -> str:
     return text.strip()
 
 
+# Formules de clôture CREUSES que les petits modèles collent en fin de réponse,
+# souvent à répétition — elles n'apportent rien et cassent le ton « message ».
+# On retire UNIQUEMENT la phrase FINALE quand c'en est une (jamais une vraie
+# question, ni une déflexion « je vérifie » qui, elle, sert à la détection de
+# lacune). Le but : des réponses plus courtes, vivantes, moins robotiques.
+# Une phrase de clôture est « creuse » si elle contient l'un de ces motifs de
+# remplissage (recherche N'IMPORTE OÙ dans la phrase — « Si vous avez des
+# préférences, n'hésitez pas à me le dire » doit sauter comme « N'hésitez pas… »).
+_FILLER_CLOSING_RE = re.compile(
+    r"n['’]h[ée]sitez\s+pas\b"  # noqa: RUF001
+    r"|je\s+(?:reste|suis|me\s+tiens)\s+(?:à\s+votre\s+disposition|(?:là|ici)\s+pour\s+"
+    r"(?:vous\s+aider|r[ée]pondre|toute\s+question))"
+    r"|nous\s+restons\s+à\s+votre\s+disposition"
+    r"|au\s+plaisir\s+de\s+vous\s+(?:aider|lire|revoir)",
+    re.IGNORECASE,
+)
+
+
+def trim_filler_closing(text: str) -> str:
+    """Retire une formule de clôture creuse en FIN de message (« N'hésitez pas… »,
+    « Je reste à votre disposition »…) — mais jamais si c'est la seule phrase, ni
+    si la dernière phrase est une vraie question (« Vous voulez que je réserve ? »)."""
+    if not text:
+        return text
+    sentences = re.split(r"(?<=[.!?…])\s+", text.strip())
+    if len(sentences) < 2:
+        return text
+    last = sentences[-1].strip()
+    # On garde une VRAIE question/relance (elle engage le client, c'est bienvenu),
+    # SAUF si elle contient quand même du remplissage (« … n'hésitez pas ? »).
+    if last.endswith("?") and not _FILLER_CLOSING_RE.search(last):
+        return text
+    if _FILLER_CLOSING_RE.search(last):
+        trimmed = " ".join(sentences[:-1]).strip()
+        if len(trimmed) >= 12:
+            return trimmed
+    return text
+
+
+def cut_to_last_sentence(text: str) -> str:
+    """Si le message a été coupé net (plafond de tokens) — il ne finit pas par une
+    ponctuation de fin — on tronque à la DERNIÈRE phrase complète, pour ne jamais
+    laisser une phrase inachevée. Sans effet sur un message déjà bien terminé."""
+    t = (text or "").strip()
+    if not t or t[-1] in ".!?…\"»)":
+        return t
+    # Position de la dernière ponctuation de fin de phrase.
+    m = list(re.finditer(r"[.!?…]", t))
+    if not m:
+        return t  # aucune phrase complète : on garde tel quel (mieux que vide)
+    cut = t[: m[-1].end()].strip()
+    return cut if len(cut) >= 12 else t
+
+
 def polish_response(text: str, *, already_spoke: bool) -> str:
     """Nettoyage final : artefacts modèle + identité + format courrier + fuites de
-    consignes + salutation répétée."""
+    consignes + salutation répétée + formule de clôture creuse + phrase inachevée."""
     out = strip_model_artifacts(text)
     out = sanitize_identity(out)
     out = strip_letter_format(out)
     out = drop_leaked_instructions(out)
+    out = trim_filler_closing(out)
+    out = cut_to_last_sentence(out)
     if already_spoke:
         out = strip_repeated_greeting(out)
     return out.strip()
@@ -231,9 +286,7 @@ class ResponseGenerator:
         """
         # Si on a des documents RAG, utiliser le mode RAG
         if state.retrieved_documents:
-            return await self.generate_with_rag(
-                state, state.retrieved_documents, on_token=on_token
-            )
+            return await self.generate_with_rag(state, state.retrieved_documents, on_token=on_token)
 
         system_prompt = self.prompt_builder.build_system_prompt(state)
         user_prompt = self.prompt_builder.build_user_prompt(state)
@@ -299,9 +352,7 @@ class ResponseGenerator:
         cette version finale à la fin du flux). Repli automatique sur l'appel
         non-streamé si le flux échoue ou revient vide.
         """
-        already_spoke = any(
-            m.get("role") == "assistant" for m in state.message_history[:-1]
-        )
+        already_spoke = any(m.get("role") == "assistant" for m in state.message_history[:-1])
 
         if on_token is not None:
             acc: list[str] = []
@@ -310,7 +361,7 @@ class ResponseGenerator:
                     prompt=user_prompt,
                     system_prompt=system_prompt,
                     temperature=temperature,
-                    max_tokens=300,
+                    max_tokens=220,
                 ):
                     acc.append(token)
                     try:
@@ -328,7 +379,7 @@ class ResponseGenerator:
             prompt=user_prompt,
             system_prompt=system_prompt,
             temperature=temperature,
-            max_tokens=300,
+            max_tokens=220,
         )
         if response.finish_reason == "error":
             logger.warning("generator.llm_error_fallback", content=response.content)
