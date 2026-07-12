@@ -330,10 +330,7 @@ def refine_knowledge_gap(
     si un document proche avait un score correct. Corrige les faux négatifs où un
     document du même domaine masquait l'absence de réponse réelle.
     """
-    if needs_clarification:
-        return False
-    if intent not in KNOWLEDGE_SEEKING_INTENTS:
-        return False
+    deflected = looks_like_deflection(response_text)
     if _action_has_concrete_result(action_result):
         return False
     # Un prix concret a été donné (tarif depuis le catalogue) → question traitée,
@@ -342,7 +339,17 @@ def refine_knowledge_gap(
         r"\d+\s*(?:€|euros?)", response_text or "", re.I
     ):
         return False
-    return bool(pre_gap or looks_like_deflection(response_text))
+    # Une DÉFLEXION (« je vérifie et je reviens ») est par définition un aveu
+    # d'absence de réponse : on la loggue comme lacune même si le modèle a signalé
+    # une clarification (souvent une simple hésitation du classifieur d'intention)
+    # ou si l'intention n'est pas « informative » — c'est le signal le plus fiable.
+    if deflected:
+        return True
+    # Sinon : pas de lacune quand on demande une VRAIE clarification (« je n'ai pas
+    # compris » ≠ « je ne sais pas ») ni pour les intentions non informatives.
+    if needs_clarification or intent not in KNOWLEDGE_SEEKING_INTENTS:
+        return False
+    return bool(pre_gap)
 
 
 def normalize_question(text: str, max_len: int = 200) -> str:

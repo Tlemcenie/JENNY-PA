@@ -157,11 +157,24 @@ class TestDeflectionRefine:
             needs_clarification=False,
         )
 
-    def test_refine_not_gap_when_clarifying(self) -> None:
+    def test_refine_not_gap_when_genuinely_clarifying(self) -> None:
+        # Vraie clarification (une QUESTION, sans formule de déflexion) : ce n'est
+        # pas « je ne sais pas » mais « je n'ai pas compris » → pas une lacune.
         assert not refine_knowledge_gap(
+            intent="general",
+            response_text="Bien sûr ! Vous parlez d'une coupe ou d'une coloration ?",
+            action_result=None,
+            pre_gap=True,
+            needs_clarification=True,
+        )
+
+    def test_refine_gap_when_deflecting_even_if_clarifying(self) -> None:
+        # Une DÉFLEXION reste une lacune même si le classifieur a signalé une
+        # clarification (souvent une simple hésitation) : Jenny a esquivé.
+        assert refine_knowledge_gap(
             intent="general",
             response_text="Je vérifie et je reviens vers vous.",
             action_result=None,
-            pre_gap=True,
+            pre_gap=False,
             needs_clarification=True,
         )
