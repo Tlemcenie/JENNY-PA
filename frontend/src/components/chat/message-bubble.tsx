@@ -1,7 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { motion } from "framer-motion";
+import { FileText } from "lucide-react";
 import { intentLabel } from "@/lib/utils";
+import { openQuotePdf } from "@/lib/api";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { FeedbackButtons } from "./feedback-buttons";
 
@@ -14,9 +17,51 @@ interface MessageBubbleProps {
     confidence?: number;
     agent?: string;
     phase?: string;
+    // Devis généré par Jenny : URL du PDF à télécharger (bouton sous la bulle).
+    pdfUrl?: string;
   };
   // Id du message Jenny persisté : active la validation 👍/👎 sous la bulle.
   messageId?: string;
+}
+
+function QuotePdfButton({ pdfUrl }: { pdfUrl: string }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        setBusy(true);
+        setFailed(false);
+        try {
+          await openQuotePdf(pdfUrl);
+        } catch {
+          setFailed(true);
+        } finally {
+          setBusy(false);
+        }
+      }}
+      aria-label="Ouvrir le devis en PDF"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 7,
+        marginTop: 8,
+        padding: "7px 12px",
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: "#fff",
+        background: "var(--coral)",
+        border: "none",
+        borderRadius: 9,
+        cursor: busy ? "default" : "pointer",
+        opacity: busy ? 0.7 : 1,
+      }}
+    >
+      <FileText style={{ width: 14, height: 14 }} />
+      {busy ? "Ouverture…" : failed ? "Réessayer le devis PDF" : "Voir le devis (PDF)"}
+    </button>
+  );
 }
 
 export function MessageBubble({ content, isUser, timestamp, meta, messageId }: MessageBubbleProps) {
@@ -89,6 +134,8 @@ export function MessageBubble({ content, isUser, timestamp, meta, messageId }: M
             )}
           </div>
         )}
+        {/* Devis PDF proposé par Jenny (bouton d'ouverture authentifié). */}
+        {meta?.pdfUrl && <QuotePdfButton pdfUrl={meta.pdfUrl} />}
         {/* Validation de la réponse (uniquement une fois le message persisté). */}
         {messageId && content.trim().length > 0 && (
           <FeedbackButtons messageId={messageId} />

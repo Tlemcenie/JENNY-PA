@@ -1454,6 +1454,22 @@ export function exportAppointmentsIcs(): Promise<void> {
   return downloadExport("/api/v1/appointments/export.ics", "jenny-agenda.ics");
 }
 
+// Ouvre le devis PDF (généré par Jenny) dans un nouvel onglet, via un flux blob
+// authentifié — un simple <a href> ne porterait pas le token JWT. `path` est le
+// `pdf_url` renvoyé dans l'action_result (ex. /api/v1/quotes/{id}/pdf).
+export async function openQuotePdf(path: string): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank", "noopener,noreferrer");
+  // Laisse le temps au nouvel onglet de charger le blob avant révocation.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 // ==================== RGPD (CLIENT) ====================
 
 // Export RGPD d'un client : télécharge le JSON renvoyé par le backend

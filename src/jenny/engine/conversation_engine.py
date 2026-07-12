@@ -108,6 +108,11 @@ _STRONG_APPOINTMENT_RE = re.compile(
 # Signal de DEVIS explicite : force « quote » → un VRAI devis persisté/envoyé,
 # même si le petit modèle classe le message en « faq/pricing ».
 _STRONG_QUOTE_RE = re.compile(r"\b(devis|estimation|chiffrage|chiffrer)\b", re.I)
+# Signal de question de PRIX (« c'est combien », « quel prix », « ça coûte »…).
+# Couplé à une prestation du catalogue, il déclenche un devis (message + PDF).
+_PRICE_SIGNAL_RE = re.compile(
+    r"\b(combien|prix|tarif|tarifs|co[uû]te|co[uû]tent|co[uû]t|ça fait)\b", re.I
+)
 
 # Vrais signaux de RÉCLAMATION (mécontentement). Sert à NE PAS écraser un
 # « complaint » légitime par l'override RDV : « je veux réserver mais votre
@@ -382,6 +387,35 @@ class ConversationEngine:
             "complaint",
         ):
             logger.info("engine.intent.quote_override", was=intent_result["intent"])
+            intent_result = {
+                **intent_result,
+                "intent": "quote",
+                "confidence": max(intent_result.get("confidence", 0.0), 0.85),
+                "needs_clarification": False,
+            }
+
+        # Override : question de PRIX sur une prestation du catalogue → devis réel
+        # (message + PDF téléchargeable) plutôt qu'une simple réponse chiffrée.
+        # Garde-fou : uniquement si le business a un catalogue ET qu'une prestation
+        # précise est citée. Sans catalogue (ex. banc d'essai), on garde la réponse
+        # FAQ fondée sur la base de connaissances — comportement inchangé.
+        _price_signal = _PRICE_SIGNAL_RE.search(request.message_text or "")
+        _cited_prestation = (
+            match_catalog_services(request.message_text or "", request.catalog_services)
+            if request.catalog_services
+            else None
+        )
+        if (
+            _cited_prestation
+            and (intent_result["intent"] == "pricing" or _price_signal)
+            and intent_result["intent"]
+            not in ("appointment", "manage_appointment", "escalation", "complaint", "quote")
+        ):
+            logger.info(
+                "engine.intent.pricing_to_quote",
+                was=intent_result["intent"],
+                prestation=_cited_prestation,
+            )
             intent_result = {
                 **intent_result,
                 "intent": "quote",

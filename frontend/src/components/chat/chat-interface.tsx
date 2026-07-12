@@ -59,6 +59,7 @@ interface ChatMessage {
     agent?: string;
     phase?: string;
     needsClarification?: boolean;
+    pdfUrl?: string;
   };
   // Id serveur du message Jenny (persisté) → cible du feedback 👍/👎.
   messageId?: string;
@@ -166,6 +167,10 @@ export function ChatInterface() {
               typeof meta.conversation_phase === "string" ? meta.conversation_phase : undefined,
             needsClarification:
               typeof meta.needs_clarification === "boolean" ? meta.needs_clarification : undefined,
+            pdfUrl:
+              typeof (meta.action_result as { pdf_url?: unknown } | undefined)?.pdf_url === "string"
+                ? (meta.action_result as { pdf_url: string }).pdf_url
+                : undefined,
           };
           // Le back envoie la version FINALE nettoyée (garde-fou persona) dans
           // `text` : elle fait autorité → on remplace l'affichage brut par elle.
@@ -226,6 +231,10 @@ export function ChatInterface() {
             agent: response.agent_used,
             phase: response.conversation_phase,
             needsClarification: response.needs_clarification,
+            pdfUrl:
+              typeof (response.action_result as { pdf_url?: unknown } | undefined)?.pdf_url === "string"
+                ? (response.action_result as { pdf_url: string }).pdf_url
+                : undefined,
           },
           messageId: response.message_id ?? undefined,
         };

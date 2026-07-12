@@ -290,6 +290,18 @@ class PromptBuilder:
                             "le rendez-vous, demande-lui gentiment à quel nom tu le notes "
                             "(une courte question, à la fin)."
                         )
+                elif public.get("pdf_url"):
+                    svc = public.get("service") or "cette prestation"
+                    total = public.get("total_eur")
+                    price = f"{total:g} €" if isinstance(total, int | float) else "le tarif indiqué"
+                    base += (
+                        f"\nTu viens de préparer un DEVIS pour « {svc} » : {price}. Annonce le "
+                        "prix simplement et chaleureusement, PUIS dis au client que tu lui as "
+                        "préparé le devis en PDF et qu'il peut l'ouvrir juste en dessous (un "
+                        "bouton apparaît sous ton message — ne mets AUCUN lien toi-même). "
+                        "Termine en proposant gentiment de lui réserver un rendez-vous. "
+                        "Deux à trois phrases, ton naturel et pro."
+                    )
                 elif public.get("already_booked"):
                     ew = public.get("existing_when", "")
                     base += (

@@ -45,6 +45,7 @@ from jenny.api.routes import (
     pending_questions,
     prestations,
     public_booking,
+    quotes,
     realtime,
     salon_extras,
     salon_stats,
@@ -181,6 +182,7 @@ def create_app() -> FastAPI:
     app.include_router(api_keys.router, prefix="/api/v1", tags=["api-keys"])
     app.include_router(appointments.router, prefix="/api/v1", tags=["appointments"])
     app.include_router(prestations.router, prefix="/api/v1", tags=["prestations"])
+    app.include_router(quotes.router, prefix="/api/v1", tags=["quotes"])
     app.include_router(pending_questions.router, prefix="/api/v1", tags=["pending-questions"])
     app.include_router(admin.router, prefix="/api/v1", tags=["admin"])
     app.include_router(search.router, prefix="/api/v1", tags=["search"])

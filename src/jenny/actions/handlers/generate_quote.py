@@ -146,9 +146,29 @@ class GenerateQuoteAction(BaseAction):
                 emailed=emailed,
             )
             total_eur = round(total_cents / 100, 2)
-            msg = f"Devis {reference} : {service_label} — {total_eur:.2f} €, valable {_VALIDITY_DAYS} jours."
+            # Prix « parlé » : 39 € (pas 39.00), 39,50 € si décimales.
+            price_str = f"{total_eur:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+
+            # Message chaleureux et pro : le prix d'abord, puis on propose le devis
+            # PDF (bouton côté client via pdf_url) et on enchaîne sur le rendez-vous.
+            if len(matched) == 1:
+                dur = matched[0].duration_minutes
+                dur_hint = f" (comptez ~{dur} min)" if dur else ""
+                msg = (
+                    f"Pour {service_label}, ce sera {price_str} €{dur_hint}. "
+                    "Je vous ai préparé un petit devis, vous pouvez le télécharger juste ici. "
+                    "On vous réserve un créneau ?"
+                )
+            else:
+                detail = ", ".join(f"{p.name} {p.price_eur:g} €" for p in matched)
+                msg = (
+                    f"Voilà votre devis : {detail} — soit {price_str} € en tout. "
+                    "Le PDF est téléchargeable juste ici. Vous voulez qu'on cale un rendez-vous ?"
+                )
             if emailed:
-                msg += f" Envoyé à {email}."
+                msg += f" (Je vous l'ai aussi envoyé à {email}.)"
+
+            pdf_url = f"/api/v1/quotes/{quote.id}/pdf"
             return {
                 "success": True,
                 "message": msg,
@@ -161,6 +181,7 @@ class GenerateQuoteAction(BaseAction):
                 "validity_days": _VALIDITY_DAYS,
                 "emailed": emailed,
                 "status": quote.status,
+                "pdf_url": pdf_url,
             }
 
 
