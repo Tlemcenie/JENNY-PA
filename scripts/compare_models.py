@@ -19,7 +19,12 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT / "src"))
+# La racine doit aussi être sur le path : le provider NanoGPT fait `import nanogpt`
+# (package à la racine du repo, hors `src/`). Sans ça, le modèle maison remonte
+# « No module named 'nanogpt' » et sort de la comparaison — bug silencieux.
+sys.path.insert(0, str(_ROOT))
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "var" / "eval" / "comparison.json"
