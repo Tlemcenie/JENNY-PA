@@ -717,14 +717,19 @@ class ConversationEngine:
         response_text = await self._generate_response(state, on_token=on_token)
 
         # ── Affinage de la lacune après génération ──
-        # Une réponse qui esquive (« je vérifie et je reviens ») trahit une
-        # absence de réponse, même si un document proche avait un score correct.
+        # Une déflexion (« je vérifie et je reviens ») ne trahit une absence de
+        # réponse que si la récupération n'a rien fondé — sinon c'est de la paresse
+        # de formulation sur du contenu POURTANT en base (pas une lacune).
+        from jenny.engine.intelligence import _retrieval_has_answer
+
+        grounded = _retrieval_has_answer(state.retrieved_documents, request.message_text)
         final_gap = refine_knowledge_gap(
             intent=intent,
             response_text=response_text,
             action_result=state.action_result,
             pre_gap=gap,
             needs_clarification=needs_clarification,
+            retrieval_grounded=grounded,
         )
         state.knowledge_gap = final_gap
         gap_question = clean_question(request.message_text) if final_gap else None

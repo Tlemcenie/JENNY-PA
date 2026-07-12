@@ -290,6 +290,32 @@ _SUBJECT_STOPWORDS = frozenset(
         "besoin",
         "savoir",
         "voudrais",
+        # Verbes/fillers très fréquents en question de suivi (« comment je FAIS
+        # pour annuler du COUP ? ») : jamais un « sujet », mais assez longs pour
+        # passer le filtre — ils créaient de fausses lacunes sur du contenu présent.
+        "fais",
+        "fait",
+        "faut",
+        "coup",
+        "veux",
+        "veut",
+        "dois",
+        "doit",
+        "sais",
+        "sait",
+        "vais",
+        "dire",
+        "dis",
+        "chose",
+        "truc",
+        "fois",
+        "quelque",
+        "quelqu",
+        "plutot",
+        "plutôt",
+        "genre",
+        "sinon",
+        "enfin",
         "matin",
         "soir",
         "midi",
@@ -363,6 +389,26 @@ def _action_has_concrete_result(action_result: dict | None) -> bool:
     return any(bool(v) for k, v in meaningful.items() if k not in {"success", "error", "message"})
 
 
+def _retrieval_has_answer(documents: list[dict] | None, message: str) -> bool:
+    """La RÉCUPÉRATION a-t-elle réellement fondé une réponse ? (indépendant de
+    l'intention).
+
+    Vrai si un passage pertinent couvre le sujet : score ≥ plancher dur ET
+    (score ≥ STRONG OU le sujet demandé apparaît dans les passages). C'est le
+    cœur déterministe partagé par ``is_knowledge_gap`` (lacune côté récupération)
+    et ``refine_knowledge_gap`` (une déflexion du LLM ne compte comme lacune que
+    si la récupération n'a PAS fondé la réponse — sinon c'est de la paresse de
+    formulation sur du contenu POURTANT présent).
+    """
+    docs = documents or []
+    if not docs:
+        return False
+    top_score = max((d.get("score") or 0.0) for d in docs)
+    if top_score < GAP_SCORE_HARD_FLOOR:
+        return False
+    return top_score >= GAP_SCORE_STRONG or not _subject_uncovered(message, docs)
+
+
 def is_knowledge_gap(
     *,
     intent: str,
@@ -373,26 +419,14 @@ def is_knowledge_gap(
     """Détermine si Jenny n'a aucune réponse fiable à fournir.
 
     Vrai lorsque l'intention attend une information, qu'aucune action n'a produit
-    de résultat concret, et que la base de connaissances ne renvoie rien de
-    suffisamment pertinent : score sous le plancher, ou score moyen SANS que le
-    sujet demandé apparaisse dans les documents (cf. ``_subject_uncovered``).
+    de résultat concret, et que la récupération ne fonde aucune réponse
+    (cf. ``_retrieval_has_answer`` : score + couverture du sujet).
     """
     if intent not in KNOWLEDGE_SEEKING_INTENTS:
         return False
     if _action_has_concrete_result(action_result):
         return False
-    docs = documents or []
-    if not docs:
-        return True
-    top_score = max((d.get("score") or 0.0) for d in docs)
-    # Rien de vraiment pertinent : lacune franche.
-    if top_score < GAP_SCORE_HARD_FLOOR:
-        return True
-    # Score correct mais < STRONG : lacune UNIQUEMENT si le sujet demandé est
-    # absent des passages (négatif « même métier, service absent »). Si le sujet
-    # EST présent, la couverture lexicale prime même à score modeste → pas une
-    # lacune (évite les faux « je vérifie » sur du contenu réellement en base).
-    return top_score < GAP_SCORE_STRONG and _subject_uncovered(message, docs)
+    return not _retrieval_has_answer(documents, message)
 
 
 # Formules de « je n'ai pas la réponse, je vérifie » : le signal le plus fiable
@@ -425,15 +459,20 @@ def refine_knowledge_gap(
     action_result: dict | None,
     pre_gap: bool,
     needs_clarification: bool,
+    retrieval_grounded: bool = False,
 ) -> bool:
     """Décision FINALE de lacune, après génération de la réponse.
 
-    Combine le signal de récupération (``pre_gap``) avec l'analyse de la réponse :
-    si Jenny a esquivé (« je vérifie… »), c'est qu'elle n'avait pas l'info, même
-    si un document proche avait un score correct. Corrige les faux négatifs où un
-    document du même domaine masquait l'absence de réponse réelle.
+    - ``pre_gap`` (récupération sans réponse, incluant le veto de sujet) est le
+      signal DÉTERMINISTE fiable : s'il est vrai, c'est une lacune même si le
+      classifieur d'intention a hésité (clarification).
+    - Une DÉFLEXION (« je vérifie… ») ne compte comme lacune que si la récupération
+      n'a PAS fondé la réponse (``retrieval_grounded`` faux) : sinon, le contenu
+      EST en base et Jenny a juste esquivé par paresse → PAS une lacune (évite de
+      logguer une fausse « question sans réponse » au gérant). Utile quand
+      l'intention est mal classée (payment/general) et que ``pre_gap`` n'a donc
+      pas pu se déclencher.
     """
-    deflected = looks_like_deflection(response_text)
     if _action_has_concrete_result(action_result):
         return False
     # Un prix concret a été donné (tarif depuis le catalogue) → question traitée,
@@ -442,17 +481,19 @@ def refine_knowledge_gap(
         r"\d+\s*(?:€|euros?)", response_text or "", re.I
     ):
         return False
-    # Une DÉFLEXION (« je vérifie et je reviens ») est par définition un aveu
-    # d'absence de réponse : on la loggue comme lacune même si le modèle a signalé
-    # une clarification (souvent une simple hésitation du classifieur d'intention)
-    # ou si l'intention n'est pas « informative » — c'est le signal le plus fiable.
-    if deflected:
-        return True
-    # Sinon : pas de lacune quand on demande une VRAIE clarification (« je n'ai pas
-    # compris » ≠ « je ne sais pas ») ni pour les intentions non informatives.
-    if needs_clarification or intent not in KNOWLEDGE_SEEKING_INTENTS:
+    deflected = looks_like_deflection(response_text)
+    # Vraie clarification (une QUESTION, sans esquive) → pas une lacune :
+    # « je n'ai pas compris » n'est pas « je ne sais pas ».
+    if needs_clarification and not deflected:
         return False
-    return bool(pre_gap)
+    if pre_gap:
+        return True
+    # Récupération fondée : jamais une lacune, quoi que dise le LLM (paresse).
+    if retrieval_grounded:
+        return False
+    # Non fondé + déflexion → lacune (rattrape les intentions mal classées où
+    # ``pre_gap`` n'a pas pu se déclencher, ex. RDV/payment).
+    return deflected
 
 
 def normalize_question(text: str, max_len: int = 200) -> str:

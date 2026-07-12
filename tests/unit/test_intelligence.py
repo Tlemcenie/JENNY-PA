@@ -178,3 +178,17 @@ class TestDeflectionRefine:
             pre_gap=False,
             needs_clarification=True,
         )
+
+    def test_refine_not_gap_when_deflecting_on_grounded_content(self) -> None:
+        # Le contenu EST en base (retrieval_grounded) mais le petit modèle esquive
+        # par paresse (« je vérifie ») → PAS une lacune (on ne loggue pas une
+        # fausse « question sans réponse » au gérant). Cas « comment annuler ? »
+        # alors que la KB dit « appelez le salon / SMS ».
+        assert not refine_knowledge_gap(
+            intent="faq",
+            response_text="Je vérifie ça tout de suite et je reviens vers vous !",
+            action_result=None,
+            pre_gap=False,
+            needs_clarification=False,
+            retrieval_grounded=True,
+        )
