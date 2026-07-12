@@ -94,6 +94,23 @@ services:
       api:
         condition: service_healthy
 
+  # ── Frontend Next.js ──
+  # NEXT_PUBLIC_API_URL est inliné AU BUILD (variable publique Next) et sert
+  # côté NAVIGATEUR : il pointe donc vers le port publié de l'API sur l'hôte
+  # (localhost:8000), pas vers le réseau interne Docker.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    container_name: jenny-frontend
+    ports:
+      - "3000:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
   # ── MLflow Tracking Server ──
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.19.0

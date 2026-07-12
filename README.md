@@ -11,7 +11,7 @@ Remplace `OWNER/REPO` dans l’URL du badge après création du dépôt GitHub.
 ```
 Platform Layer   →  FastAPI API, routes, middlewares
 Application      →  Services, workers ARQ, connecteurs
-AI / ML          →  Agents LangGraph, RAG, LLM providers, NanoGPT
+AI / ML          →  Moteur d'agents maison, RAG, LLM providers, NanoGPT
 Data             →  PostgreSQL + pgvector, Redis, SQLAlchemy
 Infrastructure   →  Docker, Compose, MLflow, observabilité
 ```
@@ -26,7 +26,7 @@ Infrastructure   →  Docker, Compose, MLflow, observabilité
 | Migrations | Alembic |
 | Cache/Broker | Redis 7 |
 | Jobs async | ARQ |
-| Agents | LangGraph |
+| Agents | Orchestration maison (Python, sans framework) |
 | ML Tracking | MLflow |
 | Deep Learning | PyTorch |
 | Mini LLM | NanoGPT (from scratch) |
@@ -46,13 +46,14 @@ Infrastructure   →  Docker, Compose, MLflow, observabilité
 ### Tout lancer en une commande (Docker)
 
 ```bash
-make demo-up        # build + up + migrate + seed
+make demo-up        # build + up + migrate + seed  (API + interface + infra)
 ```
 
-À la fin tu obtiens :
+À la fin tu obtiens **toute la stack**, interface comprise :
 
 | Service           | URL                                  |
 | ----------------- | ------------------------------------ |
+| **Interface web** | **http://localhost:3000**            |
 | API + Swagger     | http://localhost:8000/docs           |
 | Health / Ready    | http://localhost:8000/health, /ready |
 | Mailhog (UI mail) | http://localhost:8025                |
@@ -62,6 +63,13 @@ Compte de démonstration créé automatiquement :
 
 - email : `demo@jenny.ai`
 - mot de passe : `Demo!1234`
+
+> **Pour un chat pleinement intelligent** — le provider LLM par défaut est **Groq**
+> (rapide, quota gratuit généreux). Récupère une clé sur
+> [console.groq.com](https://console.groq.com), mets-la dans `.env`
+> (`JENNY_GROQ_API_KEY=gsk_...`), puis `docker compose up -d api`. Sans clé, l'API
+> tourne mais le chat retombe sur des réponses génériques. Alternative 100 % locale :
+> [Ollama](https://ollama.com) + `JENNY_LLM_PROVIDER=llama` (voir `.env.example`).
 
 Pour tout arrêter (et purger les volumes) :
 

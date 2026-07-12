@@ -111,10 +111,13 @@ demo-up: ## Stack complète démo : up + migrate + seed (nécessite Docker)
 	docker compose exec -T api alembic upgrade head
 	docker compose exec -T api python3 -m jenny.scripts.seed_demo --force
 	@echo "\n✓ Stack prête :"
+	@echo "  Interface    : http://localhost:3000"
 	@echo "  API + Swagger : http://localhost:8000/docs"
 	@echo "  Mailhog UI   : http://localhost:8025"
 	@echo "  MLflow       : http://localhost:5000"
 	@echo "  Compte démo  : demo@jenny.ai / Demo!1234"
+	@echo "\n  ⚠ Pour un chat pleinement intelligent : mets ta clé Groq (gratuite)"
+	@echo "    dans .env → JENNY_GROQ_API_KEY=gsk_... puis 'docker compose up -d api'"
 
 demo-down: ## Arrêter la stack et nettoyer les volumes
 	docker compose down -v
