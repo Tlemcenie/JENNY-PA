@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ThumbsUp, ThumbsDown, Gauge } from "lucide-react";
+import Link from "next/link";
+import { ThumbsUp, ThumbsDown, Gauge, TrendingUp, GraduationCap } from "lucide-react";
 import { getFeedbackMetrics, type FeedbackMetrics } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -91,7 +92,7 @@ export function SatisfactionCard({ className }: { className?: string }) {
               borderRadius: 999,
               background: "color-mix(in srgb, var(--error) 22%, transparent)",
               overflow: "hidden",
-              marginBottom: 16,
+              marginBottom: 12,
             }}
           >
             <div
@@ -104,6 +105,23 @@ export function SatisfactionCard({ className }: { className?: string }) {
               }}
             />
           </div>
+
+          {/* Tendance récente (7 derniers jours) — signal de fraîcheur. */}
+          {(data.last_7_days.positive > 0 || data.last_7_days.negative > 0) && (
+            <div
+              className="flex items-center gap-1.5"
+              style={{ fontSize: 11.5, color: "var(--text-3)", marginBottom: 16 }}
+            >
+              <TrendingUp style={{ width: 13, height: 13, color: "var(--text-3)" }} />
+              <span>Cette semaine :</span>
+              <span style={{ color: "var(--success)", fontWeight: 600 }}>
+                {data.last_7_days.positive} 👍
+              </span>
+              <span style={{ color: "var(--error)", fontWeight: 600 }}>
+                {data.last_7_days.negative} 👎
+              </span>
+            </div>
+          )}
 
           {/* Détail 👍 / 👎 / couverture */}
           <div className="grid grid-cols-3 gap-3">
@@ -155,6 +173,26 @@ export function SatisfactionCard({ className }: { className?: string }) {
                       <div style={{ color: "var(--error)", marginTop: 4, fontSize: 12 }}>
                         ↳ {c.comment}
                       </div>
+                    )}
+                    {/* Boucle d'amélioration : transformer un 👎 en connaissance.
+                        Le lien pré-remplit la Base de connaissances avec la
+                        question du client pour que le gérant apprenne la bonne
+                        réponse à Jenny en un clic. */}
+                    {c.question && (
+                      <Link
+                        href={`/knowledge?teach=${encodeURIComponent(c.question)}`}
+                        className="inline-flex items-center gap-1"
+                        style={{
+                          marginTop: 7,
+                          fontSize: 11.5,
+                          fontWeight: 600,
+                          color: "var(--coral)",
+                          textDecoration: "none",
+                        }}
+                      >
+                        <GraduationCap style={{ width: 13, height: 13 }} />
+                        Apprendre la réponse à Jenny →
+                      </Link>
                     )}
                   </li>
                 ))}

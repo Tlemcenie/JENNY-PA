@@ -31,7 +31,7 @@ import {
   ApiError,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { categoryLabel, sourceLabel } from "@/lib/utils";
+import { categoryLabel, sourceLabel, truncate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SkeletonCard } from "@/components/ui/skeleton";
@@ -120,6 +120,26 @@ export default function KnowledgePage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // « Apprendre à Jenny » depuis un retour négatif (👎) : la carte Satisfaction
+  // envoie ici avec ?teach=<question du client>. On ouvre le formulaire d'ajout
+  // pré-rempli pour que le gérant saisisse la bonne réponse en un clic.
+  // NB : on lit window.location plutôt que useSearchParams pour éviter la
+  // contrainte de Suspense de cette version de Next.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const teach = new URLSearchParams(window.location.search).get("teach");
+    if (!teach) return;
+    resetForm();
+    setFormMode("text");
+    setTitle(truncate(teach, 80));
+    setContent(`Question du client : « ${teach} »\n\nRéponse à apprendre à Jenny :\n`);
+    setCategory("faq");
+    setShowAddForm(true);
+    // Nettoie l'URL pour ne pas rouvrir le formulaire au rafraîchissement.
+    window.history.replaceState({}, "", "/knowledge");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fermeture du menu ⋯ au clic extérieur.
   useEffect(() => {
