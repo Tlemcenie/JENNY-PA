@@ -77,6 +77,28 @@ Pour tout arrêter (et purger les volumes) :
 make demo-down
 ```
 
+## Configuration : clés &amp; secrets (`.env`)
+
+> **Important pour qui clone le dépôt.** Les vrais secrets ne sont **jamais versionnés** :
+> le fichier `.env` (à la racine) est listé dans le [`.gitignore`](.gitignore) et
+> **ne part donc pas sur GitHub**. Tu le crées en copiant le modèle :
+> `cp .env.example .env`, puis tu y mets tes propres clés. Le dépôt public ne
+> contient que `.env.example` (des placeholders) et `configs/*.env` (valeurs de
+> démo, sans secret).
+
+Deux clés externes rendent Jenny pleinement fonctionnelle. **Aucune n'est
+obligatoire pour démarrer** (l'app tourne sans, en mode dégradé) :
+
+| Clé (`.env`) | À quoi elle sert | Obligatoire ? | Où l'obtenir |
+|---|---|---|---|
+| `JENNY_GROQ_API_KEY` (`gsk_…`) | **Cerveau du chat** : c'est le LLM qui rédige les réponses de Jenny (provider par défaut). Sans elle, l'API répond avec des textes génériques. | Recommandée (chat intelligent) | [console.groq.com](https://console.groq.com) — **gratuit**, quota généreux |
+| `JENNY_SMTP_PASSWORD` (`re_…`) | **Envoi d'emails** via [Resend](https://resend.com) : codes de vérification de compte, réinitialisation de mot de passe, notifications, PDF de devis, réponses email aux clients. | Optionnelle | [resend.com](https://resend.com) — offre gratuite. En **dev**, laisse **Mailhog** (aucune clé, les mails s'affichent sur http://localhost:8025) |
+
+En clair : **Groq = ce que Jenny dit**, **Resend = les emails qu'elle envoie**. En
+local tu peux tout tester sans Resend (Mailhog capture les mails) et, si tu veux
+un chat 100 % local sans clé, remplacer Groq par [Ollama](https://ollama.com)
+(`JENNY_LLM_PROVIDER=llama`). Détails de chaque variable dans `.env.example`.
+
 ### Mode développeur (Python local)
 
 ```bash
@@ -100,15 +122,29 @@ make worker       # dans un autre terminal
 L’API est accessible sur `http://localhost:8000`.
 La documentation OpenAPI est sur `http://localhost:8000/docs`.
 
-### Checkpoints ML (tests e2e)
+### Modèles ML — ce qui est dans le dépôt (et ce qui ne l'est pas)
 
-Les tests end-to-end attendent les poids :
+Jenny embarque **trois modèles maison** entraînés from scratch. Tous ne sont pas
+versionnés de la même façon (voir la règle `*.pt` dans le [`.gitignore`](.gitignore)) :
 
-- `checkpoints/intent/best_model.pt`
-- `checkpoints/ner/best_model.pt`
+| Modèle | Rôle | Taille | Versionné ? |
+|---|---|---|---|
+| **Intention** (`checkpoints/intent/best_model.pt`) | Classe le message client (RDV, prix, réclamation…) | ~10 Mo | ✅ **Oui** — nécessaire aux tests e2e / à la CI |
+| **Compréhension / NER** (`checkpoints/ner/best_model.pt`) | Extrait les entités (prestation, date, heure, nom, téléphone) | ~8 Mo | ✅ **Oui** — idem |
+| **NanoGPT** (`checkpoints/nanogpt/best_model.pt`) | Mini-LLM « fait maison » (vitrine pédagogique de la page Lab) | **~200 Mo** | ❌ **Non** (seul le `tokenizer.json` l'est) |
 
-S’ils sont absents : `python scripts/train_models.py`  
-(ces fichiers peuvent être versionnés dans le dépôt pour la CI — voir `.gitignore`.)
+**Pourquoi NanoGPT est exclu du git.** Le poids fait **~200 Mo**, soit **au-dessus de
+la limite de 100 Mo par fichier de GitHub** (et bien au-delà de la limite conseillée
+de 50 Mo). L'embarquer alourdirait chaque clone pour un modèle qui n'est qu'une
+**démonstration** (« regardez, on a entraîné notre propre LLM ») — il n'entre jamais
+dans le chemin de production, où c'est **Groq/Ollama** qui répond. Conséquence sur un
+clone : l'onglet « modèle maison » de la page Lab reste vide, **sans aucun impact** sur
+le reste de l'application. Pour le régénérer localement : `python -m nanogpt.train`
+(voir [`nanogpt/RUNBOOK.md`](nanogpt/RUNBOOK.md)).
+
+Les deux modèles ML « utiles » (intention + NER) sont, eux, **volontairement versionnés**
+(~18 Mo au total) pour qu'un clone fonctionne immédiatement et que la CI puisse les
+tester. S'ils manquaient : `python scripts/train_models.py`.
 
 ### Commandes utiles
 
