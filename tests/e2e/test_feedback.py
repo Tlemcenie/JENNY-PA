@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 import jenny.domain.models  # noqa: F401
 from jenny.api.auth.jwt_utils import create_access_token
@@ -272,3 +273,57 @@ class TestFeedbackMetrics:
         assert m["total_rated"] == 0
         assert m["satisfaction_pct"] == 0.0
         assert m["recent_comments"] == []
+        assert m["recent_positive"] == []
+
+    async def test_recent_positive_surfaced(self, db_tables, client: AsyncClient) -> None:
+        # « Ce qui marche » : un 👍 remonte avec le contexte question/réponse.
+        biz, _, reply = await _seed_conversation_with_reply(
+            question="Vous êtes ouverts samedi ?", answer="Oui, de 9h à 17h !"
+        )
+        await client.post(
+            "/api/v1/feedback", json={"message_id": str(reply.id), "rating": 1}, headers=_auth(biz)
+        )
+        m = (await client.get("/api/v1/feedback/metrics", headers=_auth(biz))).json()
+        assert len(m["recent_positive"]) == 1
+        rp = m["recent_positive"][0]
+        assert rp["answer"] == "Oui, de 9h à 17h !"
+        assert rp["question"] == "Vous êtes ouverts samedi ?"
+
+
+class TestNegativeFeedbackNotification:
+    async def test_negative_creates_owner_notification(
+        self, db_tables, client: AsyncClient
+    ) -> None:
+        from jenny.domain.models.notification import Notification
+
+        biz, _, reply = await _seed_conversation_with_reply()
+        await client.post(
+            "/api/v1/feedback",
+            json={"message_id": str(reply.id), "rating": -1, "comment": "à revoir"},
+            headers=_auth(biz),
+        )
+        async with async_session_factory() as s:
+            notifs = (
+                (await s.execute(select(Notification).where(Notification.business_id == biz.id)))
+                .scalars()
+                .all()
+            )
+        feedback_notifs = [n for n in notifs if n.kind == "feedback_negative"]
+        assert len(feedback_notifs) == 1
+        assert "revoir" in (feedback_notifs[0].body or "")
+
+    async def test_positive_creates_no_notification(self, db_tables, client: AsyncClient) -> None:
+        from jenny.domain.models.notification import Notification
+
+        biz, _, reply = await _seed_conversation_with_reply()
+        await client.post(
+            "/api/v1/feedback", json={"message_id": str(reply.id), "rating": 1}, headers=_auth(biz)
+        )
+        async with async_session_factory() as s:
+            n = await s.scalar(
+                select(Notification).where(
+                    Notification.business_id == biz.id,
+                    Notification.kind == "feedback_negative",
+                )
+            )
+        assert n is None

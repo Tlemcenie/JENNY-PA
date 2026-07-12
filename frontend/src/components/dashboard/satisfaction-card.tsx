@@ -199,6 +199,44 @@ export function SatisfactionCard({ className }: { className?: string }) {
               </ul>
             </div>
           )}
+
+          {/* Ce qui marche : derniers 👍 — les réponses réussies à reproduire. */}
+          {data.recent_positive.length > 0 && (
+            <div style={{ marginTop: 16, borderTop: "1px solid var(--divider)", paddingTop: 12 }}>
+              <div
+                className="jmono"
+                style={{ fontSize: 10.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)", marginBottom: 8 }}
+              >
+                Ce qui marche — derniers 👍
+              </div>
+              <ul style={{ display: "flex", flexDirection: "column", gap: 10, margin: 0, padding: 0, listStyle: "none" }}>
+                {data.recent_positive.slice(0, 3).map((c, i) => (
+                  <li
+                    key={i}
+                    style={{
+                      fontSize: 12.5,
+                      lineHeight: 1.5,
+                      background: "color-mix(in srgb, var(--success) 6%, var(--bg))",
+                      border: "1px solid color-mix(in srgb, var(--success) 22%, var(--divider))",
+                      borderRadius: 10,
+                      padding: "9px 11px",
+                    }}
+                  >
+                    {c.question && (
+                      <div style={{ color: "var(--text-3)", marginBottom: 3 }}>
+                        <b style={{ color: "var(--text-2)" }}>Client :</b> {truncate(c.question, 120)}
+                      </div>
+                    )}
+                    {c.answer && (
+                      <div style={{ color: "var(--text-2)" }}>
+                        <b style={{ color: "var(--success)" }}>Jenny :</b> {truncate(c.answer, 140)}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </>
       )}
     </Card>

@@ -249,12 +249,15 @@ export interface FeedbackMetrics {
   coverage_rated: number;
   responses_total: number; // nombre total de réponses de Jenny
   last_7_days: { positive: number; negative: number };
-  recent_comments: {
-    comment: string | null;
-    question: string | null;
-    answer: string | null;
-    created_at: string;
-  }[];
+  recent_comments: FeedbackContext[];
+  recent_positive: FeedbackContext[];
+}
+
+export interface FeedbackContext {
+  comment: string | null;
+  question: string | null;
+  answer: string | null;
+  created_at: string;
 }
 
 export async function submitFeedback(

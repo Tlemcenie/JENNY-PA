@@ -51,7 +51,8 @@ class FeedbackMetrics(BaseModel):
     coverage_rated: int  # nombre de réponses évaluées (= total_rated)
     responses_total: int  # nombre total de réponses Jenny (messages sortants)
     last_7_days: dict  # {"positive": int, "negative": int}
-    recent_comments: list[dict]  # derniers commentaires négatifs (à améliorer)
+    recent_comments: list[dict]  # derniers retours négatifs (à améliorer)
+    recent_positive: list[dict]  # derniers retours positifs (ce qui marche)
 
 
 # ── Agrégation partagée ──
@@ -111,6 +112,9 @@ async def submit_feedback(
     existing = await db.scalar(
         select(MessageFeedback).where(MessageFeedback.message_id == payload.message_id)
     )
+    # Vrai si l'avis DEVIENT négatif à ce tour (nouveau 👎, ou bascule 👍→👎, ou
+    # ajout d'un commentaire sur un 👎) → on alerte le gérant (une seule fois).
+    was_negative = existing is not None and existing.rating == -1
     if existing is None:
         existing = MessageFeedback(
             message_id=payload.message_id,
@@ -138,14 +142,46 @@ async def submit_feedback(
         )
         if existing is None:  # pragma: no cover - course perdue ET ligne disparue
             raise HTTPException(status_code=409, detail="Conflit d'écriture, réessayez.") from None
+        was_negative = existing.rating == -1
         existing.rating = payload.rating
         if payload.comment is not None:
             existing.comment = payload.comment
         await db.commit()
     logger.info("feedback.submit", message_id=str(payload.message_id), rating=payload.rating)
+
+    # Alerte gérant : une réponse jugée « à revoir » mérite son attention (surtout
+    # avec un commentaire). On ne notifie qu'à la BASCULE vers négatif, pas à
+    # chaque re-clic, pour ne pas spammer.
+    if payload.rating == -1 and (not was_negative or payload.comment):
+        await _notify_negative_feedback(db, msg, payload.comment)
+
     return FeedbackState(
         message_id=payload.message_id, rating=existing.rating, comment=existing.comment
     )
+
+
+async def _notify_negative_feedback(db, msg: Message, comment: str | None) -> None:
+    """Crée une notification gérant pour un retour négatif (best-effort)."""
+    try:
+        from jenny.domain.models.notification import Notification
+
+        preview = (msg.content_text or "")[:100]
+        body = f"Réponse jugée « à revoir » : « {preview} »"
+        if comment:
+            body += f" — commentaire : « {comment[:120]} »"
+        db.add(
+            Notification(
+                business_id=msg.business_id,
+                recipient=None,
+                kind="feedback_negative",
+                title="Une réponse de Jenny est à revoir 👎",
+                body=body,
+                meta={"message_id": str(msg.id), "conversation_id": str(msg.conversation_id)},
+            )
+        )
+        await db.commit()
+    except Exception as exc:  # pragma: no cover - dépend du schéma notifications
+        logger.warning("feedback.notify_failed", error=str(exc))
 
 
 @router.get("/message/{message_id}", response_model=FeedbackState)
@@ -171,6 +207,52 @@ async def get_message_feedback(
     return FeedbackState(message_id=message_id, rating=fb.rating, comment=fb.comment)
 
 
+async def _recent_feedback_context(db, bid: UUID, *, rating: int, limit: int) -> list[dict]:
+    """Derniers avis d'un signe donné, enrichis du contexte question/réponse.
+
+    Renvoie ``[{comment, question, answer, created_at}]`` : la réponse notée de
+    Jenny + la question du client juste avant (dernier message entrant), pour
+    que le gérant voie l'échange complet (à corriger pour les 👎, à reproduire
+    pour les 👍).
+    """
+    rows = await db.execute(
+        select(
+            MessageFeedback.comment,
+            MessageFeedback.created_at,
+            Message.content_text,
+            Message.conversation_id,
+            Message.received_at,
+        )
+        .join(Message, Message.id == MessageFeedback.message_id)
+        .where(MessageFeedback.business_id == bid, MessageFeedback.rating == rating)
+        .order_by(MessageFeedback.created_at.desc())
+        .limit(limit)
+    )
+    out: list[dict] = []
+    for comment, ts, answer, conv_id, answered_at in rows.all():
+        question = None
+        if conv_id is not None and answered_at is not None:
+            question = await db.scalar(
+                select(Message.content_text)
+                .where(
+                    Message.conversation_id == conv_id,
+                    Message.direction == "inbound",
+                    Message.received_at <= answered_at,
+                )
+                .order_by(Message.received_at.desc())
+                .limit(1)
+            )
+        out.append(
+            {
+                "comment": comment,
+                "question": question,
+                "answer": answer,
+                "created_at": ts.isoformat(),
+            }
+        )
+    return out
+
+
 @router.get("/metrics", response_model=FeedbackMetrics)
 async def feedback_metrics(db: DbSession, principal: CurrentUser) -> FeedbackMetrics:
     """Métriques de satisfaction des réponses de Jenny pour le business courant."""
@@ -185,6 +267,7 @@ async def feedback_metrics(db: DbSession, principal: CurrentUser) -> FeedbackMet
             responses_total=0,
             last_7_days={"positive": 0, "negative": 0},
             recent_comments=[],
+            recent_positive=[],
         )
 
     total, positive, negative, pos_7, neg_7, satisfaction = await satisfaction_counts(db, bid)
@@ -198,45 +281,11 @@ async def feedback_metrics(db: DbSession, principal: CurrentUser) -> FeedbackMet
         or 0
     )
 
-    # Dernières réponses jugées « à revoir » : on renvoie le contexte complet
-    # (question du client + réponse de Jenny + commentaire) pour que le gérant
-    # voie exactement QUOI améliorer — c'est ça qui rend le 👎 actionnable.
-    rows = await db.execute(
-        select(
-            MessageFeedback.comment,
-            MessageFeedback.created_at,
-            Message.content_text,
-            Message.conversation_id,
-            Message.received_at,
-        )
-        .join(Message, Message.id == MessageFeedback.message_id)
-        .where(MessageFeedback.business_id == bid, MessageFeedback.rating == -1)
-        .order_by(MessageFeedback.created_at.desc())
-        .limit(5)
-    )
-    recent_comments = []
-    for comment, ts, answer, conv_id, answered_at in rows.all():
-        # Question du client = dernier message entrant juste avant la réponse.
-        question = None
-        if conv_id is not None and answered_at is not None:
-            question = await db.scalar(
-                select(Message.content_text)
-                .where(
-                    Message.conversation_id == conv_id,
-                    Message.direction == "inbound",
-                    Message.received_at <= answered_at,
-                )
-                .order_by(Message.received_at.desc())
-                .limit(1)
-            )
-        recent_comments.append(
-            {
-                "comment": comment,
-                "question": question,
-                "answer": answer,
-                "created_at": ts.isoformat(),
-            }
-        )
+    # Derniers retours, avec le contexte complet (question du client + réponse de
+    # Jenny + commentaire) : « à revoir » (👎) rend le feedback actionnable, et
+    # « ce qui marche » (👍) montre au gérant les réponses réussies à reproduire.
+    recent_comments = await _recent_feedback_context(db, bid, rating=-1, limit=5)
+    recent_positive = await _recent_feedback_context(db, bid, rating=1, limit=3)
 
     return FeedbackMetrics(
         total_rated=total,
@@ -246,5 +295,6 @@ async def feedback_metrics(db: DbSession, principal: CurrentUser) -> FeedbackMet
         coverage_rated=total,
         responses_total=responses_total,
         last_7_days={"positive": pos_7, "negative": neg_7},
+        recent_positive=recent_positive,
         recent_comments=recent_comments,
     )

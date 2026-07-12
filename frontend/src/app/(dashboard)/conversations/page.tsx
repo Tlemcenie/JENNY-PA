@@ -92,6 +92,7 @@ import { EmojiButton } from "@/components/conversations/emoji-button";
 import { fadeInUp } from "@/lib/motion";
 import { ChannelAvatar, StatusBadge } from "@/components/jenny/jenny-ui";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
+import { FeedbackButtons } from "@/components/chat/feedback-buttons";
 
 const channels = ["all", "whatsapp", "instagram", "email", "twitter", "form"];
 const statuses = ["all", "open", "closed", "archived"];
@@ -2303,6 +2304,15 @@ export default function ConversationsPage() {
                             {m.sender_name ? `${m.sender_name} · ` : ""}
                             <RelativeTime date={m.created_at} />
                           </div>
+                          {/* Contrôle qualité : le gérant note la VRAIE réponse de
+                              Jenny (👍/👎) pour alimenter la satisfaction et la
+                              boucle d'amélioration. Seulement sur les réponses de
+                              Jenny (outbound) non vides. */}
+                          {outbound && (m.content || "").trim() && (
+                            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                              <FeedbackButtons messageId={m.id} />
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
