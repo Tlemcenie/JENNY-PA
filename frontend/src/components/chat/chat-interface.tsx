@@ -19,6 +19,35 @@ const QUICK_SUGGESTIONS = [
   "Combien coûte une coupe ?",
 ];
 
+/**
+ * Quick-replies CONTEXTUELLES : d'après la dernière question de Jenny, on propose
+ * des réponses toutes prêtes (envoi au tap) pour fluidifier la prise de rendez-vous.
+ * Purement dérivé du texte + du signal `needs_clarification` — aucun appel réseau.
+ * Renvoie [] quand rien de pertinent (on retombe alors sur les suggestions statiques).
+ */
+function deriveQuickReplies(text: string, needsClarification?: boolean): string[] {
+  const t = text.toLowerCase();
+  const asks = text.includes("?");
+  if (!asks) return [];
+  // Jenny demande / énumère une prestation (« Une coupe, une couleur… ? »).
+  const serviceWords = [
+    "coupe", "couleur", "coloration", "balayage", "brushing", "mèches",
+    "soin", "prestation", "réaliser", "coiffure",
+  ];
+  const serviceHits = serviceWords.filter((w) => t.includes(w)).length;
+  // Priorité au JOUR/HEURE si Jenny le demande explicitement (sinon « pour quel
+  // jour » serait capté à tort comme une question de prestation).
+  const asksDay = /quel\s+jour|quand|quelle\s+date|jour vous arrange|disponib|quel moment vous/.test(t);
+  const asksTime = /quelle?\s+heure|à quelle heure|quel\s+moment|créneau|plutôt le matin|après-?midi/.test(t);
+  if (!asksDay && !asksTime && (serviceHits >= 2 || /quelle?\s+(prestation|service|coiffure)|que souhaitez/.test(t)))
+    return ["Une coupe", "Une couleur", "Un balayage"];
+  if (asksTime && !asksDay) return ["En matinée", "L'après-midi", "En fin de journée"];
+  if (asksDay) return ["Aujourd'hui", "Demain", "Ce samedi"];
+  // Question fermée courte → oui / non rapides.
+  if (needsClarification && text.trim().length < 120) return ["Oui", "Non"];
+  return [];
+}
+
 interface ChatMessage {
   id: string;
   content: string;
@@ -29,6 +58,7 @@ interface ChatMessage {
     confidence?: number;
     agent?: string;
     phase?: string;
+    needsClarification?: boolean;
   };
   // Id serveur du message Jenny (persisté) → cible du feedback 👍/👎.
   messageId?: string;
@@ -62,8 +92,8 @@ export function ChatInterface() {
     }
   }, [input]);
 
-  const handleSend = async () => {
-    const text = input.trim();
+  const handleSend = async (override?: string) => {
+    const text = (override ?? input).trim();
     if (!text || isTyping) return;
     if (!user?.business_id) {
       setError("Session invalide : aucun business associé à votre compte.");
@@ -134,6 +164,8 @@ export function ChatInterface() {
             agent: typeof meta.agent_used === "string" ? meta.agent_used : undefined,
             phase:
               typeof meta.conversation_phase === "string" ? meta.conversation_phase : undefined,
+            needsClarification:
+              typeof meta.needs_clarification === "boolean" ? meta.needs_clarification : undefined,
           };
           // Le back envoie la version FINALE nettoyée (garde-fou persona) dans
           // `text` : elle fait autorité → on remplace l'affichage brut par elle.
@@ -193,6 +225,7 @@ export function ChatInterface() {
             confidence: response.intent_confidence,
             agent: response.agent_used,
             phase: response.conversation_phase,
+            needsClarification: response.needs_clarification,
           },
           messageId: response.message_id ?? undefined,
         };
@@ -484,21 +517,48 @@ export function ChatInterface() {
               </motion.div>
             )}
 
-            <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-              {QUICK_SUGGESTIONS.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  className="jpill"
-                  onClick={() => {
-                    setInput(suggestion);
-                    inputRef.current?.focus();
-                  }}
-                >
-                  {suggestion}
-                </button>
-              ))}
-            </div>
+            {(() => {
+              // Quick-replies contextuelles si Jenny vient de poser une question ;
+              // sinon, suggestions statiques d'entrée (qui pré-remplissent l'input).
+              const lastJenny = [...messages].reverse().find((m) => !m.isUser && !m.error);
+              const contextual =
+                lastJenny && !isTyping
+                  ? deriveQuickReplies(lastJenny.content, lastJenny.meta?.needsClarification)
+                  : [];
+              if (contextual.length > 0) {
+                return (
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                    {contextual.map((reply) => (
+                      <button
+                        key={reply}
+                        type="button"
+                        className="jpill"
+                        onClick={() => void handleSend(reply)}
+                      >
+                        {reply}
+                      </button>
+                    ))}
+                  </div>
+                );
+              }
+              return (
+                <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                  {QUICK_SUGGESTIONS.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      className="jpill"
+                      onClick={() => {
+                        setInput(suggestion);
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
 
             <div
               className="jcomposer"
@@ -538,7 +598,7 @@ export function ChatInterface() {
               />
               <button
                 type="button"
-                onClick={handleSend}
+                onClick={() => handleSend()}
                 disabled={!input.trim() || isTyping}
                 aria-label="Envoyer"
                 style={{

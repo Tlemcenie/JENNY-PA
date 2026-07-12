@@ -112,6 +112,9 @@ class ConversationMessage(BaseModel):
     status: str
     attachment_count: int = 0
     created_at: datetime
+    # Avis 👍/👎 déjà enregistré sur cette réponse (hydrate l'UI au rechargement).
+    feedback_rating: int | None = None
+    feedback_comment: str | None = None
 
 
 class ConversationDetail(BaseModel):
@@ -620,6 +623,21 @@ async def get_conversation(
         )
     ).scalars().all()
 
+    # Avis 👍/👎 de tous les messages de la conversation en UNE requête (pas de N+1) :
+    # on hydrate ainsi les boutons de feedback sans un appel par message.
+    from jenny.domain.models.message_feedback import MessageFeedback
+
+    fb_rows = (
+        await db.execute(
+            select(
+                MessageFeedback.message_id,
+                MessageFeedback.rating,
+                MessageFeedback.comment,
+            ).where(MessageFeedback.conversation_id == conv.id)
+        )
+    ).all()
+    feedback_by_msg = {str(mid): (rating, comment) for mid, rating, comment in fb_rows}
+
     return ConversationDetail(
         id=str(conv.id),
         channel=conv.channel,
@@ -647,6 +665,8 @@ async def get_conversation(
                 status=m.status,
                 attachment_count=m.attachment_count or 0,
                 created_at=m.created_at,
+                feedback_rating=feedback_by_msg.get(str(m.id), (None, None))[0],
+                feedback_comment=feedback_by_msg.get(str(m.id), (None, None))[1],
             )
             for m in msgs
         ],

@@ -214,6 +214,39 @@ class TestGetMessageFeedback:
         assert r.json()["rating"] is None
 
 
+class TestDeleteFeedback:
+    async def test_delete_removes_vote(self, db_tables, client: AsyncClient) -> None:
+        biz, _, reply = await _seed_conversation_with_reply()
+        headers = _auth(biz)
+        await client.post(
+            "/api/v1/feedback", json={"message_id": str(reply.id), "rating": 1}, headers=headers
+        )
+        r = await client.delete(f"/api/v1/feedback/message/{reply.id}", headers=headers)
+        assert r.status_code == 200
+        assert r.json()["rating"] is None
+        # L'avis a bien disparu des métriques.
+        m = (await client.get("/api/v1/feedback/metrics", headers=headers)).json()
+        assert m["total_rated"] == 0
+
+    async def test_delete_is_idempotent(self, db_tables, client: AsyncClient) -> None:
+        biz, _, reply = await _seed_conversation_with_reply()
+        # Aucun avis à supprimer : on renvoie quand même rating=None sans erreur.
+        r = await client.delete(f"/api/v1/feedback/message/{reply.id}", headers=_auth(biz))
+        assert r.status_code == 200
+        assert r.json()["rating"] is None
+
+    async def test_delete_scoped_to_business(self, db_tables, client: AsyncClient) -> None:
+        biz, _, reply = await _seed_conversation_with_reply()
+        other, _, _ = await _seed_conversation_with_reply()
+        await client.post(
+            "/api/v1/feedback", json={"message_id": str(reply.id), "rating": 1}, headers=_auth(biz)
+        )
+        # Un autre business ne peut pas effacer l'avis (isolation) : la ligne survit.
+        await client.delete(f"/api/v1/feedback/message/{reply.id}", headers=_auth(other))
+        r = await client.get(f"/api/v1/feedback/message/{reply.id}", headers=_auth(biz))
+        assert r.json()["rating"] == 1
+
+
 class TestFeedbackMetrics:
     async def test_aggregates_and_context(self, db_tables, client: AsyncClient) -> None:
         biz, _, good = await _seed_conversation_with_reply()
@@ -266,6 +299,34 @@ class TestFeedbackMetrics:
         assert rc["comment"] == "Réponse inutile"
         assert rc["question"] == "Combien pour un balayage ?"
         assert rc["answer"] == "Je ne sais pas."
+
+    async def test_days_filter_windows_old_feedback(
+        self, db_tables, client: AsyncClient
+    ) -> None:
+        from jenny.domain.models.message_feedback import MessageFeedback
+
+        biz, _, reply = await _seed_conversation_with_reply()
+        headers = _auth(biz)
+        # Avis positif daté d'il y a 20 jours (inséré directement pour maîtriser created_at).
+        async with async_session_factory() as s, s.begin():
+            s.add(
+                MessageFeedback(
+                    message_id=reply.id,
+                    conversation_id=reply.conversation_id,
+                    business_id=biz.id,
+                    rating=1,
+                    created_at=datetime.now(UTC) - timedelta(days=20),
+                )
+            )
+        # Sur 7 jours : l'avis de 20 jours est hors fenêtre → 0 évalué.
+        m7 = (await client.get("/api/v1/feedback/metrics?days=7", headers=headers)).json()
+        assert m7["total_rated"] == 0
+        # Sans filtre : il compte.
+        m_all = (await client.get("/api/v1/feedback/metrics", headers=headers)).json()
+        assert m_all["total_rated"] == 1
+        # Sur 30 jours : il rentre dans la fenêtre.
+        m30 = (await client.get("/api/v1/feedback/metrics?days=30", headers=headers)).json()
+        assert m30["total_rated"] == 1
 
     async def test_empty_state(self, db_tables, client: AsyncClient) -> None:
         biz, _, _ = await _seed_conversation_with_reply()

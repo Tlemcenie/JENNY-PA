@@ -1,12 +1,65 @@
 """Tests du post-traitement des réponses : Jenny ne se présente jamais comme une IA."""
 
 from jenny.engine.response_generator import (
+    cap_paragraphs,
     polish_response,
     sanitize_identity,
+    strip_inline_address,
     strip_letter_format,
     strip_model_artifacts,
     trim_filler_closing,
+    trim_trailing_deflection,
 )
+
+
+def test_trims_deflection_after_grounded_answer() -> None:
+    # Réponse fondée + déflexion collée → on retire la déflexion (bruit).
+    assert (
+        trim_trailing_deflection(
+            "Une coupe femme coûte 39€. Je vérifie tout de suite et je reviens vers vous !",
+            grounded=True,
+        )
+        == "Une coupe femme coûte 39€."
+    )
+
+
+def test_keeps_deflection_when_sole_content_or_ungrounded() -> None:
+    sole = "Je vérifie ça et je reviens vers vous."
+    assert trim_trailing_deflection(sole, grounded=True) == sole  # seule phrase
+    ung = "Le prix du permis moto ? Je vérifie et reviens vers vous."
+    assert trim_trailing_deflection(ung, grounded=False) == ung  # non fondé
+
+
+def test_strips_inline_madame_monsieur() -> None:
+    out = strip_inline_address("Je vous remercie, madame ou monsieur, nous fermons à 19h.")
+    assert "madame" not in out.lower() and "monsieur" not in out.lower()
+    assert "fermons à 19h" in out
+
+
+def test_caps_to_two_paragraphs_keeping_question() -> None:
+    txt = "Bloc un utile.\n\nBloc deux détail.\n\nBloc trois. Vous voulez réserver ?"
+    out = cap_paragraphs(txt)
+    assert out.count("\n\n") == 2
+    assert out.rstrip().endswith("Vous voulez réserver ?")
+    assert "Bloc trois" not in out
+
+
+def test_polish_trims_deflection_only_when_grounded() -> None:
+    """polish_response enlève la déflexion collée à une réponse FONDÉE, la garde sinon."""
+    grounded = polish_response(
+        "Une coupe homme coûte 25€. Je vérifie et je reviens vers vous !",
+        already_spoke=True,
+        grounded=True,
+    )
+    assert "25" in grounded
+    assert "vérifie" not in grounded.lower()
+
+    ungrounded = polish_response(
+        "Je vérifie ça et je reviens vers vous tout de suite.",
+        already_spoke=True,
+        grounded=False,
+    )
+    assert "vérifie" in ungrounded.lower()  # seule info → jamais retirée
 
 
 def test_trims_empty_closing_filler() -> None:
@@ -39,7 +92,7 @@ def test_does_not_trim_deflection() -> None:
 
 def test_strips_chat_template_token_and_cjk() -> None:
     """Fuite de gabarit ChatML + texte chinois (glitch qwen) → tout est retiré."""
-    raw = "Super ! Je保留未翻译  <|im_start|>user 好的，请继续."
+    raw = "Super ! Je保留未翻译  <|im_start|>user 好的，请继续."  # noqa: RUF001 - CJK volontaire (test glitch qwen)
     out = strip_model_artifacts(raw)
     assert "<|" not in out
     assert "保" not in out and "好" not in out

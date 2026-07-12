@@ -58,15 +58,25 @@ class FeedbackMetrics(BaseModel):
 # ── Agrégation partagée ──
 
 
-async def satisfaction_counts(db, business_id: UUID) -> tuple[int, int, int, int, int, float]:
+async def satisfaction_counts(
+    db, business_id: UUID, *, days: int | None = None
+) -> tuple[int, int, int, int, int, float]:
     """Compteurs de satisfaction d'un business, en UN SEUL scan de la table.
 
     Renvoie ``(total, positifs, négatifs, positifs_7j, négatifs_7j, pct)``.
     Source de vérité UNIQUE du « % de satisfaction » : utilisée par
     ``/feedback/metrics`` (carte Satisfaction) ET ``/jenny/metrics`` (page
     Efficacité) pour que les deux surfaces affichent le même chiffre.
+
+    ``days`` (optionnel) restreint le total/positifs/négatifs à cette fenêtre
+    glissante ; ``None`` = tout l'historique (comportement d'origine). Le trend
+    « 7 jours » (pos_7/neg_7) reste toujours sur 7 jours, indépendamment de ``days``.
     """
-    since = datetime.now(UTC) - timedelta(days=7)
+    now = datetime.now(UTC)
+    since_7 = now - timedelta(days=7)
+    scope = MessageFeedback.business_id == business_id
+    if days is not None and days > 0:
+        scope = scope & (MessageFeedback.created_at >= now - timedelta(days=days))
 
     def _count_if(cond) -> object:
         return func.coalesce(func.sum(case((cond, 1), else_=0)), 0)
@@ -77,9 +87,9 @@ async def satisfaction_counts(db, business_id: UUID) -> tuple[int, int, int, int
                 func.count(),
                 _count_if(MessageFeedback.rating == 1),
                 _count_if(MessageFeedback.rating == -1),
-                _count_if((MessageFeedback.rating == 1) & (MessageFeedback.created_at >= since)),
-                _count_if((MessageFeedback.rating == -1) & (MessageFeedback.created_at >= since)),
-            ).where(MessageFeedback.business_id == business_id)
+                _count_if((MessageFeedback.rating == 1) & (MessageFeedback.created_at >= since_7)),
+                _count_if((MessageFeedback.rating == -1) & (MessageFeedback.created_at >= since_7)),
+            ).where(scope)
         )
     ).one()
     total, positive, negative, pos_7, neg_7 = (int(c or 0) for c in counts)
@@ -161,27 +171,54 @@ async def submit_feedback(
 
 
 async def _notify_negative_feedback(db, msg: Message, comment: str | None) -> None:
-    """Crée une notification gérant pour un retour négatif (best-effort)."""
+    """Notifie le gérant d'un retour négatif ET pousse l'événement SSE temps réel.
+
+    On passe par ``notify_and_publish`` : le gérant voit la cloche s'incrémenter
+    en direct (pas seulement au prochain rechargement). Best-effort — un souci de
+    schéma notifications ne doit jamais casser l'enregistrement de l'avis.
+    """
     try:
-        from jenny.domain.models.notification import Notification
+        from jenny.services.notification_service import notify_and_publish
 
         preview = (msg.content_text or "")[:100]
         body = f"Réponse jugée « à revoir » : « {preview} »"
         if comment:
             body += f" — commentaire : « {comment[:120]} »"
-        db.add(
-            Notification(
-                business_id=msg.business_id,
-                recipient=None,
-                kind="feedback_negative",
-                title="Une réponse de Jenny est à revoir 👎",
-                body=body,
-                meta={"message_id": str(msg.id), "conversation_id": str(msg.conversation_id)},
-            )
+        await notify_and_publish(
+            db,
+            business_id=msg.business_id,
+            kind="feedback_negative",
+            title="Une réponse de Jenny est à revoir 👎",
+            body=body,
+            conversation_id=msg.conversation_id,
+            meta={"message_id": str(msg.id), "conversation_id": str(msg.conversation_id)},
         )
-        await db.commit()
     except Exception as exc:  # pragma: no cover - dépend du schéma notifications
         logger.warning("feedback.notify_failed", error=str(exc))
+
+
+@router.delete("/message/{message_id}", response_model=FeedbackState)
+async def delete_message_feedback(
+    message_id: UUID, db: DbSession, principal: CurrentUser
+) -> FeedbackState:
+    """Annule l'avis d'un message (re-clic sur un pouce déjà actif = on l'enlève).
+
+    Idempotent : si aucun avis n'existe, on renvoie simplement ``rating=None``.
+    Scopé au business courant (même isolation multi-tenant que le GET/POST).
+    """
+    if principal.business_id is None:
+        raise HTTPException(status_code=403, detail="Message hors de votre périmètre.")
+    fb = await db.scalar(
+        select(MessageFeedback).where(
+            MessageFeedback.message_id == message_id,
+            MessageFeedback.business_id == principal.business_id,
+        )
+    )
+    if fb is not None:
+        await db.delete(fb)
+        await db.commit()
+        logger.info("feedback.delete", message_id=str(message_id))
+    return FeedbackState(message_id=message_id, rating=None)
 
 
 @router.get("/message/{message_id}", response_model=FeedbackState)
@@ -254,8 +291,16 @@ async def _recent_feedback_context(db, bid: UUID, *, rating: int, limit: int) ->
 
 
 @router.get("/metrics", response_model=FeedbackMetrics)
-async def feedback_metrics(db: DbSession, principal: CurrentUser) -> FeedbackMetrics:
-    """Métriques de satisfaction des réponses de Jenny pour le business courant."""
+async def feedback_metrics(
+    db: DbSession,
+    principal: CurrentUser,
+    days: int | None = None,
+) -> FeedbackMetrics:
+    """Métriques de satisfaction des réponses de Jenny pour le business courant.
+
+    ``days`` (optionnel) filtre sur une fenêtre glissante (7, 30…) ; absent = tout
+    l'historique. Le trend « 7 jours » reste toujours calculé sur 7 jours.
+    """
     bid = principal.business_id
     if bid is None:
         return FeedbackMetrics(
@@ -270,15 +315,15 @@ async def feedback_metrics(db: DbSession, principal: CurrentUser) -> FeedbackMet
             recent_positive=[],
         )
 
-    total, positive, negative, pos_7, neg_7, satisfaction = await satisfaction_counts(db, bid)
+    total, positive, negative, pos_7, neg_7, satisfaction = await satisfaction_counts(
+        db, bid, days=days
+    )
 
+    resp_scope = [Message.business_id == bid, Message.direction == "outbound"]
+    if days is not None and days > 0:
+        resp_scope.append(Message.created_at >= datetime.now(UTC) - timedelta(days=days))
     responses_total = (
-        await db.scalar(
-            select(func.count())
-            .select_from(Message)
-            .where(Message.business_id == bid, Message.direction == "outbound")
-        )
-        or 0
+        await db.scalar(select(func.count()).select_from(Message).where(*resp_scope)) or 0
     )
 
     # Derniers retours, avec le contexte complet (question du client + réponse de

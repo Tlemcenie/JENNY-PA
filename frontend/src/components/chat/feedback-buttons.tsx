@@ -2,23 +2,31 @@
 
 import { useState } from "react";
 import { ThumbsUp, ThumbsDown, Check } from "lucide-react";
-import { submitFeedback, type FeedbackRating } from "@/lib/api";
+import { submitFeedback, deleteFeedback, type FeedbackRating } from "@/lib/api";
 
 interface FeedbackButtonsProps {
   messageId: string;
+  /** Vote déjà enregistré (hydratation au rechargement) : 1, -1 ou null. */
+  initialRating?: number | null;
+  initialComment?: string | null;
 }
 
 /**
  * Validation simple d'une réponse de Jenny : pouce haut / pouce bas.
  * Sur un pouce bas, on propose (facultatif) un court commentaire d'amélioration.
+ * Re-cliquer un pouce déjà actif ANNULE le vote (DELETE). L'état initial peut
+ * être hydraté depuis le serveur (initialRating) pour survivre à un rechargement.
  * Optimiste : l'UI réagit tout de suite, l'appel réseau suit ; en cas d'échec
- * on revient à l'état précédent. (Pas d'hydratation d'un vote passé : le chat
- * de test repart de zéro à chaque visite, un message n'est donc noté qu'une fois.)
+ * on revient à l'état précédent.
  */
-export function FeedbackButtons({ messageId }: FeedbackButtonsProps) {
-  const [rating, setRating] = useState<number | null>(null);
+export function FeedbackButtons({
+  messageId,
+  initialRating = null,
+  initialComment = null,
+}: FeedbackButtonsProps) {
+  const [rating, setRating] = useState<number | null>(initialRating);
   const [showComment, setShowComment] = useState(false);
-  const [comment, setComment] = useState("");
+  const [comment, setComment] = useState(initialComment ?? "");
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -40,12 +48,34 @@ export function FeedbackButtons({ messageId }: FeedbackButtonsProps) {
     }
   };
 
+  const cancel = async () => {
+    const prev = rating;
+    setRating(null); // optimiste
+    setShowComment(false);
+    setBusy(true);
+    try {
+      await deleteFeedback(messageId);
+    } catch {
+      setRating(prev); // rollback
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleUp = () => {
+    if (rating === 1) {
+      void cancel();
+      return;
+    }
     setShowComment(false);
     void send(1);
   };
 
   const handleDown = () => {
+    if (rating === -1) {
+      void cancel();
+      return;
+    }
     void send(-1);
     setShowComment(true);
   };
@@ -125,6 +155,7 @@ export function FeedbackButtons({ messageId }: FeedbackButtonsProps) {
             onKeyDown={(e) => {
               if (e.key === "Enter") void send(-1, comment.trim());
             }}
+            aria-label="Ce qui n'allait pas dans la réponse (facultatif)"
             placeholder="Qu'est-ce qui n'allait pas ? (facultatif)"
             maxLength={1000}
             style={{

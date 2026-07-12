@@ -2310,7 +2310,11 @@ export default function ConversationsPage() {
                               Jenny (outbound) non vides. */}
                           {outbound && (m.content || "").trim() && (
                             <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                              <FeedbackButtons messageId={m.id} />
+                              <FeedbackButtons
+                                messageId={m.id}
+                                initialRating={m.feedback_rating ?? null}
+                                initialComment={m.feedback_comment ?? null}
+                              />
                             </div>
                           )}
                         </div>

@@ -78,8 +78,10 @@ async def load_customer_context(
 
         cust = await db.get(Customer, customer_id)
         if cust is not None and (cust.full_name or "").strip():
+            first_name = cust.full_name.strip().split()[0]
             extra.append(
-                f"Ce client s'appelle {cust.full_name.strip()} — salue-le par son prénom."
+                f"Ce client s'appelle {first_name} — tu peux l'appeler par son prénom, "
+                "naturellement (une fois suffit, n'en fais pas trop)."
             )
         last = (
             await db.execute(

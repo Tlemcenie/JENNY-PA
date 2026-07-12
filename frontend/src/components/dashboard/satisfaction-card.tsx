@@ -13,22 +13,30 @@ import { truncate } from "@/lib/utils";
  * Métriques de satisfaction des réponses de Jenny (issues des 👍/👎 laissés
  * par les utilisateurs). Auto-chargeante : à déposer sur n'importe quelle page.
  */
+const PERIODS: { label: string; days: number }[] = [
+  { label: "7 j", days: 7 },
+  { label: "30 j", days: 30 },
+  { label: "Tout", days: 0 },
+];
+
 export function SatisfactionCard({ className }: { className?: string }) {
   const [data, setData] = useState<FeedbackMetrics | null>(null);
   const [loading, setLoading] = useState(true);
+  const [days, setDays] = useState(0); // 0 = tout l'historique (par défaut)
 
   useEffect(() => {
     let alive = true;
-    getFeedbackMetrics()
+    setLoading(true);
+    getFeedbackMetrics(days)
       .then((m) => alive && setData(m))
       .catch(() => {}) // data reste null → état « indisponible »
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
-  }, []);
+  }, [days]);
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <Card className={`p-6 ${className ?? ""}`}>
         <Skeleton className="h-4 w-48 mb-4" />
@@ -62,12 +70,45 @@ export function SatisfactionCard({ className }: { className?: string }) {
           : "var(--error)";
 
   return (
-    <Card className={`p-6 ${className ?? ""}`}>
-      <div className="flex items-center gap-2 mb-4">
-        <Gauge style={{ width: 16, height: 16, color: "var(--coral)" }} />
-        <h3 style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text)" }}>
-          Satisfaction des réponses
-        </h3>
+    <Card className={`p-6 transition-opacity duration-200 ${loading ? "opacity-60" : ""} ${className ?? ""}`}>
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex items-center gap-2">
+          <Gauge style={{ width: 16, height: 16, color: "var(--coral)" }} />
+          <h3 style={{ fontSize: 13.5, fontWeight: 600, color: "var(--text)" }}>
+            Satisfaction des réponses
+          </h3>
+        </div>
+        <div
+          role="group"
+          aria-label="Période"
+          style={{ display: "inline-flex", gap: 2, background: "var(--bg)", border: "1px solid var(--divider)", borderRadius: 8, padding: 2 }}
+        >
+          {PERIODS.map((p) => {
+            const active = p.days === days;
+            return (
+              <button
+                key={p.days}
+                type="button"
+                onClick={() => setDays(p.days)}
+                aria-pressed={active}
+                className="jmono"
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  padding: "3px 8px",
+                  borderRadius: 6,
+                  border: "none",
+                  cursor: "pointer",
+                  color: active ? "#fff" : "var(--text-3)",
+                  background: active ? "var(--coral)" : "transparent",
+                  transition: "all .14s ease",
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {total_rated === 0 ? (

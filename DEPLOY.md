@@ -76,6 +76,16 @@ gcloud compute networks vpc-access connectors create jenny-conn \
 ⚠️ Sans Redis, l'app **dégrade proprement** (état conversationnel en mémoire, rate-limit
 local) — OK pour 1 instance, indispensable dès qu'on scale > 1.
 
+> **🔴 Mode démo sans Redis — contrainte mono-instance.** L'état conversationnel
+> (suivi multi-tours du chat) vit alors en mémoire du process. Il **faut** donc
+> forcer **un seul worker ET une seule instance**, sinon deux tours d'une même
+> conversation peuvent tomber sur des process différents et Jenny « perd le fil » :
+> - API Cloud Run : `--max-instances=1` **et** `WEB_CONCURRENCY=1`
+>   (l'entrypoint `docker/entrypoint.prod.sh` force déjà 1 worker uvicorn quand
+>   `JENNY_REDIS_URL` est vide — garder les deux cohérents).
+> - Dès qu'on rebranche Redis (Memorystore), on peut relever `max-instances` et
+>   `WEB_CONCURRENCY` : l'état devient partagé et le suivi survit au scale-out.
+
 ## 4. Secrets
 
 ```bash

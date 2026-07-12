@@ -271,8 +271,19 @@ export async function submitFeedback(
   });
 }
 
-export async function getFeedbackMetrics(): Promise<FeedbackMetrics> {
-  return request<FeedbackMetrics>("/api/v1/feedback/metrics");
+export async function getMessageFeedback(messageId: string): Promise<FeedbackState> {
+  return request<FeedbackState>(`/api/v1/feedback/message/${messageId}`);
+}
+
+export async function deleteFeedback(messageId: string): Promise<FeedbackState> {
+  return request<FeedbackState>(`/api/v1/feedback/message/${messageId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getFeedbackMetrics(days?: number): Promise<FeedbackMetrics> {
+  const qs = days && days > 0 ? `?days=${days}` : "";
+  return request<FeedbackMetrics>(`/api/v1/feedback/metrics${qs}`);
 }
 
 // ==================== MESSAGES ====================
@@ -694,6 +705,8 @@ export interface ConversationMessageItem {
   status: string;
   attachment_count?: number;
   created_at: string;
+  feedback_rating?: number | null;
+  feedback_comment?: string | null;
 }
 
 export interface ConversationDetail {

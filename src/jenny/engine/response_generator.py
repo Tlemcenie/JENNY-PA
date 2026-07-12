@@ -238,15 +238,83 @@ def cut_to_last_sentence(text: str) -> str:
     return cut if len(cut) >= 12 else t
 
 
-def polish_response(text: str, *, already_spoke: bool) -> str:
-    """Nettoyage final : artefacts modèle + identité + format courrier + fuites de
-    consignes + salutation répétée + formule de clôture creuse + phrase inachevée."""
+# Formule d'appel « courrier » (« Madame, », « Cher client ») que le petit modèle
+# glisse parfois EN MILIEU de phrase (« Je vous remercie, madame ou monsieur, … »).
+# On la retire n'importe où (pas seulement en tête).
+_INLINE_ADDRESS_RE = re.compile(
+    r"\b(?:ch[èe]re?s?\s+client(?:e|es|s)?|cher\s+client|"
+    r"madame(?:\s+ou\s+monsieur)?|monsieur(?:\s+ou\s+madame)?|mademoiselle)\b[\s,]*",
+    re.IGNORECASE,
+)
+
+
+def strip_inline_address(text: str) -> str:
+    """Retire les « Madame/Monsieur/Cher client » où qu'ils soient (ton message)."""
+    out = _INLINE_ADDRESS_RE.sub("", text)
+    out = re.sub(r"\s{2,}", " ", out).strip(" ,")
+    if out and out[0].islower():
+        out = out[0].upper() + out[1:]
+    return out if len(out) >= 10 else text
+
+
+def trim_trailing_deflection(text: str, *, grounded: bool) -> str:
+    """Retire une DÉFLEXION (« je vérifie et je reviens ») collée en fin de message
+    APRÈS une vraie réponse — mais UNIQUEMENT si la récupération a fondé la réponse
+    (``grounded``). Ainsi on ne touche jamais à une déflexion qui EST la réponse
+    (vraie lacune) : elle reste intacte pour la détection de lacune.
+    """
+    if not grounded or not text:
+        return text
+    from jenny.engine.intelligence import looks_like_deflection
+
+    sentences = re.split(r"(?<=[.!?…])\s+", text.strip())
+    if len(sentences) < 2:
+        return text
+    # On retire la/les dernière(s) phrase(s) qui sont des déflexions, tant qu'il
+    # reste du contenu substantiel devant.
+    while len(sentences) >= 2 and looks_like_deflection(sentences[-1]):
+        candidate = " ".join(sentences[:-1]).strip()
+        if len(candidate) < 20:
+            break
+        sentences = sentences[:-1]
+    return " ".join(sentences).strip()
+
+
+def cap_paragraphs(text: str, *, max_paragraphs: int = 2) -> str:
+    """Limite un pavé à ``max_paragraphs`` blocs — un message, pas un essai.
+
+    Garde les premiers blocs (l'info est en tête) ; si le DERNIER bloc retiré est
+    une vraie question/relance, on la rattache (elle engage le client). Sans effet
+    si le texte tient déjà en peu de blocs."""
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", text.strip()) if b.strip()]
+    if len(blocks) <= max_paragraphs:
+        return text
+    kept = blocks[:max_paragraphs]
+    # Récupère une éventuelle question finale dans les blocs coupés.
+    tail_question = next(
+        (b for b in reversed(blocks[max_paragraphs:]) if b.rstrip().endswith("?")),
+        None,
+    )
+    if tail_question and not kept[-1].rstrip().endswith("?"):
+        # Ne garde que la dernière phrase-question du bloc (concise).
+        q = re.split(r"(?<=[.!?…])\s+", tail_question)[-1].strip()
+        kept.append(q)
+    return "\n\n".join(kept)
+
+
+def polish_response(text: str, *, already_spoke: bool, grounded: bool = False) -> str:
+    """Nettoyage final : artefacts modèle + identité + format courrier (y compris
+    en milieu de phrase) + fuites de consignes + déflexion post-réponse (si fondée)
+    + formule de clôture creuse + phrase inachevée + cap de longueur + salutation."""
     out = strip_model_artifacts(text)
     out = sanitize_identity(out)
     out = strip_letter_format(out)
+    out = strip_inline_address(out)
     out = drop_leaked_instructions(out)
+    out = trim_trailing_deflection(out, grounded=grounded)
     out = trim_filler_closing(out)
     out = cut_to_last_sentence(out)
+    out = cap_paragraphs(out)
     if already_spoke:
         out = strip_repeated_greeting(out)
     return out.strip()
@@ -353,6 +421,10 @@ class ResponseGenerator:
         non-streamé si le flux échoue ou revient vide.
         """
         already_spoke = any(m.get("role") == "assistant" for m in state.message_history[:-1])
+        # La récupération a-t-elle fondé la réponse ? Si oui, une déflexion collée
+        # en fin (« je vérifie et je reviens ») est du bruit à retirer ; sinon on
+        # la garde (elle EST la réponse à une vraie lacune).
+        grounded = self._grounded(state)
 
         if on_token is not None:
             acc: list[str] = []
@@ -364,7 +436,7 @@ class ResponseGenerator:
                     max_tokens=220,
                 ):
                     acc.append(token)
-                    try:
+                    try:  # noqa: SIM105 - le commentaire documente le silence volontaire
                         await on_token(token)
                     except Exception:  # le client a coupé : on continue d'accumuler
                         pass
@@ -372,7 +444,7 @@ class ResponseGenerator:
                 logger.warning("generator.stream_error", error=str(e))
             raw = "".join(acc).strip()
             if raw:
-                return polish_response(raw, already_spoke=already_spoke)
+                return polish_response(raw, already_spoke=already_spoke, grounded=grounded)
             # Flux vide/échoué → on retombe sur l'appel classique ci-dessous.
 
         response = await self.llm.generate(
@@ -384,7 +456,21 @@ class ResponseGenerator:
         if response.finish_reason == "error":
             logger.warning("generator.llm_error_fallback", content=response.content)
             return self._template_fallback(state)
-        return polish_response(response.content, already_spoke=already_spoke)
+        return polish_response(response.content, already_spoke=already_spoke, grounded=grounded)
+
+    @staticmethod
+    def _grounded(state: ConversationState) -> bool:
+        """Vrai si les documents récupérés fondent une réponse à la question courante."""
+        docs = getattr(state, "retrieved_documents", None)
+        if not docs:
+            return False
+        last_user = next(
+            (m.get("content", "") for m in reversed(state.message_history) if m.get("role") == "user"),
+            "",
+        )
+        from jenny.engine.intelligence import _retrieval_has_answer
+
+        return _retrieval_has_answer(docs, last_user)
 
     def _template_fallback(self, state: ConversationState) -> str:
         """Réponses templates quand le LLM est indisponible."""

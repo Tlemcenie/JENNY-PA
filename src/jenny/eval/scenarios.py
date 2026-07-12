@@ -318,4 +318,35 @@ SCENARIOS: list[Scenario] = [
             ),
         ],
     ),
+    Scenario(
+        # Garde-fou anti-formule-creuse : même sur une vraie réponse fondée, Jenny
+        # ne colle pas de « n'hésitez pas… » / « je reste à votre disposition »
+        # (nettoyés par polish_response), et ne redit pas « Bonjour » au 2e tour.
+        id="coiffeur_ton_sans_formule_creuse",
+        domain="Salon de coiffure",
+        business_name="Atelier Suzanne",
+        knowledge=[
+            "Coupe femme 39€, coupe homme 25€, balayage 80€. Shampoing et brushing inclus.",
+            "Ouvert du mardi au samedi de 9h à 19h.",
+        ],
+        turns=[
+            Turn(
+                user="Bonjour, c'est combien une coupe homme ?",
+                expect_lang="fr",
+                must_contain_any=["25"],
+                forbid=[
+                    "n'hésitez pas",
+                    "à votre disposition",
+                    "je reste à votre",
+                    "je suis là pour vous aider",
+                ],
+            ),
+            Turn(
+                user="Et un balayage ?",
+                must_contain_any=["80"],
+                # Pas de re-salutation au 2e tour, pas de formule creuse.
+                forbid=["bonjour", "bonsoir", "n'hésitez pas", "à votre disposition"],
+            ),
+        ],
+    ),
 ]

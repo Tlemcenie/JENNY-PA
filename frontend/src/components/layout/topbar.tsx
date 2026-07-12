@@ -61,13 +61,19 @@ export function Topbar() {
           <Search className="w-3.5 h-3.5" />
           <kbd className="hidden sm:inline text-[10px] bg-jenny-divider/50 rounded px-1 py-0.5">⌘K</kbd>
         </button>
-        <LlmSwitcher />
+        {/* Réglages secondaires : masqués sur mobile (évite le débordement de la
+            barre à 375px), toujours accessibles dès `sm`. */}
+        <span className="hidden sm:flex items-center gap-2">
+          <LlmSwitcher />
+        </span>
         <NotificationBell />
-        <SoundToggle />
-        <DensityToggle />
+        <span className="hidden sm:flex items-center gap-2">
+          <SoundToggle />
+          <DensityToggle />
+        </span>
         <LanguageSwitcher />
         <ThemeToggle />
-        <div className="flex items-center gap-2 text-xs">
+        <div className="hidden sm:flex items-center gap-2 text-xs">
           <Activity className="w-3.5 h-3.5 text-jenny-text-secondary" />
           <span className="text-jenny-text-secondary hidden sm:inline">API</span>
           <span
