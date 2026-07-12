@@ -4,7 +4,29 @@ from jenny.engine.response_generator import (
     polish_response,
     sanitize_identity,
     strip_letter_format,
+    strip_model_artifacts,
 )
+
+
+def test_strips_chat_template_token_and_cjk() -> None:
+    """Fuite de gabarit ChatML + texte chinois (glitch qwen) → tout est retiré."""
+    raw = "Super ! Je保留未翻译  <|im_start|>user 好的，请继续."
+    out = strip_model_artifacts(raw)
+    assert "<|" not in out
+    assert "保" not in out and "好" not in out
+    assert out.startswith("Super")
+
+
+def test_model_artifacts_leave_clean_text_untouched() -> None:
+    txt = "On se voit jeudi Camille ! À très vite 😊"
+    assert strip_model_artifacts(txt) == txt
+
+
+def test_polish_strips_model_artifacts_end_to_end() -> None:
+    raw = "Votre RDV est confirmé. <|im_end|>\n好的"
+    out = polish_response(raw, already_spoke=True)
+    assert "<|" not in out and "好" not in out
+    assert "confirmé" in out
 
 
 def test_passes_clean_text_through() -> None:

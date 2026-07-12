@@ -166,9 +166,30 @@ def drop_leaked_instructions(text: str) -> str:
     return cleaned if len(cleaned) >= 15 else text
 
 
+def strip_model_artifacts(text: str) -> str:
+    """Retire les jetons de gabarit de chat et le texte hors-langue que les petits
+    modèles laissent parfois fuir (« <|im_start|> », « 好的… », balises ChatML).
+
+    Coupe tout à partir d'un jeton de gabarit (le modèle a « fini » et déraille
+    au-delà), puis retire d'éventuels blocs CJK/idéogrammes résiduels — Jenny
+    répond en langues latines uniquement, un bloc chinois est forcément du bruit.
+    """
+    if not text:
+        return text
+    # 1) Jeton de gabarit ChatML / spécial → on coupe net avant.
+    m = re.search(r"<\|[^>]*\|>|<\|?(?:im_start|im_end|endoftext|assistant|user|system)\b", text)
+    if m:
+        text = text[: m.start()]
+    # 2) Blocs de caractères CJK (chinois/japonais/coréen) → bruit, on retire.
+    text = re.sub(r"[　-〿㐀-鿿＀-￯가-힯]+", "", text)
+    return text.strip()
+
+
 def polish_response(text: str, *, already_spoke: bool) -> str:
-    """Nettoyage final : identité + format courrier + fuites de consignes + salutation répétée."""
-    out = sanitize_identity(text)
+    """Nettoyage final : artefacts modèle + identité + format courrier + fuites de
+    consignes + salutation répétée."""
+    out = strip_model_artifacts(text)
+    out = sanitize_identity(out)
     out = strip_letter_format(out)
     out = drop_leaked_instructions(out)
     if already_spoke:
