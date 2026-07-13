@@ -34,11 +34,10 @@ frontend/
 .env.*
 !.env.example
 
-# ── Gros artefacts ML hors service de prod ──
-# On garde checkpoints/intent + checkpoints/ner (modèles intention/NER chargés
-# par l'API) ; on EXCLUT le checkpoint NanoGPT (~200 Mo, option /lab, provider
-# Groq utilisé en prod) et les corpus d'entraînement.
-checkpoints/nanogpt/
+# ── Gros artefacts ML ──
+# On garde checkpoints/intent + ner (intention/NER) ET checkpoints/nanogpt
+# (embarqué dans l'image API : NanoGPT sélectionnable en prod pour la démo).
+# On EXCLUT seulement les corpus d'entraînement (inutiles au service).
 nanogpt/data/
 data/raw/
 data/interim/
