@@ -89,6 +89,28 @@ async def get_current_principal(
 CurrentUser = Annotated[CurrentPrincipal, Depends(get_current_principal)]
 
 
+async def get_optional_principal(
+    db: DbSession,
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> CurrentPrincipal | None:
+    """Comme :func:`get_current_principal`, mais renvoie ``None`` (au lieu de 401)
+    quand le token est absent ou invalide.
+
+    Pour les routes qui SCOPENT au business quand un tenant est présent, sans
+    exiger l'auth au niveau de la route (l'exigence réelle vient du middleware en
+    prod). Avantage : le scoping est testable même hors middleware.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    try:
+        return await get_current_principal(db=db, authorization=authorization)
+    except HTTPException:
+        return None
+
+
+OptionalUser = Annotated[CurrentPrincipal | None, Depends(get_optional_principal)]
+
+
 async def get_superuser(
     db: DbSession,
     principal: "CurrentUser",

@@ -4,12 +4,51 @@ from jenny.engine.response_generator import (
     cap_paragraphs,
     polish_response,
     sanitize_identity,
+    strip_dialogue_scaffold,
+    strip_false_booking_confirmation,
+    strip_filler_phrases,
     strip_inline_address,
     strip_letter_format,
     strip_model_artifacts,
     trim_filler_closing,
     trim_trailing_deflection,
 )
+
+
+def test_strips_hallucinated_booking_confirmation() -> None:
+    # Sans reservation aboutie, une confirmation avec jour/heure est retiree.
+    out = strip_false_booking_confirmation(
+        "On se voit mardi à 16h35 pour votre coupe homme.", booking_confirmed=False
+    )
+    assert "16h35" not in out and "mardi" not in out
+    assert len(out) > 15  # repli sur une relance sure, jamais vide
+
+
+def test_keeps_confirmation_when_booking_really_succeeded() -> None:
+    txt = "C'est noté, on se voit jeudi à 10h !"
+    assert strip_false_booking_confirmation(txt, booking_confirmed=True) == txt
+
+
+def test_does_not_strip_a_booking_question() -> None:
+    # Une QUESTION de RDV n'est pas une confirmation : elle doit rester.
+    txt = "Une coupe femme coûte 39€. Vous voulez un rendez-vous demain ?"
+    assert strip_false_booking_confirmation(txt, booking_confirmed=False) == txt
+
+
+def test_strips_conflict_false_reception() -> None:
+    out = strip_false_booking_confirmation("Je vous reçois à 10h ce jeudi.", booking_confirmed=False)
+    assert "10h" not in out
+
+
+def test_strips_leaked_dialogue_scaffold() -> None:
+    out = strip_dialogue_scaffold("Client : ... Jenny : Bonjour, je peux vous aider ?")
+    assert out == "Bonjour, je peux vous aider ?"
+
+
+def test_strips_filler_phrase_mid_message() -> None:
+    out = strip_filler_phrases("On est ouverts samedi. N'hésitez pas si besoin. À très vite.")
+    assert "hésitez" not in out.lower()
+    assert "ouverts samedi" in out and "très vite" in out
 
 
 def test_trims_deflection_after_grounded_answer() -> None:

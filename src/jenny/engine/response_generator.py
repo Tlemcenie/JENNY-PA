@@ -302,16 +302,99 @@ def cap_paragraphs(text: str, *, max_paragraphs: int = 2) -> str:
     return "\n\n".join(kept)
 
 
-def polish_response(text: str, *, already_spoke: bool, grounded: bool = False) -> str:
+# Gabarit de dialogue fuité (« Client : … Jenny : … ») rejoué par les petits
+# modèles, surtout sur des entrées dégénérées (« ... », ponctuation seule).
+_ROLE_PREFIX_RE = re.compile(r"^\s*(?:client|utilisateur|user|assistant)\s*:\s*", re.I)
+_JENNY_LABEL_RE = re.compile(r"\bjenny\s*:\s*", re.I)
+
+
+def strip_dialogue_scaffold(text: str) -> str:
+    """Retire l'échafaudage de dialogue fuité (« Client : … Jenny : … »).
+
+    Si le modèle a rejoué « Jenny : », la vraie réponse est ce qui suit le dernier
+    label ; on retire aussi les préfixes de rôle (« Client : ») en tête de ligne."""
+    labels = list(_JENNY_LABEL_RE.finditer(text))
+    if labels:
+        text = text[labels[-1].end() :]
+    lines = [_ROLE_PREFIX_RE.sub("", ln) for ln in text.splitlines()]
+    lines = [ln for ln in lines if not re.match(r"^\s*(?:client|utilisateur|user)\s*:", ln, re.I)]
+    cleaned = "\n".join(lines).strip()
+    return cleaned if cleaned else text
+
+
+# Clause creuse « n'hésitez pas … » — à retirer OÙ QU'ELLE SOIT (le petit modèle
+# la répète parfois en milieu de message, pas seulement en clôture).
+_FILLER_PHRASE_RE = re.compile(r"\s*\bn['’]?h[ée]sitez\s+pas\b[^.!?]*[.!?]?", re.I)  # noqa: RUF001
+
+
+def strip_filler_phrases(text: str) -> str:
+    """Retire les clauses « n'hésitez pas … » n'importe où dans le message."""
+    if not _FILLER_PHRASE_RE.search(text):
+        return text
+    out = _FILLER_PHRASE_RE.sub(" ", text)
+    out = re.sub(r"[ \t]{2,}", " ", out).strip()
+    return out if len(out) >= 12 else text
+
+
+# ── Anti-hallucination de confirmation de RDV ──
+# Tournures AFFIRMATIVES qui annoncent un rendez-vous pris (pas une question :
+# « voulez-vous un rendez-vous demain ? » ne doit PAS matcher — d'où l'exigence
+# d'un verbe/formule de confirmation, jamais le simple mot « rendez-vous »).
+_BOOKING_CONFIRM_PHRASE_RE = re.compile(
+    r"(on se (?:voit|retrouve)"
+    r"|je vous (?:attends|note|r[ée]serve|inscris|cale|bloque|re[çc]ois|accueille)"
+    r"|(?:rendez-vous|rdv)\s+(?:est\s+)?(?:bien\s+)?"
+    r"(?:confirm[ée]s?|not[ée]s?|r[ée]serv[ée]s?|pris|enregistr[ée]s?|valid[ée]s?|bloqu[ée]s?)"
+    r"|c'est (?:not[ée]|bon|r[ée]serv[ée]|valid[ée]|confirm[ée]))",
+    re.I,
+)
+# Jour ou heure explicite (une confirmation dangereuse épingle un créneau précis).
+_BOOKING_WHEN_RE = re.compile(
+    r"\b(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche"
+    r"|demain|apr[eè]s-demain|\d{1,2}\s*h(?:\d{2})?|\d{1,2}:\d{2}|midi)\b",
+    re.I,
+)
+
+
+def strip_false_booking_confirmation(text: str, *, booking_confirmed: bool) -> str:
+    """Filet anti-hallucination : sans réservation RÉELLEMENT aboutie
+    (``action_result.success``), Jenny ne doit JAMAIS annoncer un RDV avec un
+    jour/une heure — sinon le client se croit réservé (no-show garanti). On retire
+    ces phrases ; si tout saute, on retombe sur une relance sûre (faire confirmer
+    le créneau). N'intervient jamais quand la réservation est réellement confirmée."""
+    if booking_confirmed or not text.strip():
+        return text
+    sentences = re.split(r"(?<=[.!?…])\s+", text.strip())
+    kept = [
+        s
+        for s in sentences
+        if not (_BOOKING_CONFIRM_PHRASE_RE.search(s) and _BOOKING_WHEN_RE.search(s))
+    ]
+    result = " ".join(kept).strip()
+    if len(result) < 15:
+        return (
+            "Je m'en occupe ! Confirmez-moi le jour et l'heure qui vous arrangent "
+            "et je vous cale ça tout de suite 🙂"
+        )
+    return result
+
+
+def polish_response(
+    text: str, *, already_spoke: bool, grounded: bool = False, booking_confirmed: bool = False
+) -> str:
     """Nettoyage final : artefacts modèle + identité + format courrier (y compris
-    en milieu de phrase) + fuites de consignes + déflexion post-réponse (si fondée)
-    + formule de clôture creuse + phrase inachevée + cap de longueur + salutation."""
+    en milieu de phrase) + fuites de consignes + confirmation de RDV hallucinée +
+    déflexion post-réponse (si fondée) + formule de clôture creuse + phrase
+    inachevée + cap de longueur + salutation."""
     out = strip_model_artifacts(text)
+    out = strip_dialogue_scaffold(out)
     out = sanitize_identity(out)
     out = strip_letter_format(out)
     out = strip_inline_address(out)
     out = drop_leaked_instructions(out)
+    out = strip_false_booking_confirmation(out, booking_confirmed=booking_confirmed)
     out = trim_trailing_deflection(out, grounded=grounded)
+    out = strip_filler_phrases(out)
     out = trim_filler_closing(out)
     out = cut_to_last_sentence(out)
     out = cap_paragraphs(out)
@@ -425,6 +508,8 @@ class ResponseGenerator:
         # en fin (« je vérifie et je reviens ») est du bruit à retirer ; sinon on
         # la garde (elle EST la réponse à une vraie lacune).
         grounded = self._grounded(state)
+        # Un RDV n'est « confirmable » en texte que si l'action l'a réellement acté.
+        booking_confirmed = self._booking_confirmed(state)
 
         if on_token is not None:
             acc: list[str] = []
@@ -444,7 +529,12 @@ class ResponseGenerator:
                 logger.warning("generator.stream_error", error=str(e))
             raw = "".join(acc).strip()
             if raw:
-                return polish_response(raw, already_spoke=already_spoke, grounded=grounded)
+                return polish_response(
+                    raw,
+                    already_spoke=already_spoke,
+                    grounded=grounded,
+                    booking_confirmed=booking_confirmed,
+                )
             # Flux vide/échoué → on retombe sur l'appel classique ci-dessous.
 
         response = await self.llm.generate(
@@ -456,7 +546,21 @@ class ResponseGenerator:
         if response.finish_reason == "error":
             logger.warning("generator.llm_error_fallback", content=response.content)
             return self._template_fallback(state)
-        return polish_response(response.content, already_spoke=already_spoke, grounded=grounded)
+        return polish_response(
+            response.content,
+            already_spoke=already_spoke,
+            grounded=grounded,
+            booking_confirmed=booking_confirmed,
+        )
+
+    @staticmethod
+    def _booking_confirmed(state: ConversationState) -> bool:
+        """Vrai si une action de RDV a RÉELLEMENT abouti (réservation, confirmation
+        ou déplacement) — seul cas où Jenny peut annoncer un créneau au client."""
+        ar = getattr(state, "action_result", None) or {}
+        if not ar.get("success"):
+            return False
+        return bool(ar.get("appointment_id") or ar.get("operation") in {"confirm", "reschedule"})
 
     @staticmethod
     def _grounded(state: ConversationState) -> bool:

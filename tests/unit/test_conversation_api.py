@@ -91,6 +91,38 @@ class TestConversationAPI:
         assert data["status"] == "not_found"
 
     @pytest.mark.asyncio
+    async def test_status_scoped_to_business(self, client: AsyncClient) -> None:
+        """Isolation multi-tenant : le statut d'une conversation n'est visible que
+        par son business (un token d'un AUTRE tenant obtient « not_found »)."""
+        from jenny.api.auth.jwt_utils import create_access_token
+
+        biz_a = uuid4()
+        conv = str(uuid4())
+        # Crée un état pour le business A (business_id dans le corps, sans auth).
+        await client.post(
+            "/api/v1/conversation/chat",
+            json={
+                "conversation_id": conv,
+                "business_id": str(biz_a),
+                "message": "je veux une coupe femme mardi",
+            },
+        )
+        # Token du PROPRIÉTAIRE (business A) → voit l'état.
+        tok_a = create_access_token(uuid4(), "a@test.fr", [biz_a])
+        r_owner = await client.get(
+            f"/api/v1/conversation/status/{conv}",
+            headers={"Authorization": f"Bearer {tok_a}"},
+        )
+        assert r_owner.json().get("status") != "not_found"
+        # Token d'un AUTRE business → ne voit rien (IDOR fermé).
+        tok_b = create_access_token(uuid4(), "b@test.fr", [uuid4()])
+        r_other = await client.get(
+            f"/api/v1/conversation/status/{conv}",
+            headers={"Authorization": f"Bearer {tok_b}"},
+        )
+        assert r_other.json().get("status") == "not_found"
+
+    @pytest.mark.asyncio
     async def test_multiturn_conversation(self, client: AsyncClient) -> None:
         """Conversation multi-tour — le contexte persiste."""
         conv_id = str(uuid4())

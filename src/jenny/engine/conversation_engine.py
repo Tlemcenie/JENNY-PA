@@ -449,17 +449,24 @@ class ConversationEngine:
             # (sauf si elle apporte aussi un jour/une heure). La prise de RDV reste
             # en attente (pending_intent) et pourra reprendre au message suivant.
             info_interrupt = intent in _INFO_REQUEST_INTENTS and not provides_appt_info
+            real_complaint = intent == "complaint" and bool(_COMPLAINT_SIGNAL_RE.search(msg_l))
             # Mémorise qu'on interrompt une RÉSERVATION en cours pour répondre à une
             # question : il faudra RESTAURER le pending_intent en fin de tour (sinon
             # le « 11h » suivant repart de zéro au lieu de finir la réservation).
             if info_interrupt and state.pending_intent == "appointment":
                 _resume_appointment_after_info = True
-            if (
+            if provides_appt_info and not real_closing and not real_complaint:
+                # Un jour/une heure fourni PENDANT une prise de RDV la COMPLÈTE —
+                # même après une interruption (question de prix) et même si le petit
+                # modèle lit « complaint »/« closing » à tort. Sauf vrai signal de
+                # mécontentement ou d'adieu. Répare la « reprise après interruption ».
+                logger.info("engine.dialogue.resume_booking", read=intent)
+                intent = state.pending_intent
+                intent_confidence = max(intent_confidence, 0.7)
+            elif (
                 not hard_interrupt
                 and not info_interrupt
-                and (
-                    provides_appt_info or intent_confidence < 0.85 or intent in _CONTINUABLE_INTENTS
-                )
+                and (intent_confidence < 0.85 or intent in _CONTINUABLE_INTENTS)
             ):
                 logger.info("engine.dialogue.continue", pending=state.pending_intent, read=intent)
                 intent = state.pending_intent
@@ -714,6 +721,14 @@ class ConversationEngine:
                     "Le message du client est ambigu : demande-lui poliment une "
                     "précision avant de répondre, sans deviner."
                 )
+
+        # Priorité absolue de la RÉSERVATION en attente : si on a interrompu une prise
+        # de RDV pour répondre à une question (prix/devis), la réservation reste le
+        # contexte à reprendre — même si l'intention d'info a elle-même des slots
+        # manquants (sinon son slot-filling écrase le pending et le « 15h » suivant ne
+        # finalise jamais la réservation). Répare la reprise après interruption.
+        if _resume_appointment_after_info:
+            state.pending_intent = "appointment"
 
         # ── Lacune de connaissance : aucune réponse fiable disponible ? ──
         gap = is_knowledge_gap(

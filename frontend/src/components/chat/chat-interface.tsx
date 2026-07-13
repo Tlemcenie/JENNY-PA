@@ -43,8 +43,13 @@ function deriveQuickReplies(text: string, needsClarification?: boolean): string[
     return ["Une coupe", "Une couleur", "Un balayage"];
   if (asksTime && !asksDay) return ["En matinée", "L'après-midi", "En fin de journée"];
   if (asksDay) return ["Aujourd'hui", "Demain", "Ce samedi"];
-  // Question fermée courte → oui / non rapides.
-  if (needsClarification && text.trim().length < 120) return ["Oui", "Non"];
+  // Question fermée (oui/non) : détectée dans le TEXTE (fiable, independant du
+  // flag moteur) ou signalée par needs_clarification. Message court seulement.
+  const yesNo =
+    /\b(vous voulez|voulez-vous|souhaitez-vous|est-ce que|[çc]a vous (va|convient|dit|tente)|je vous (réserve|note|cale|inscris|bloque)|on (part|réserve|cale) sur|c'est bon pour|d'accord)\b/.test(
+      t
+    );
+  if ((yesNo || needsClarification) && text.trim().length < 120) return ["Oui", "Non"];
   return [];
 }
 

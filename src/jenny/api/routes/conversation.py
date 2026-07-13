@@ -17,7 +17,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from jenny.api.dependencies import DbSession  # noqa: TC001 — résolu au runtime par FastAPI
+from jenny.api.dependencies import (  # noqa: TC001 — résolu au runtime par FastAPI
+    DbSession,
+    OptionalUser,
+)
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
 from jenny.domain.models.conversation import Conversation
@@ -309,16 +312,25 @@ async def chat_stream(
 
 
 @router.get("/status/{conversation_id}")
-async def conversation_status(conversation_id: UUID) -> dict:
-    """Récupère l'état actuel d'une conversation.
+async def conversation_status(conversation_id: UUID, principal: OptionalUser) -> dict:
+    """Récupère l'état actuel d'une conversation (scopé au business courant).
 
-    Retourne les informations de contexte :
-    intention, slots remplis, phase, nombre de tours.
+    Retourne les informations de contexte : intention, slots remplis, phase,
+    nombre de tours. Isolation multi-tenant : quand un tenant est identifié (JWT /
+    clé API — toujours le cas en prod, ``require_auth``), on ne révèle l'état qu'à
+    SON propriétaire ; un autre tenant obtient « not_found » (les slots peuvent
+    contenir prestation/date/nom du client). Sans token (dev sans auth), on ne
+    bloque pas — l'exigence d'auth vient du middleware en prod.
     """
     engine = get_engine()
     state = engine.state_manager.get(conversation_id)
 
     if state is None:
+        return {"status": "not_found", "conversation_id": str(conversation_id)}
+
+    if principal is not None and principal.business_id is not None and (
+        state.business_id != principal.business_id
+    ):
         return {"status": "not_found", "conversation_id": str(conversation_id)}
 
     return {

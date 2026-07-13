@@ -169,3 +169,27 @@ class TestImplicitReschedule:
         r2 = await eng.process(_req(conv, biz, "et un balayage vendredi ?"))
         # NE doit PAS être un reschedule de la coupe femme.
         assert (r2.action_result or {}).get("operation") != "reschedule"
+
+
+class TestResumeAfterInterruption:
+    """Une question de prix AU MILIEU d'une réservation ne doit pas la faire perdre :
+    le créneau donné ensuite finalise bien le RDV (bug « RDV fantôme » corrigé)."""
+
+    @pytest.mark.asyncio
+    async def test_price_interruption_then_time_completes_booking(self, db_tables) -> None:
+        biz = await _seed()
+        sm = StateManager()
+        eng = build_engine(state_manager=sm)
+        eng.response_generator = None
+        conv = uuid4()
+        # 1) prise de RDV en cours (prestation, sans jour/heure)
+        await eng.process(_req(conv, biz, "je veux réserver une coupe homme"))
+        # 2) interruption : question de prix sur une AUTRE prestation
+        await eng.process(_req(conv, biz, "au fait c'est combien une coupe femme ?"))
+        # 3) le client donne le créneau → la réservation initiale doit se finaliser
+        r = await eng.process(_req(conv, biz, "vendredi à 15h"))
+        assert r.intent == "appointment"
+        assert (r.action_result or {}).get("success") is True
+        async with async_session_factory() as s:
+            n = await s.scalar(select(Appointment.id).where(Appointment.business_id == biz.id))
+        assert n is not None  # RDV RÉELLEMENT créé (pas seulement « confirmé » en mots)
