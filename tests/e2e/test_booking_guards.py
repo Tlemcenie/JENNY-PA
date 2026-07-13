@@ -119,7 +119,10 @@ class TestWeeklyClosure:
                 "business_id": str(biz.id),
                 "appointment_id": str(appt.id),
                 "operation": "reschedule",
-                "date": "lundi",
+                # « lundi prochain » (pas « lundi ») : garanti FUTUR même si le test
+                # tourne un lundi après-midi — sinon la cible tombe dans le passé et
+                # c'est « past » (et non « closed ») qui est renvoyé.
+                "date": "lundi prochain",
                 "time": "14h",
             }
         )

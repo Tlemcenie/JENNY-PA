@@ -612,12 +612,85 @@ def get_llm_provider(provider_name: str | None = None, **kwargs) -> BaseLLMProvi
     return provider_class(**kwargs)
 
 
-def get_default_llm_provider() -> BaseLLMProvider | None:
-    """Construit le provider LLM ACTIF (choix modifiable à chaud via l'UI).
+class FallbackLLMProvider(BaseLLMProvider):
+    """Chaîne de repli : essaie les providers dans l'ordre et bascule sur le
+    suivant dès qu'un échoue (erreur runtime / injoignable).
 
-    Le choix vit dans ``jenny.llm.runtime`` (bouton de bascule Ollama/Groq/NanoGPT),
-    avec repli sur ``JENNY_LLM_PROVIDER``. Renvoie None si le provider choisi n'est
-    pas configuré (pas de clé/endpoint/checkpoint) → l'appelant bascule en templates.
+    Évite qu'un modèle actif indisponible (typiquement Ollama local, absent sur
+    Cloud Run) ne serve un template bidon : on bascule alors sur un provider
+    hébergé (Groq). Un repli ne se déclenche QUE sur erreur — une sortie valide
+    (même « moche », ex. NanoGPT) du provider principal est bien renvoyée."""
+
+    def __init__(self, providers: list[BaseLLMProvider]) -> None:
+        self._providers = [p for p in providers if p is not None]
+
+    @property
+    def model_name(self) -> str:
+        return self._providers[0].model_name if self._providers else "none"
+
+    @property
+    def is_configured(self) -> bool:
+        return any(p.is_configured for p in self._providers)
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> LLMResponse:
+        last: LLMResponse | None = None
+        for p in self._providers:
+            if not p.is_configured:
+                continue
+            try:
+                resp = await p.generate(prompt, system_prompt, temperature, max_tokens)
+            except Exception as e:  # provider injoignable → on tente le suivant
+                logger.warning("llm.fallback.error", provider=p.model_name, error=str(e))
+                continue
+            if resp.finish_reason != "error" and (resp.content or "").strip():
+                return resp
+            last = resp
+        return last or LLMResponse(content="", model="none", finish_reason="error")
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ):
+        for p in self._providers:
+            if not p.is_configured:
+                continue
+            try:
+                yielded = False
+                async for token in p.generate_stream(prompt, system_prompt, temperature, max_tokens):
+                    yielded = True
+                    yield token
+                if yielded:
+                    return
+            except Exception as e:
+                logger.warning("llm.fallback.stream_error", provider=p.model_name, error=str(e))
+                continue
+        # Aucun provider n'a streamé → l'appelant retombe sur generate() (chaîne complète).
+
+    async def embed(self, text: str) -> list[float]:
+        for p in self._providers:
+            if p.is_configured:
+                return await p.embed(text)
+        return []
+
+
+def get_default_llm_provider() -> BaseLLMProvider | None:
+    """Construit le provider LLM ACTIF (choix modifiable à chaud via l'UI), avec
+    une chaîne de repli vers Groq.
+
+    Le choix vit dans ``jenny.llm.runtime`` (bouton Ollama/Groq/NanoGPT), avec
+    repli sur ``JENNY_LLM_PROVIDER``. Si le modèle actif échoue au runtime (ex.
+    Ollama absent en prod), on bascule automatiquement sur Groq → JAMAIS de
+    template bidon quand Groq est configuré. Renvoie None seulement si RIEN n'est
+    utilisable → l'appelant bascule alors en templates.
     """
     from jenny.llm.runtime import active_provider_model
 
@@ -626,18 +699,31 @@ def get_default_llm_provider() -> BaseLLMProvider | None:
     # le modèle que pour les providers qui l'acceptent.
     kwargs = {"model": model} if (model and name != "nanogpt") else {}
     try:
-        provider = get_llm_provider(name, **kwargs)
+        primary = get_llm_provider(name, **kwargs)
     except ValueError:
         logger.warning("llm.unknown_provider", provider=name)
-        return None
+        primary = None
 
-    if not provider.is_configured:
-        logger.info(
-            "llm.provider.not_configured",
-            provider=name,
-            hint="clé API / endpoint / checkpoint manquant pour ce modèle",
-        )
-        return None
+    # Repli hébergé : Groq (sauf s'il est déjà le principal).
+    groq: BaseLLMProvider | None = None
+    if name != "groq":
+        try:
+            g = get_llm_provider("groq", model="llama-3.3-70b-versatile")
+            groq = g if g.is_configured else None
+        except Exception:
+            groq = None
 
-    logger.info("llm.provider.ready", provider=name, model=provider.model_name)
-    return provider
+    chain: list[BaseLLMProvider] = []
+    if primary is not None and primary.is_configured:
+        chain.append(primary)
+    if groq is not None:
+        chain.append(groq)
+
+    if not chain:
+        logger.info("llm.provider.none_available", provider=name)
+        return None
+    if len(chain) == 1:
+        logger.info("llm.provider.ready", provider=chain[0].model_name)
+        return chain[0]
+    logger.info("llm.provider.ready_with_fallback", primary=chain[0].model_name, fallback="groq")
+    return FallbackLLMProvider(chain)

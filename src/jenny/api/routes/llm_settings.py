@@ -38,9 +38,15 @@ class LlmSwitchRequest(BaseModel):
     key: str
 
 
-def _is_available(key: str) -> bool:
-    """Le moteur est-il prêt ? (clé API pour Groq, endpoint pour Ollama,
-    checkpoint pour NanoGPT). Instanciation légère, sans I/O lourd."""
+async def _is_available(key: str) -> bool:
+    """Le moteur est-il RÉELLEMENT prêt à répondre ?
+
+    - Groq : clé API présente.
+    - NanoGPT : checkpoint + tokenizer sur disque.
+    - Ollama : on PING l'endpoint (le simple fait d'avoir une URL ne suffit pas —
+      sur Cloud Run il n'y a aucun serveur Ollama, sinon on l'afficherait « dispo »
+      puis on servirait du charabia). Timeout court pour ne pas bloquer l'UI.
+    """
     opt = LLM_OPTIONS[key]
     try:
         kwargs = (
@@ -48,33 +54,48 @@ def _is_available(key: str) -> bool:
             if (opt.get("model") and opt["provider"] != "nanogpt")
             else {}
         )
-        return bool(get_llm_provider(opt["provider"], **kwargs).is_configured)
+        provider = get_llm_provider(opt["provider"], **kwargs)
     except Exception:
         return False
 
+    if opt["provider"] == "llama":
+        # Ollama : vérifie que le serveur répond vraiment (reachability).
+        base_url = getattr(provider, "base_url", None)
+        if not base_url:
+            return False
+        try:
+            import httpx
 
-def _state() -> LlmState:
+            async with httpx.AsyncClient(timeout=1.5) as client:
+                r = await client.get(f"{base_url}/api/tags")
+                return r.status_code == 200
+        except Exception:
+            return False
+
+    return bool(provider.is_configured)
+
+
+async def _state() -> LlmState:
     active = get_active_key()
-    return LlmState(
-        active=active,
-        options=[
+    options = []
+    for k, o in LLM_OPTIONS.items():
+        options.append(
             LlmOption(
                 key=k,
                 label=o["label"],
                 hint=o["hint"],
                 model=o.get("model") or "",
-                available=_is_available(k),
+                available=await _is_available(k),
                 current=(k == active),
             )
-            for k, o in LLM_OPTIONS.items()
-        ],
-    )
+        )
+    return LlmState(active=active, options=options)
 
 
 @router.get("", response_model=LlmState)
 async def get_llm_settings(_principal: CurrentUser) -> LlmState:
     """Liste les moteurs disponibles + lequel est actif."""
-    return _state()
+    return await _state()
 
 
 @router.post("", response_model=LlmState)
@@ -82,7 +103,7 @@ async def switch_llm(body: LlmSwitchRequest, _principal: CurrentUser) -> LlmStat
     """Bascule Jenny sur un autre moteur, immédiatement."""
     if body.key not in LLM_OPTIONS:
         raise HTTPException(status_code=400, detail="Modèle inconnu.")
-    if not _is_available(body.key):
+    if not await _is_available(body.key):
         opt = LLM_OPTIONS[body.key]
         raise HTTPException(
             status_code=400,
@@ -107,4 +128,4 @@ async def switch_llm(body: LlmSwitchRequest, _principal: CurrentUser) -> LlmStat
         logger.warning("llm.switch.engine_swap_failed", error=str(exc))
 
     logger.info("llm.switched", key=body.key)
-    return _state()
+    return await _state()

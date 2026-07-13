@@ -27,19 +27,21 @@ LLM_OPTIONS: dict[str, dict] = {
         "provider": "llama",
         "model": "qwen2.5:7b-instruct",
         "label": "Ollama — local",
-        "hint": "Tourne sur ta machine. Gratuit et privé, un peu plus lent.",
+        "hint": "Tourne sur TA machine (Ollama). Gratuit et privé — indisponible "
+        "sur le serveur hébergé.",
     },
     "groq": {
         "provider": "groq",
         "model": "llama-3.3-70b-versatile",
         "label": "Groq — Llama 3.3 70B",
-        "hint": "Hébergé, très rapide et qualitatif. Nécessite une clé API.",
+        "hint": "Hébergé, très rapide et qualitatif. Le cerveau par défaut en prod.",
     },
     "nanogpt": {
         "provider": "nanogpt",
         "model": "nanogpt-jenny",
         "label": "NanoGPT — maison",
-        "hint": "Ton modèle entraîné de A à Z. Disponible une fois entraîné.",
+        "hint": "Modèle entraîné de A à Z, LOCAL uniquement (démonstrateur — "
+        "réponses volontairement basiques).",
     },
 }
 
@@ -47,12 +49,13 @@ _active_key: str | None = None
 
 
 def _default_key() -> str:
-    """Clé par défaut, déduite de ``JENNY_LLM_PROVIDER``."""
+    """Clé par défaut, déduite de ``JENNY_LLM_PROVIDER``. Repli ultime : Groq
+    (seul moteur toujours disponible côté serveur hébergé)."""
     prov = (get_settings().llm_provider or "groq").lower()
     for key, opt in LLM_OPTIONS.items():
         if opt["provider"] == prov:
             return key
-    return "ollama"
+    return "groq"
 
 
 def get_active_key() -> str:
