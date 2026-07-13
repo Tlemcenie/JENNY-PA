@@ -40,8 +40,8 @@ LLM_OPTIONS: dict[str, dict] = {
         "provider": "nanogpt",
         "model": "nanogpt-jenny",
         "label": "NanoGPT — maison",
-        "hint": "Modèle entraîné de A à Z, LOCAL uniquement (démonstrateur — "
-        "réponses volontairement basiques).",
+        "hint": "Notre LLM entraîné de A à Z (from scratch). Démonstrateur : "
+        "réponses volontairement basiques.",
     },
 }
 

@@ -43,6 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpq5 \
 COPY --from=builder /opt/venv /opt/venv
 COPY src ./src
 COPY ml ./ml
+COPY nanogpt ./nanogpt
 COPY migrations ./migrations
 COPY alembic.ini ./
 COPY checkpoints ./checkpoints

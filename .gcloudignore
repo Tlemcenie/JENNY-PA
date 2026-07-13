@@ -37,10 +37,11 @@ dump.rdb
 test.db
 data/
 
-# ── Poids lourds non nécessaires en prod (prod = Groq) ──
-checkpoints/nanogpt/
-nanogpt/
+# ── Poids lourds ──
 *.mp4
 *.mov
 
-# On GARDE checkpoints/intent + checkpoints/ner (modèles intention/NER chargés au runtime).
+# On GARDE checkpoints/intent + checkpoints/ner (modèles intention/NER) ET
+# checkpoints/nanogpt + le package nanogpt/ : embarqués dans l'image API pour que
+# le modèle maison soit sélectionnable EN PROD (démo de soutenance : switch live
+# vers « NanoGPT — maison » devant le jury). +~204 Mo à l'upload/l'image.
