@@ -260,17 +260,8 @@ data/              # Données (gitignored)
 | GET | `/api/v1/messages/` | Lister les messages |
 | POST | `/api/v1/conversation/chat` | Moteur conversationnel (intent, entités, agents) |
 
-## Roadmap
 
-- [x] Phase 1 — Fondations backend (API, DB, config, Docker)
-- [x] Phase 2 — Ingestion / connecteurs (formulaire, email ; autres canaux en cours)
-- [x] Phase 3 — RAG (pgvector, embeddings, base de connaissances)
-- [x] Phase 4 — Agents (LangGraph, routage multi-intent)
-- [x] Phase 5 — ML supervisé (intent / NER PyTorch, checkpoints)
-- [ ] Phase 6 — NanoGPT expérimental
-- [ ] Phase 7 — Observabilité / durcissement / déploiement cloud
 
-Pour une **réflexion** sur GCP, Airflow, dbt, Databricks (sans engagement) : [docs/DEPLOYMENT_FUTURE.md](docs/DEPLOYMENT_FUTURE.md).
 
 ## Licence
 
