@@ -218,7 +218,8 @@ src/jenny/         # Package applicatif principal
 ├── db/            # Session, base, repositories
 ├── workers/       # Tâches async ARQ
 ├── connectors/    # Connecteurs messagerie (WhatsApp, IG...)
-├── agents/        # Orchestration LangGraph
+├── engine/        # Moteur conversationnel maison (pipeline intent→NER→RAG→LLM)
+├── agents/        # Agents métier + routeur (orchestration maison, sans framework)
 ├── rag/           # Retrieval-Augmented Generation
 └── llm/           # Abstraction fournisseurs LLM
 
@@ -265,10 +266,10 @@ data/              # Données (gitignored)
 - [x] Phase 1 — Fondations backend (API, DB, config, Docker)
 - [x] Phase 2 — Ingestion / connecteurs (formulaire, email ; autres canaux en cours)
 - [x] Phase 3 — RAG (pgvector, embeddings, base de connaissances)
-- [x] Phase 4 — Agents (LangGraph, routage multi-intent)
+- [x] Phase 4 — Agents (orchestration maison, routage multi-intent, sans LangChain/LangGraph)
 - [x] Phase 5 — ML supervisé (intent / NER PyTorch, checkpoints)
-- [ ] Phase 6 — NanoGPT expérimental
-- [ ] Phase 7 — Observabilité / durcissement / déploiement cloud
+- [x] Phase 6 — NanoGPT expérimental (LLM from scratch, page Lab)
+- [x] Phase 7 — Déploiement cloud (GCP Cloud Run) + observabilité (Prometheus/OpenTelemetry)
 
 Pour une **réflexion** sur GCP, Airflow, dbt, Databricks (sans engagement) : [docs/DEPLOYMENT_FUTURE.md](docs/DEPLOYMENT_FUTURE.md).
 

@@ -101,3 +101,15 @@ test.db
 # Fichiers de verrouillage Office (ouverts dans PowerPoint/Word)
 ~$*.pptx
 ~$*.docx
+
+# ── Livrables générés à la racine (présentations, rapports, audits) ──
+# On ne versionne pas les .pptx/.docx/.pdf : ce sont des exports lourds,
+# régénérables (scripts/make_presentation.py) ou personnels (slides de soutenance).
+/*.pptx
+/*.docx
+/*.pdf
+
+# ── Notebooks Colab : garder seulement le .ipynb source généré par
+#    scripts/build_notebook.py (JENNY_NanoGPT_FromScratch.ipynb). ──
+/JENNY_NanoGPT_T4_Colab*.ipynb
+*_ipynb.txt

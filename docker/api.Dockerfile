@@ -19,9 +19,9 @@ RUN apt-get update && \
 
 COPY pyproject.toml ./
 COPY README.md ./
+COPY src/ ./src/
 RUN pip install -e ".[dev]" || pip install .
 
-COPY src/ ./src/
 COPY ml/ ./ml/
 COPY nanogpt/ ./nanogpt/
 COPY pipelines/ ./pipelines/
