@@ -73,10 +73,18 @@ _HISTORY_RE = re.compile(
     re.I,
 )
 _PHONE_RE = re.compile(r"(?:\+?\d[\s.\-]?){8,}")
+_TOP_PRESTATIONS_RE = re.compile(
+    r"\b(?:presta(?:tion)?s?|services?)\b.{0,25}\b(?:plus\s+demand|populair|"
+    r"r[ée]serv|pris|vendu|marche|cartonne|succ[èe]s)"
+    r"|\b(?:plus\s+demand[ée]e?|qui\s+(?:marche|cartonne)\s+le\s+mieux"
+    r"|top\s+(?:des\s+)?(?:presta|service)|meilleure?s?\s+ventes?)",
+    re.I,
+)
 
 
 def detect_owner_intent(message: str) -> str:
-    """Classe le message du gérant : cancel | agenda | block | add_knowledge | report | general."""
+    """Classe le message du gérant : cancel | agenda | block | add_knowledge |
+    report | revenue | top_prestations | client_history | general."""
     m = message or ""
     if _ADD_KB_RE.search(m):
         return "add_knowledge"
@@ -88,6 +96,8 @@ def detect_owner_intent(message: str) -> str:
         return "block_slot"
     if _HISTORY_RE.search(m):
         return "client_history"
+    if _TOP_PRESTATIONS_RE.search(m):
+        return "top_prestations"
     if _REVENUE_RE.search(m):
         return "revenue"
     if _AGENDA_RE.search(m):
@@ -622,6 +632,53 @@ async def _handle_revenue(db: AsyncSession, bid: UUID) -> dict:
     }
 
 
+async def _handle_top_prestations(db: AsyncSession, bid: UUID) -> dict:
+    """Prestation la plus demandée : agrégation RÉELLE de l'historique des RDV
+    (rapprochés du catalogue), au lieu d'une réponse LLM vague."""
+    from collections import Counter
+
+    from jenny.services.prestation_service import _norm, load_active_prestations
+
+    prestations = await load_active_prestations(db, bid)
+    norm_names = {_norm(p.name): p.name for p in prestations}
+    rows = (
+        await db.execute(
+            select(Appointment.title).where(
+                Appointment.business_id == bid,
+                Appointment.status.notin_(["cancelled", "blocked"]),
+            )
+        )
+    ).all()
+    counts: Counter[str] = Counter()
+    for (title,) in rows:
+        nt = _norm(title or "")
+        match = next((orig for n, orig in norm_names.items() if n and (n in nt or nt in n)), None)
+        if match:
+            counts[match] += 1
+
+    if not counts:
+        return {
+            "response": (
+                "Pas encore assez de rendez-vous rattachés à une prestation pour "
+                "dégager une tendance — reviens me voir quand l'agenda se remplit !"
+            ),
+            "action": "top_prestations",
+            "data": {"top": []},
+        }
+    top = counts.most_common(3)
+    lead_name, lead_n = top[0]
+    detail = ", ".join(f"{name} ({n})" for name, n in top)
+    msg = (
+        f"Ta prestation la plus demandée, c'est {lead_name} — {lead_n} rendez-vous. "
+        f"Ton trio de tête : {detail}."
+    )
+    return {
+        "response": msg,
+        "action": "top_prestations",
+        "data": {"top": [{"name": n, "count": c} for n, c in top]},
+    }
+
+
 # ── Recherche client + historique (#95) ──────────────────────────────────────
 
 
@@ -719,6 +776,7 @@ async def handle_owner_message(
         "move": lambda: _handle_move(db, business_id, message),
         "block_slot": lambda: _handle_block(db, business_id, actor, message),
         "revenue": lambda: _handle_revenue(db, business_id),
+        "top_prestations": lambda: _handle_top_prestations(db, business_id),
         "agenda": lambda: _handle_agenda(db, business_id),
         "report": lambda: _handle_report(db, business_id),
         "client_history": lambda: _handle_client_history(db, business_id, message),

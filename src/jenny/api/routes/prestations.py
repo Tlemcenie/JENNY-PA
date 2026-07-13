@@ -273,9 +273,17 @@ async def seed_coiffeur(db: DbSession, principal: CurrentUser) -> SeedCoiffeurRe
         await db.commit()
 
     knowledge = 0
+    kb = KnowledgeBase(business_id=bid, session=db)
+    # Idempotent : on ne réajoute pas une connaissance dont le titre existe déjà
+    # (sinon relancer le seed duplique « Horaires d'ouverture », etc.).
+    try:
+        existing_titles = {e.title for e in await kb.list_entries()}
+    except Exception:  # pragma: no cover - dépend du store vectoriel
+        existing_titles = set()
     for title, category, content in _DEFAULT_KNOWLEDGE:
+        if title in existing_titles:
+            continue
         try:
-            kb = KnowledgeBase(business_id=bid, session=db)
             await kb.add_text(content=content, title=title, category=category)
             knowledge += 1
         except Exception as exc:

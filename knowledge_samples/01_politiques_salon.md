@@ -1,7 +1,7 @@
 # Politiques et informations pratiques — Salon
 
 ## Horaires d'ouverture
-Le salon est ouvert du mardi au samedi, de 9h30 à 19h00 (nocturne le jeudi jusqu'à 21h00).
+Le salon est ouvert du mardi au samedi, de 9h à 19h.
 Fermé le dimanche et le lundi. Fermeture annuelle : les trois premières semaines d'août.
 
 ## Accès et parking

@@ -193,3 +193,46 @@ class TestOwnerAssistant:
         assert r.status_code == 200, r.text
         assert r.json()["action"] == "general"
         assert len(r.json()["response"]) > 0
+
+
+class TestTopPrestations:
+    """Le co-pilote agrège RÉELLEMENT l'historique (pas de fallback LLM vague)."""
+
+    @staticmethod
+    async def _seed_titled(bid: str, title: str, *, n: int) -> None:
+        from jenny.domain.models.prestation import Prestation
+
+        now = datetime.now(UTC)
+        async with async_session_factory() as s, s.begin():
+            s.add(Prestation(business_id=UUID(bid), name=title, price_cents=3900, duration_minutes=30))
+            for i in range(n):
+                start = now + timedelta(hours=2 + i)
+                s.add(
+                    Appointment(
+                        business_id=UUID(bid),
+                        title=title,
+                        channel="chat",
+                        start_at=start,
+                        end_at=start + timedelta(minutes=30),
+                        status="confirmed",
+                        created_by="test",
+                    )
+                )
+
+    @pytest.mark.asyncio
+    async def test_most_requested_prestation(self, client: AsyncClient, db_tables: None) -> None:
+        headers, bid = await _auth(client, "boss-top@salon.com")
+        await self._seed_titled(bid, "Coupe homme", n=3)
+        await self._seed_titled(bid, "Balayage", n=1)
+        r = await client.post(
+            "/api/v1/owner/chat",
+            headers=headers,
+            json={"message": "quelle est ma prestation la plus demandée ?"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["action"] == "top_prestations"
+        top = body["data"]["top"]
+        assert top[0]["name"] == "Coupe homme"
+        assert top[0]["count"] == 3
+        assert "Coupe homme" in body["response"]
