@@ -1,15 +1,4 @@
-"""Assistant du coiffeur : Jenny côté GÉRANT (pas côté client).
-
-Ici Jenny est l'assistante du commerçant, en toute transparence (le gérant sait
-qu'il parle à son outil). Elle fait des comptes rendus, répond à ses questions,
-et exécute des actions de gestion par chat :
-- compte rendu / métriques des rendez-vous,
-- blocage de créneaux dans l'agenda,
-- ajout d'informations à la base de connaissances.
-
-Tout est en français. Les réponses d'action sont déterministes (chiffres fiables) ;
-seule la question ouverte passe par le LLM, avec le contexte du salon.
-"""
+"""Jenny côté gérant."""
 
 from __future__ import annotations
 
@@ -26,7 +15,7 @@ from jenny.domain.models.business import Business
 from jenny.domain.models.customer import Customer
 from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
 
-# Extraction du nom de client dans « annule le rdv de Marie ».
+# extraction du nom client
 _CLIENT_NAME_RE = re.compile(
     r"(?:de|pour|du|rdv\s+de|rendez[\s-]vous\s+de)\s+([A-Za-zÀ-ÿ][\wÀ-ÿ'’-]{1,40})",  # noqa: RUF001
     re.I,
@@ -39,7 +28,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# ── Détection d'intention propriétaire (règles robustes, français) ──
+# détection d'intention gérant
 
 _BLOCK_RE = re.compile(
     r"\b(bloqu|indisponible|je\s+ne\s+suis\s+pas\s+l[àa]|ferme|cong[ée]|pas\s+dispo|r[ée]serve\s+moi)",
@@ -83,8 +72,7 @@ _TOP_PRESTATIONS_RE = re.compile(
 
 
 def detect_owner_intent(message: str) -> str:
-    """Classe le message du gérant : cancel | agenda | block | add_knowledge |
-    report | revenue | top_prestations | client_history | general."""
+    """Classe le message gérant."""
     m = message or ""
     if _ADD_KB_RE.search(m):
         return "add_knowledge"
@@ -108,7 +96,7 @@ def detect_owner_intent(message: str) -> str:
 
 
 def _parse_time_range(message: str) -> tuple[time, time] | None:
-    """Extrait un intervalle « de 14h à 16h » / « 14h-16h » → (début, fin)."""
+    """Extrait un intervalle horaire."""
     m = re.search(
         r"(\d{1,2})\s*(?:h|:|heures?)\s*(\d{2})?\s*(?:[-àa]|jusqu['’ ]?[àa]?|au?)\s*"  # noqa: RUF001
         r"(\d{1,2})\s*(?:h|:|heures?)\s*(\d{2})?",
@@ -131,7 +119,7 @@ async def _business_tz(db: AsyncSession, business: Business | None) -> ZoneInfo:
         return ZoneInfo("Europe/Paris")
 
 
-# ── Compte rendu / métriques ──────────────────────────────────────────────────
+# compte rendu
 
 
 async def _handle_report(db: AsyncSession, bid: UUID) -> dict:
@@ -174,7 +162,7 @@ async def _handle_report(db: AsyncSession, bid: UUID) -> dict:
     if upcoming == 0:
         msg = "Ton agenda est vide pour le moment — aucun rendez-vous à venir."
 
-    # Acomptes anti-no-show : le VRAI suivi des paiements (PaymentRecord).
+    # suivi des acomptes
     from jenny.domain.models.payment_record import PaymentRecord
 
     async def _dep(status: str) -> tuple[int, int]:
@@ -216,7 +204,7 @@ async def _handle_report(db: AsyncSession, bid: UUID) -> dict:
     }
 
 
-# ── Bloquer un créneau ────────────────────────────────────────────────────────
+# bloquer un créneau
 
 
 async def _handle_block(db: AsyncSession, bid: UUID, actor: str, message: str) -> dict:
@@ -233,7 +221,7 @@ async def _handle_block(db: AsyncSession, bid: UUID, actor: str, message: str) -
     if rng is None:
         single = parse_fr_time(message)
         if single is None:
-            # Jour entier bloqué (09h-20h par défaut).
+            # journée entière
             start_t, end_t = time(9, 0), time(20, 0)
             label = "toute la journée"
         else:
@@ -270,7 +258,7 @@ async def _handle_block(db: AsyncSession, bid: UUID, actor: str, message: str) -
     }
 
 
-# ── Ajouter à la base de connaissances ────────────────────────────────────────
+# ajout à la base
 
 
 def _extract_knowledge(message: str) -> str:
@@ -300,7 +288,7 @@ async def _handle_add_knowledge(db: AsyncSession, bid: UUID, message: str) -> di
         kb = KnowledgeBase(business_id=bid, session=db)
         await kb.add_text(content=content, title=content[:80], category="info")
         saved = True
-    except Exception as exc:  # pragma: no cover - dépend de pgvector
+    except Exception as exc:  # pragma: no cover
         logger.warning("owner.add_knowledge.failed", error=str(exc))
     resp = (
         f"C'est noté ✅ — je retiens : « {content} ». Je m'en servirai pour répondre aux clients."
@@ -310,12 +298,11 @@ async def _handle_add_knowledge(db: AsyncSession, bid: UUID, message: str) -> di
     return {"response": resp, "action": "add_knowledge", "data": {"saved": saved}}
 
 
-# ── Question ouverte (LLM avec contexte salon) ────────────────────────────────
+# question ouverte (LLM)
 
 
 async def _gather_owner_context(db: AsyncSession, bid: UUID) -> str:
-    """Instantané RÉEL du salon, injecté au LLM pour des réponses fondées
-    (sinon l'assistant répond « à côté » → effet « bête »)."""
+    """Instantané réel du salon."""
     business = await db.get(Business, bid)
     tz = await _business_tz(db, business)
     now = datetime.now(UTC)
@@ -393,8 +380,7 @@ async def _handle_general(db: AsyncSession, bid: UUID, message: str) -> dict:
             "data": {},
         }
 
-    # Jenny côté gérant : transparente, proactive, et SURTOUT fondée sur les vraies
-    # données du salon (injectées) → elle répond précisément au lieu de botter en touche.
+    # prompt fondé sur les données
     system = (
         "Tu es Jenny, le bras droit du gérant de ce salon de coiffure (son assistante de "
         "gestion, en toute transparence). Tu es vive, concrète et tu tutoies le gérant.\n"
@@ -429,7 +415,7 @@ async def _handle_general(db: AsyncSession, bid: UUID, message: str) -> dict:
     }
 
 
-# ── Agenda du jour ────────────────────────────────────────────────────────────
+# agenda du jour
 
 
 async def _handle_agenda(db: AsyncSession, bid: UUID) -> dict:
@@ -465,7 +451,7 @@ async def _handle_agenda(db: AsyncSession, bid: UUID) -> dict:
     return {"response": "\n".join(lines), "action": "agenda", "data": {"count": len(rows)}}
 
 
-# ── Annuler un rendez-vous ────────────────────────────────────────────────────
+# annuler un rdv
 
 
 async def _handle_cancel(db: AsyncSession, bid: UUID, message: str) -> dict:
@@ -498,7 +484,7 @@ async def _handle_cancel(db: AsyncSession, bid: UUID, message: str) -> dict:
     appt.status = "cancelled"
     tz = await _business_tz(db, await db.get(Business, bid))
     when = appt.start_at.astimezone(tz).strftime("%d/%m à %Hh%M")
-    # Créneau libéré → on prévient le 1er client en liste d'attente.
+    # prévient la liste d'attente
     from jenny.services.waitlist_service import notify_waitlist_for_freed_slot
 
     notified = await notify_waitlist_for_freed_slot(
@@ -521,7 +507,7 @@ async def _handle_cancel(db: AsyncSession, bid: UUID, message: str) -> dict:
     }
 
 
-# ── Déplacer un rendez-vous ───────────────────────────────────────────────────
+# déplacer un rdv
 
 
 async def _handle_move(db: AsyncSession, bid: UUID, message: str) -> dict:
@@ -570,7 +556,7 @@ async def _handle_move(db: AsyncSession, bid: UUID, message: str) -> dict:
     new_local = datetime(day.year, day.month, day.day, hh, mm, tzinfo=tz)
     appt.start_at = new_local.astimezone(UTC)
     appt.end_at = appt.start_at + duration
-    # L'ancien créneau se libère → on prévient la liste d'attente.
+    # prévient la liste d'attente
     from jenny.services.waitlist_service import notify_waitlist_for_freed_slot
 
     notified = await notify_waitlist_for_freed_slot(
@@ -591,7 +577,7 @@ async def _handle_move(db: AsyncSession, bid: UUID, message: str) -> dict:
     }
 
 
-# ── Chiffre d'affaires estimé ─────────────────────────────────────────────────
+# chiffre d'affaires estimé
 
 
 async def _handle_revenue(db: AsyncSession, bid: UUID) -> dict:
@@ -633,8 +619,7 @@ async def _handle_revenue(db: AsyncSession, bid: UUID) -> dict:
 
 
 async def _handle_top_prestations(db: AsyncSession, bid: UUID) -> dict:
-    """Prestation la plus demandée : agrégation RÉELLE de l'historique des RDV
-    (rapprochés du catalogue), au lieu d'une réponse LLM vague."""
+    """Prestation la plus demandée."""
     from collections import Counter
 
     from jenny.services.prestation_service import _norm, load_active_prestations
@@ -679,7 +664,7 @@ async def _handle_top_prestations(db: AsyncSession, bid: UUID) -> dict:
     }
 
 
-# ── Recherche client + historique (#95) ──────────────────────────────────────
+# recherche client (#95)
 
 
 async def _handle_client_history(db: AsyncSession, bid: UUID, message: str) -> dict:
@@ -690,7 +675,7 @@ async def _handle_client_history(db: AsyncSession, bid: UUID, message: str) -> d
     tz = await _business_tz(db, business)
     now = datetime.now(UTC)
 
-    # Recherche par téléphone, sinon par nom.
+    # par téléphone ou nom
     cust = None
     pm = _PHONE_RE.search(message)
     if pm:
@@ -767,7 +752,7 @@ async def _handle_client_history(db: AsyncSession, bid: UUID, message: str) -> d
 async def handle_owner_message(
     db: AsyncSession, *, business_id: UUID, actor: str, message: str
 ) -> dict:
-    """Point d'entrée : route le message du gérant vers la bonne action."""
+    """Route le message gérant."""
     intent = detect_owner_intent(message)
     logger.info("owner.message", business_id=str(business_id), intent=intent)
     handlers = {

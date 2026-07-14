@@ -27,44 +27,34 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-// ──────────────────────────────────────────────────────────────────────────
-// Page publique de réservation — DA « Jenny Front »
-//
-// Plein écran nuit profonde, carte glass centrée. Flux en 4 temps :
-//   1. chargement des infos business (404 → écran dédié) ;
-//   2. choix d'une date (14 prochains jours) ;
-//   3. choix d'un créneau (slots du jour) ;
-//   4. formulaire + confirmation.
-//
-// Cette page est neutre : elle affiche le nom du BUSINESS, jamais « Jenny ».
-// ──────────────────────────────────────────────────────────────────────────
+// page publique de réservation
 
-const DURATION = 30; // minutes — durée de créneau (cf. spec back)
-const DAYS_AHEAD = 14; // nombre de jours proposés dans le sélecteur
+const DURATION = 30; // durée créneau (min)
+const DAYS_AHEAD = 14; // jours proposés
 
-// Fond nuit profonde + halo corail (repris de la landing / login).
+// fond + halo corail
 const PAGE_BG =
   "radial-gradient(ellipse at 70% -10%, rgba(255,127,106,0.20) 0%, transparent 52%), radial-gradient(ellipse at 0% 90%, rgba(114,132,168,0.12) 0%, transparent 50%), #0E0B14";
 
-// Clé date locale "AAAA-MM-JJ" (jamais d'UTC : on raisonne en jour civil).
+// clé date locale
 function toDateIso(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-// Majuscule initiale (les libellés date-fns `fr` sont en minuscules).
+// majuscule initiale
 function cap(value: string): string {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
 
-// Validation email volontairement simple (un @, un point après).
+// validation email simple
 function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
 type Phase = "loading" | "notfound" | "error" | "ready" | "confirmed";
 
-// Une journée proposée dans le sélecteur de dates.
+// une journée du sélecteur
 interface DayOption {
   date: Date;
   iso: string;
@@ -78,18 +68,18 @@ export default function BookingClient({ slug }: { slug: string }) {
   const [info, setInfo] = useState<BookingBusinessInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Date sélectionnée (clé ISO locale).
+  // date choisie
   const [selectedIso, setSelectedIso] = useState<string | null>(null);
 
-  // Créneaux du jour sélectionné.
+  // créneaux du jour
   const [slots, setSlots] = useState<BookingSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsError, setSlotsError] = useState<string | null>(null);
 
-  // Créneau choisi → ouvre le formulaire.
+  // créneau choisi
   const [chosenSlot, setChosenSlot] = useState<BookingSlot | null>(null);
 
-  // Formulaire.
+  // formulaire
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -97,10 +87,10 @@ export default function BookingClient({ slug }: { slug: string }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Confirmation finale.
+  // confirmation
   const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null);
 
-  // Les 14 prochains jours (à partir d'aujourd'hui inclus).
+  // les 14 prochains jours
   const days = useMemo<DayOption[]>(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -116,7 +106,7 @@ export default function BookingClient({ slug }: { slug: string }) {
     });
   }, []);
 
-  // ── 1. Chargement des infos business ──
+  // 1. infos business
   useEffect(() => {
     let active = true;
     setPhase("loading");
@@ -125,7 +115,7 @@ export default function BookingClient({ slug }: { slug: string }) {
         if (!active) return;
         setInfo(data);
         setPhase("ready");
-        // Par défaut : 1er jour proposé (aujourd'hui).
+        // défaut : aujourd'hui
         setSelectedIso(toDateIso(new Date()));
       })
       .catch((err) => {
@@ -146,7 +136,7 @@ export default function BookingClient({ slug }: { slug: string }) {
     };
   }, [slug]);
 
-  // ── 3. Chargement des créneaux à chaque changement de date ──
+  // 3. créneaux par date
   const loadSlots = useCallback(
     async (dateIso: string) => {
       setSlotsLoading(true);
@@ -173,7 +163,7 @@ export default function BookingClient({ slug }: { slug: string }) {
     void loadSlots(selectedIso);
   }, [phase, selectedIso, loadSlots]);
 
-  // Changement de date → réinitialise le créneau choisi + le formulaire.
+  // reset au changement de date
   const handleSelectDate = (iso: string) => {
     if (iso === selectedIso) return;
     setSelectedIso(iso);
@@ -181,7 +171,7 @@ export default function BookingClient({ slug }: { slug: string }) {
     setFormError(null);
   };
 
-  // ── 4. Soumission de la réservation ──
+  // 4. soumission
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -210,7 +200,7 @@ export default function BookingClient({ slug }: { slug: string }) {
       setPhase("confirmed");
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        // Le créneau vient d'être pris : on rafraîchit la grille et on y renvoie.
+        // créneau déjà pris
         setChosenSlot(null);
         setFormError(null);
         setSlotsError("Ce créneau vient d'être réservé. Choisissez-en un autre.");
@@ -232,14 +222,14 @@ export default function BookingClient({ slug }: { slug: string }) {
     return cap(format(d, "EEEE d MMMM", { locale: fr }));
   }, [selectedIso]);
 
-  // ── Rendu ──
+  // rendu
   return (
     <div
       className="min-h-full w-full overflow-y-auto text-[#F4F1ED]"
       style={{ background: PAGE_BG, fontFamily: "var(--font-sans)" }}
     >
       <div className="min-h-full flex flex-col items-center px-4 py-10 sm:py-14">
-        {/* Mascotte + signature en en-tête */}
+        {/* en-tête */}
         <Header />
 
         <div className="w-full max-w-[540px]">
@@ -270,7 +260,7 @@ export default function BookingClient({ slug }: { slug: string }) {
                   boxShadow: "0 24px 60px rgba(0,0,0,0.35)",
                 }}
               >
-                {/* En-tête business */}
+                {/* en-tête business */}
                 <div className="font-mono text-[11px] tracking-[0.22em] uppercase text-jenny-coral mb-3">
                   — Réservation —
                 </div>
@@ -285,7 +275,7 @@ export default function BookingClient({ slug }: { slug: string }) {
 
                 {!chosenSlot ? (
                   <>
-                    {/* ── Étape 2 : choix de la date ── */}
+                    {/* étape 2 : date */}
                     <StepLabel index={1} total={2} text="Choisissez un jour" />
                     <DatePicker
                       days={days}
@@ -293,7 +283,7 @@ export default function BookingClient({ slug }: { slug: string }) {
                       onSelect={handleSelectDate}
                     />
 
-                    {/* ── Étape 3 : choix du créneau ── */}
+                    {/* étape 3 : créneau */}
                     <StepLabel index={2} total={2} text={`Créneaux · ${selectedDayLabel}`} />
                     <SlotGrid
                       loading={slotsLoading}
@@ -307,7 +297,7 @@ export default function BookingClient({ slug }: { slug: string }) {
                     />
                   </>
                 ) : (
-                  /* ── Étape 4 : formulaire ── */
+                  /* étape 4 : formulaire */
                   <BookingForm
                     businessName={info.name}
                     slot={chosenSlot}
@@ -332,7 +322,7 @@ export default function BookingClient({ slug }: { slug: string }) {
             )}
           </AnimatePresence>
 
-          {/* Pied de page neutre */}
+          {/* pied de page */}
           <p className="mt-7 text-center font-mono text-[11px] tracking-[0.12em] text-[#F4F1ED]/35">
             Réservation sécurisée · Propulsé par Jenny
           </p>
@@ -342,7 +332,7 @@ export default function BookingClient({ slug }: { slug: string }) {
   );
 }
 
-// ── En-tête : mascotte ──────────────────────────────────────────────────────
+// en-tête : mascotte
 
 function Header() {
   return (
@@ -373,7 +363,7 @@ function Header() {
   );
 }
 
-// ── Libellé d'étape (eyebrow mono) ──────────────────────────────────────────
+// libellé d'étape
 
 function StepLabel({ index, total, text }: { index: number; total: number; text: string }) {
   return (
@@ -386,7 +376,7 @@ function StepLabel({ index, total, text }: { index: number; total: number; text:
   );
 }
 
-// ── Sélecteur de date (chips des 14 prochains jours) ────────────────────────
+// sélecteur de date
 
 function DatePicker({
   days,
@@ -446,7 +436,7 @@ function DatePicker({
   );
 }
 
-// ── Grille de créneaux ──────────────────────────────────────────────────────
+// grille de créneaux
 
 function SlotGrid({
   loading,
@@ -526,7 +516,7 @@ function SlotGrid({
   );
 }
 
-// ── Formulaire de réservation ───────────────────────────────────────────────
+// formulaire de réservation
 
 function BookingForm({
   businessName,
@@ -573,7 +563,7 @@ function BookingForm({
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
     >
-      {/* Récap du créneau sélectionné */}
+      {/* récap du créneau */}
       <button
         type="button"
         onClick={onBack}
@@ -715,7 +705,7 @@ function BookingForm({
   );
 }
 
-// ── Carte de confirmation ───────────────────────────────────────────────────
+// carte de confirmation
 
 function ConfirmationCard({ confirmation }: { confirmation: BookingConfirmation }) {
   const start = parseISO(confirmation.start_at);
@@ -754,7 +744,7 @@ function ConfirmationCard({ confirmation }: { confirmation: BookingConfirmation 
         {confirmation.message}
       </p>
 
-      {/* Rappel date / heure */}
+      {/* rappel date/heure */}
       <div
         className="rounded-2xl px-5 py-4 text-left flex items-center gap-3.5"
         style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)" }}
@@ -781,7 +771,7 @@ function ConfirmationCard({ confirmation }: { confirmation: BookingConfirmation 
   );
 }
 
-// ── Carte de chargement ─────────────────────────────────────────────────────
+// carte de chargement
 
 function LoadingCard() {
   return (
@@ -802,7 +792,7 @@ function LoadingCard() {
   );
 }
 
-// ── Carte « introuvable » (404) ─────────────────────────────────────────────
+// carte introuvable (404)
 
 function NotFoundCard() {
   return (
@@ -847,7 +837,7 @@ function NotFoundCard() {
   );
 }
 
-// ── Carte d'erreur générique ────────────────────────────────────────────────
+// carte d'erreur
 
 function ErrorCard({ message }: { message: string }) {
   return (

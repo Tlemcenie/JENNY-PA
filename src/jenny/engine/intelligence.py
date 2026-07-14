@@ -1,16 +1,4 @@
-"""Couche d'intelligence du moteur conversationnel.
-
-Fonctions PURES (sans I/O ni accès base) qui décident, pour chaque message :
-
-- **Langue** (`detect_language`) — pour répondre dans la langue du client.
-- **Clarification** (`decide_clarification`) — Jenny pose une question de précision
-  quand elle ne saisit pas bien le besoin (ambigu, vague, info clé manquante).
-- **Lacune de connaissance** (`is_knowledge_gap`) — aucune réponse fiable dispo :
-  on enregistre la question pour que le commerçant y réponde plus tard.
-- **Faits client** (`extract_customer_facts`) — infos durables à mémoriser.
-
-Conçues pour être appelées par ``ConversationEngine`` et testées isolément.
-"""
+"""Intelligence pure du moteur."""
 
 from __future__ import annotations
 
@@ -26,7 +14,7 @@ logger = get_logger(__name__)
 # Langue
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Codes ISO 639-1 → nom de langue (pour instruire le LLM clairement).
+# code ISO → nom
 LANGUAGE_NAMES: dict[str, str] = {
     "fr": "français",
     "en": "anglais",
@@ -41,12 +29,7 @@ LANGUAGE_NAMES: dict[str, str] = {
 
 
 def detect_language(text: str, default: str = "fr") -> str:
-    """Détecte la langue d'un message (code ISO 639-1).
-
-    Utilise ``langdetect`` (graine fixée pour des résultats déterministes). Les
-    messages trop courts ou ambigus retombent sur ``default`` — sur 2-3 mots la
-    détection n'est pas fiable et basculer de langue à tort serait pire.
-    """
+    """Détecte la langue."""
     cleaned = (text or "").strip()
     if len(cleaned) < 8 or len(re.findall(r"\w+", cleaned)) < 2:
         return default
@@ -55,15 +38,15 @@ def detect_language(text: str, default: str = "fr") -> str:
 
         DetectorFactory.seed = 0
         code = detect(cleaned)
-        # langdetect renvoie parfois "zh-cn" : on garde la racine 2 lettres.
+        # garde les 2 lettres
         code = code.split("-")[0].lower()
         return code if code in LANGUAGE_NAMES else default
-    except Exception:  # pragma: no cover - dépend de l'entrée
+    except Exception:  # pragma: no cover
         return default
 
 
 def language_name(code: str | None) -> str:
-    """Nom lisible d'une langue à partir de son code (fallback : français)."""
+    """Nom lisible d'une langue."""
     return LANGUAGE_NAMES.get((code or "fr").lower(), "français")
 
 
@@ -71,23 +54,23 @@ def language_name(code: str | None) -> str:
 # Clarification
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Intentions purement relationnelles : on ne demande jamais de précision.
+# intentions relationnelles
 _NO_CLARIFY_INTENTS = frozenset({"greeting", "small_talk", "closing", "escalation"})
 
-# En dessous de cette confiance, une demande non triviale est jugée mal comprise.
+# seuil de confiance
 CLARIFY_CONFIDENCE_FLOOR = 0.4
 
-# Entité indispensable pour traiter certaines intentions actionnables.
-# Si elle manque, Jenny la demande au lieu de deviner.
+# entité obligatoire
+# sinon on la demande
 _REQUIRED_ENTITY: dict[str, tuple[str, str]] = {
-    # intent: (clé d'entité attendue, formulation de ce qu'il faut demander)
+    # intent: (clé, libellé)
     "order_status": ("order_number", "le numéro de commande"),
 }
 
 
 @dataclass
 class ClarificationDecision:
-    """Décision de clarification produite par la couche d'intelligence."""
+    """Décision de clarification."""
 
     needs_clarification: bool
     reason: str = ""
@@ -112,17 +95,12 @@ def decide_clarification(
     detected_intents: list | None = None,
     is_multi_intent: bool = False,
 ) -> ClarificationDecision:
-    """Décide si Jenny doit demander une précision avant de répondre.
-
-    Conservateur par construction : on ne clarifie que sur des signaux nets
-    (ambiguïté multi-demande, demande très vague, ou info clé manquante) pour ne
-    pas agacer le client avec des questions inutiles.
-    """
+    """Faut-il demander une précision ?"""
     entities = entities or {}
     if intent in _NO_CLARIFY_INTENTS:
         return ClarificationDecision.none()
 
-    # 1) Plusieurs demandes distinctes et actionnables dans le même message.
+    # 1) plusieurs demandes
     if is_multi_intent and detected_intents:
         distinct = {
             d.get("intent")
@@ -144,7 +122,7 @@ def decide_clarification(
                 ),
             )
 
-    # 2) Info clé manquante pour une intention actionnable.
+    # 2) info clé manquante
     if intent in _REQUIRED_ENTITY:
         key, human = _REQUIRED_ENTITY[intent]
         if not entities.get(key):
@@ -158,7 +136,7 @@ def decide_clarification(
                 ),
             )
 
-    # 3) Demande très vague : message court + intention incertaine/générique.
+    # 3) demande trop vague
     words = _meaningful_words(message_text)
     is_vague_generic = intent in {"general", "faq"} and confidence < CLARIFY_CONFIDENCE_FLOOR
     if (len(words) <= 3 and is_vague_generic) or (len(words) <= 2 and intent == "general"):
@@ -179,42 +157,21 @@ def decide_clarification(
 # Lacune de connaissance
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Intentions où le client attend une INFORMATION (pas une action pure).
+# intentions qui attendent une info
 KNOWLEDGE_SEEKING_INTENTS = frozenset(
     {"faq", "general", "pricing", "payment_question", "planning", "quote"}
 )
 
-# Score de pertinence RAG minimal pour considérer qu'on a une VRAIE réponse.
-# ⚠️ Calibré sur l'échelle BLENDÉE du retriever (0.7·cosinus mpnet + 0.3·lexical,
-# cf. rag/rerank.py) — recalibrer si le modèle d'embeddings ou le blend change,
-# et RÉ-INDEXER la base (scripts/reindex_kb.py) à chaque changement de modèle.
-# Mesuré les 2026-07-11/12 sur la KB de démo (paraphrase-multilingual-mpnet-base-v2,
-# échelle BLENDÉE du retriever partagé — 0.7·cos + 0.3·lexical) :
-# question DONT la réponse est en base → 0.39 à 0.67 ; hors-sujet franc
-# (pneus, piano…) → ≤ 0.36 ; « même commerce mais service ABSENT » (extensions,
-# épilation, permis moto…) → 0.32 à 0.52. Les bandes se CHEVAUCHENT : aucun
-# scalaire ne sépare. On combine donc score ET couverture lexicale du SUJET :
-#   < HARD_FLOOR                       → lacune (vraiment rien de pertinent) ;
-#   [HARD_FLOOR, STRONG) & sujet ABSENT des docs → lacune (négatif « même métier
-#       mais service absent » : « moto », « extensions »… absents des passages) ;
-#   sinon (sujet présent OU score ≥ STRONG) → réponse présente.
-# La couverture du sujet SAUVE les vraies questions dont le score frôle le
-# plancher (« et vous faites les colorations ? » 0.39, doc « …colorations »
-# présent) — c'était une source de fausses lacunes. Mieux vaut différer que
-# mentir, mais pas au prix de faux « je vérifie » sur du contenu présent.
+# seuil RAG de vraie réponse
 GAP_SCORE_HARD_FLOOR = 0.30
 GAP_SCORE_STRONG = 0.60
-# Rétrocompat (référencé par d'anciens tests / lectures) : borne basse de la bande.
+# rétrocompat, ancienne borne
 GAP_SCORE_FLOOR = GAP_SCORE_HARD_FLOOR
 
-# Mots non discriminants pour le veto de sujet : outils grammaticaux, verbes
-# d'offre génériques, vocabulaire temporel (souvent absent du texte de la base
-# alors que la réponse y est — « samedi matin » vs « 9h30-19h00 »), et POLITESSES
-# (le message brut « super merci ! et vous faites les colorations ? » ne doit pas
-# faire compter « super »/« merci » comme sujet distinctif absent des documents).
+# mots non discriminants (veto sujet)
 _SUBJECT_STOPWORDS = frozenset(
     {
-        # Politesses / salutations / remerciements (jamais un « sujet »).
+        # politesses
         "bonjour",
         "bonsoir",
         "salut",
@@ -290,9 +247,7 @@ _SUBJECT_STOPWORDS = frozenset(
         "besoin",
         "savoir",
         "voudrais",
-        # Verbes/fillers très fréquents en question de suivi (« comment je FAIS
-        # pour annuler du COUP ? ») : jamais un « sujet », mais assez longs pour
-        # passer le filtre — ils créaient de fausses lacunes sur du contenu présent.
+        # fillers de suivi
         "fais",
         "fait",
         "faut",
@@ -356,14 +311,7 @@ _SUBJECT_STOPWORDS = frozenset(
 
 
 def _subject_uncovered(message: str, docs: list[dict]) -> bool:
-    """Vrai si un mot distinctif de la question est ABSENT des documents.
-
-    Détecte le cas « même commerce mais service absent » : « posez-vous des
-    extensions ? » matche sémantiquement un document « prestations : coupe,
-    coloration… » (score moyen) alors que le SUJET demandé n'y figure pas.
-    Comparaison par PRÉFIXE (4 lettres) : tolère pluriels, élisions et
-    conjugaisons (« servez » ↔ « servons », « colorations » ↔ « coloration »).
-    """
+    """Sujet absent des documents ?"""
     tokens = {
         t
         for t in re.findall(r"[a-zà-ÿ0-9]+", (message or "").lower())
@@ -376,30 +324,21 @@ def _subject_uncovered(message: str, docs: list[dict]) -> bool:
 
 
 def _action_has_concrete_result(action_result: dict | None) -> bool:
-    """Vrai si une action a produit une donnée concrète (commande, créneau…)."""
+    """Action avec résultat concret ?"""
     if not action_result:
         return False
-    # On ignore les annotations internes (préfixées par « _ »).
+    # ignore les clés internes
     meaningful = {k: v for k, v in action_result.items() if not k.startswith("_")}
     if not meaningful:
         return False
     if meaningful.get("success") is True:
         return True
-    # Présence d'une charge utile non vide (statut commande, créneaux, devis…).
+    # une charge utile non vide
     return any(bool(v) for k, v in meaningful.items() if k not in {"success", "error", "message"})
 
 
 def _retrieval_has_answer(documents: list[dict] | None, message: str) -> bool:
-    """La RÉCUPÉRATION a-t-elle réellement fondé une réponse ? (indépendant de
-    l'intention).
-
-    Vrai si un passage pertinent couvre le sujet : score ≥ plancher dur ET
-    (score ≥ STRONG OU le sujet demandé apparaît dans les passages). C'est le
-    cœur déterministe partagé par ``is_knowledge_gap`` (lacune côté récupération)
-    et ``refine_knowledge_gap`` (une déflexion du LLM ne compte comme lacune que
-    si la récupération n'a PAS fondé la réponse — sinon c'est de la paresse de
-    formulation sur du contenu POURTANT présent).
-    """
+    """La récupération fonde-t-elle une réponse ?"""
     docs = documents or []
     if not docs:
         return False
@@ -416,12 +355,7 @@ def is_knowledge_gap(
     action_result: dict | None,
     message: str = "",
 ) -> bool:
-    """Détermine si Jenny n'a aucune réponse fiable à fournir.
-
-    Vrai lorsque l'intention attend une information, qu'aucune action n'a produit
-    de résultat concret, et que la récupération ne fonde aucune réponse
-    (cf. ``_retrieval_has_answer`` : score + couverture du sujet).
-    """
+    """Jenny n'a aucune réponse fiable ?"""
     if intent not in KNOWLEDGE_SEEKING_INTENTS:
         return False
     if _action_has_concrete_result(action_result):
@@ -429,17 +363,16 @@ def is_knowledge_gap(
     return not _retrieval_has_answer(documents, message)
 
 
-# Formules de « je n'ai pas la réponse, je vérifie » : le signal le plus fiable
-# qu'une vraie réponse manquait, même quand un document proche a été retrouvé.
+# formules « je vérifie »
 _DEFLECTION_RE = re.compile(
     r"je\s+v[ée]rifie|je\s+me\s+renseigne|je\s+reviens\s+vers\s+(?:vous|toi)|"
     r"v[ée]rifier\s+aupr[èe]s|mettre\s+en\s+relation|je\s+vous\s+recontacte|"
     r"transmets?\s+(?:votre|ta|la)\s+(?:demande|question)|on\s+revient\s+vers\s+(?:vous|toi)|"
     r"l['’]?[ée]quipe\s+(?:vous|te|pourra|reviendra|saura)|je\s+me\s+rapproche|"  # noqa: RUF001
-    # Renvoyer vers l'équipe / son numéro est aussi une déflexion (= je n'ai pas l'info).
+    # renvoi équipe = déflexion
     r"contact\w*\s+(?:l['’]\s*|la\s+|notre\s+|directement\s+)*[ée]quipe|"  # noqa: RUF001
     r"(?:leur|son)\s+num[ée]ro|num[ée]ro\s+de\s+t[ée]l[ée]phone|"
-    # « contactez-nous directement / venez en boutique pour ça » = même aveu.
+    # « contactez-nous » = aveu
     r"(?:nous|le)\s+contacter\s+directement|contacter\s+directement\s+(?:le|la|notre)|"
     r"recommande\s+de\s+(?:nous\s+)?contacter|venir\s+dans\s+notre\s+[ée]tablissement|"
     r"renseigner\s+aupr[èe]s",
@@ -448,7 +381,7 @@ _DEFLECTION_RE = re.compile(
 
 
 def looks_like_deflection(text: str) -> bool:
-    """Vrai si la réponse esquive (« je vérifie et je reviens vers vous »)."""
+    """La réponse esquive ?"""
     return bool(_DEFLECTION_RE.search(text or ""))
 
 
@@ -461,47 +394,32 @@ def refine_knowledge_gap(
     needs_clarification: bool,
     retrieval_grounded: bool = False,
 ) -> bool:
-    """Décision FINALE de lacune, après génération de la réponse.
-
-    - ``pre_gap`` (récupération sans réponse, incluant le veto de sujet) est le
-      signal DÉTERMINISTE fiable : s'il est vrai, c'est une lacune même si le
-      classifieur d'intention a hésité (clarification).
-    - Une DÉFLEXION (« je vérifie… ») ne compte comme lacune que si la récupération
-      n'a PAS fondé la réponse (``retrieval_grounded`` faux) : sinon, le contenu
-      EST en base et Jenny a juste esquivé par paresse → PAS une lacune (évite de
-      logguer une fausse « question sans réponse » au gérant). Utile quand
-      l'intention est mal classée (payment/general) et que ``pre_gap`` n'a donc
-      pas pu se déclencher.
-    """
+    """Décision finale de lacune."""
     if _action_has_concrete_result(action_result):
         return False
-    # Un prix concret a été donné (tarif depuis le catalogue) → question traitée,
-    # même si la réponse propose aussi de « vérifier la disponibilité ».
+    # prix concret donné
+    # = question traitée
     if intent in {"pricing", "quote"} and re.search(
         r"\d+\s*(?:€|euros?)", response_text or "", re.I
     ):
         return False
     deflected = looks_like_deflection(response_text)
-    # Vraie clarification (une QUESTION, sans esquive) → pas une lacune :
-    # « je n'ai pas compris » n'est pas « je ne sais pas ».
+    # vraie clarification
+    # pas une lacune
     if needs_clarification and not deflected:
         return False
     if pre_gap:
         return True
-    # Récupération fondée : jamais une lacune, quoi que dise le LLM (paresse).
+    # récup fondée → jamais lacune
     if retrieval_grounded:
         return False
-    # Non fondé + déflexion → lacune (rattrape les intentions mal classées où
-    # ``pre_gap`` n'a pas pu se déclencher, ex. RDV/payment).
+    # non fondé + déflexion → lacune
+    # rattrape les mal classées
     return deflected
 
 
 def normalize_question(text: str, max_len: int = 200) -> str:
-    """Empreinte normalisée d'une question (pour dédupliquer des variantes).
-
-    Minuscule, sans accents ni ponctuation, espaces compactés. « Vous êtes
-    ouverts le dimanche ? » et « ouvert dimanche » se rapprochent.
-    """
+    """Empreinte normalisée d'une question."""
     t = unicodedata.normalize("NFKD", (text or "").lower())
     t = "".join(c for c in t if not unicodedata.combining(c))
     t = re.sub(r"[^\w\s]", " ", t)
@@ -510,7 +428,7 @@ def normalize_question(text: str, max_len: int = 200) -> str:
 
 
 def clean_question(text: str, max_len: int = 280) -> str:
-    """Nettoie une question pour l'afficher au propriétaire (trim + longueur)."""
+    """Nettoie une question pour l'affichage."""
     t = re.sub(r"\s+", " ", (text or "").strip())
     return t[:max_len]
 
@@ -519,9 +437,9 @@ def clean_question(text: str, max_len: int = 280) -> str:
 # Faits client durables
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Motifs à fort signal → fait durable + catégorie. Volontairement prudent :
-# ces faits sont persistés, on évite donc le bruit.
-_APOS = r"['’]"  # apostrophe droite ou typographique  # noqa: RUF001
+# motifs à fort signal
+# prudent, on évite le bruit
+_APOS = r"['’]"  # apostrophe  # noqa: RUF001
 _FACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(r"\bje\s+suis\s+allergique\s+(?:[àa]|au|aux)\s+([^.,;!?\n]{2,60})", re.I),
@@ -538,17 +456,14 @@ _FACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
 ]
 
-# Conjonctions qui terminent un fait (évite de capturer deux idées en une).
+# conjonctions qui coupent un fait
 _FACT_STOP_RE = re.compile(r"\s+(?:et|mais|car|donc|parce que|puis|ainsi que)\s+", re.I)
 
 _MAX_FACTS_PER_MESSAGE = 3
 
 
 def extract_customer_facts(text: str) -> list[dict[str, str]]:
-    """Extrait des faits durables d'un message client (heuristique prudente).
-
-    Renvoie une liste de ``{"fact": str, "kind": str}``. Vide si rien de net.
-    """
+    """Extrait les faits durables."""
     if not text:
         return []
     out: list[dict[str, str]] = []
@@ -556,7 +471,7 @@ def extract_customer_facts(text: str) -> list[dict[str, str]]:
     for pattern, kind in _FACT_PATTERNS:
         for m in pattern.finditer(text):
             snippet = re.sub(r"\s+", " ", m.group(0).strip()).rstrip(".")
-            # Coupe à la première conjonction pour ne pas capturer deux idées.
+            # coupe à la 1re conjonction
             snippet = _FACT_STOP_RE.split(snippet, maxsplit=1)[0].strip()
             if len(snippet) < 4:
                 continue
@@ -564,7 +479,7 @@ def extract_customer_facts(text: str) -> list[dict[str, str]]:
             if key in seen:
                 continue
             seen.add(key)
-            # Met une majuscule initiale, point final pour une phrase propre.
+            # majuscule + point final
             fact = snippet[0].upper() + snippet[1:]
             if not fact.endswith((".", "!", "?")):
                 fact += "."

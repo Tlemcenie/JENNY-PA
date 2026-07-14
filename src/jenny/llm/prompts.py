@@ -1,9 +1,4 @@
-"""Templates de prompts pour Jenny.
-
-Centralise tous les prompts système utilisés par le moteur
-conversationnel et les agents pour garantir la cohérence
-des réponses générées.
-"""
+"""templates de prompts."""
 
 from __future__ import annotations
 
@@ -70,7 +65,7 @@ Pose la question de manière naturelle et polie, comme un membre de l'équipe.
 Demande UNE information à la fois.
 """
 
-# ── Contexte par intention (injecté dans le system prompt) ──
+# contexte par intention
 
 INTENT_CONTEXT = {
     "greeting": "Le client te salue. Réponds chaleureusement et propose ton aide.",
@@ -90,7 +85,7 @@ INTENT_CONTEXT = {
 }
 
 
-# Guides de ton du « Cerveau de Jenny » (configurable par le commerçant).
+# guides de ton configurables
 _TONE_GUIDE = {
     "pro": "Adopte un ton professionnel, posé et courtois.",
     "cool": "Adopte un ton décontracté, jeune et chaleureux, naturel et spontané.",
@@ -102,9 +97,7 @@ _TONE_GUIDE = {
 def build_persona_instructions(
     persona: dict | None, business_name: str | None = None
 ) -> str:
-    """Transforme le persona configuré (ton, tutoiement, vocabulaire, règles d'or)
-    en consignes ajoutées au prompt système. Renvoie "" si aucun persona (le
-    comportement par défaut est alors inchangé)."""
+    """persona vers consignes de prompt."""
     if not persona:
         return ""
     lines: list[str] = []
@@ -124,8 +117,7 @@ def build_persona_instructions(
                 f"Emploie naturellement ces mots/expressions de la maison "
                 f"quand c'est pertinent : {mots}."
             )
-    # Curseurs de style 0-100 (page « Cerveau »). On ne traduit en consigne que les
-    # positions franches (<=35 / >=65) pour ne pas brider le ton autour du neutre.
+    # curseurs de style, positions franches
     sliders = persona.get("sliders")
     if isinstance(sliders, dict):
         formel = sliders.get("formel")
@@ -146,7 +138,7 @@ def build_persona_instructions(
                 lines.append("Oriente vers la réservation ou l'achat dès que c'est pertinent, sans forcer.")
             elif vente <= 35:
                 lines.append("Reste discrète commercialement : ne pousse jamais à l'achat.")
-    # Secteur + description : contexte que Jenny utilise pour se présenter.
+    # secteur et description
     sector = persona.get("sector")
     if isinstance(sector, str) and sector.strip():
         lines.append(f"Secteur de l'établissement : {sector.strip()}.")
@@ -172,18 +164,12 @@ def build_persona_instructions(
 
 
 def build_context_instructions(state: ConversationState) -> str:
-    """Consignes dynamiques issues de la couche d'intelligence du moteur.
-
-    Langue du client, faits durables connus, demande de clarification, et
-    gestion d'une lacune de connaissance — chacune ajoutée seulement si pertinente
-    (renvoie "" sinon, donc aucune régression sur le comportement par défaut).
-    """
+    """consignes dynamiques du moteur."""
     from jenny.engine.intelligence import language_name
 
     lines: list[str] = []
 
-    # Langue : français par défaut (clientèle francophone). On ne bascule dans la
-    # langue du client QUE si le business a activé explicitement le multilingue.
+    # langue : fr par défaut
     persona = getattr(state, "business_persona", None) or {}
     lang = getattr(state, "detected_language", None)
     if persona.get("multilingue") and lang and lang != "fr":
@@ -221,42 +207,36 @@ def build_context_instructions(state: ConversationState) -> str:
 
 
 class PromptBuilder:
-    """Construit les prompts pour le LLM en fonction du contexte.
-
-    Centralise la logique de construction de prompts
-    pour garantir la cohérence du ton et du format.
-    """
+    """construit les prompts LLM."""
 
     def __init__(self, business_type: str = "un salon de coiffure") -> None:
         self.business_type = business_type
 
     def build_system_prompt(self, state: ConversationState) -> str:
-        """Construit le prompt système selon le contexte."""
+        """construit le prompt système."""
         base = SYSTEM_PROMPT_BASE.format(business_type=self.business_type)
 
-        # Ajouter le contexte de l'intention
+        # contexte de l'intention
         if state.current_intent:
             intent_ctx = INTENT_CONTEXT.get(state.current_intent, "")
             if intent_ctx:
                 base += f"\nContexte : {intent_ctx}"
 
-        # Ajouter les entités connues
+        # entités connues
         filled_slots = {k: v.value for k, v in state.slots.items() if v.filled}
         if filled_slots:
             base += f"\nInformations déjà connues sur le client : {filled_slots}"
 
-        # Résultat d'action si disponible (on masque les annotations internes « _ »).
+        # résultat d'action (masque les _)
         if state.action_result:
             public = {k: v for k, v in state.action_result.items() if not k.startswith("_")}
             if public:
-                # Cadre clairement : ce sont des FAITS à reformuler, pas du texte à
-                # recopier (sinon le petit modèle récite les consignes mot à mot).
+                # des faits à reformuler
                 base += (
                     "\n\n=== À DIRE AU CLIENT (reformule avec TES mots, ne recopie jamais "
                     "ces lignes telles quelles) ==="
                 )
-                # Réservation confirmée : on verrouille le jour/heure pour que le
-                # petit modèle ne change pas la date dans sa confirmation.
+                # on verrouille le jour/heure
                 if public.get("success") and public.get("day") and public.get("time"):
                     base += (
                         f"\nRDV réservé — prestation : {public['service']} · jour : "
@@ -437,7 +417,7 @@ class PromptBuilder:
                             "reprenant EXACTEMENT ce nouveau créneau."
                         )
 
-        # Informations internes (base de connaissances — jamais montrées au client)
+        # infos internes (jamais montrées)
         if state.retrieved_documents:
             base += (
                 "\nInformations internes utiles (ne les présente jamais comme des "
@@ -447,19 +427,19 @@ class PromptBuilder:
                 content = doc.get("content", "")[:300]
                 base += f"\n  [{i}] {content}"
 
-        # Couche d'intelligence : langue, faits client, clarification, lacune.
+        # couche d'intelligence
         base += build_context_instructions(state)
 
-        # Cerveau de Jenny : ton, tutoiement, vocabulaire et règles d'or configurés.
+        # persona configuré
         base += build_persona_instructions(state.business_persona, state.business_name)
 
         return base
 
     def build_user_prompt(self, state: ConversationState) -> str:
-        """Construit le prompt utilisateur avec historique."""
+        """construit le prompt utilisateur."""
         parts: list[str] = []
 
-        # Historique récent (derniers messages)
+        # historique récent
         recent = state.message_history[-6:]
         if len(recent) > 1:
             parts.append("=== Conversation ===")
@@ -467,14 +447,13 @@ class PromptBuilder:
                 role = "Client" if msg["role"] == "user" else "Jenny"
                 parts.append(f"{role} : {msg['content']}")
 
-        # Message actuel
+        # message actuel
         if state.message_history:
             last = state.message_history[-1]
             if last["role"] == "user":
                 parts.append(f"\nClient : {last['content']}")
 
-        # Indice anti-resalutation : si Jenny a déjà parlé plus haut, elle enchaîne
-        # sans redire « Bonjour » (le petit modèle a tendance à resaluer à chaque tour).
+        # éviter de resaluer
         already_spoke = any(m.get("role") == "assistant" for m in state.message_history[:-1])
         if already_spoke:
             parts.append(
@@ -487,7 +466,7 @@ class PromptBuilder:
         return "\n".join(parts)
 
     def build_rag_system_prompt(self, state: ConversationState) -> str:
-        """Prompt système pour les réponses RAG."""
+        """prompt système RAG."""
         return (
             SYSTEM_PROMPT_RAG
             + build_context_instructions(state)
@@ -499,10 +478,10 @@ class PromptBuilder:
         state: ConversationState,
         documents: list[dict],
     ) -> str:
-        """Prompt utilisateur enrichi avec des documents RAG."""
+        """prompt utilisateur avec docs RAG."""
         parts: list[str] = []
 
-        # Informations de contexte (internes — jamais montrées au client)
+        # infos internes de contexte
         if documents:
             parts.append("=== Informations internes (base de connaissances) ===")
             for i, doc in enumerate(documents, 1):
@@ -510,7 +489,7 @@ class PromptBuilder:
                 parts.append(f"\n[{i}]")
                 parts.append(content[:500])
 
-        # Question du client
+        # question du client
         if state.message_history:
             last = state.message_history[-1]
             if last["role"] == "user":
@@ -528,7 +507,7 @@ class PromptBuilder:
         return "\n".join(parts)
 
     def build_slot_filling_prompt(self, state: ConversationState) -> str:
-        """Prompt pour la collecte d'informations manquantes."""
+        """collecte des infos manquantes."""
         missing = state.get_missing_slots()
         missing_names = [s.name for s in missing]
         return SLOT_FILLING_PROMPT.format(missing_slots=", ".join(missing_names))

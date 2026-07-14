@@ -24,31 +24,17 @@ import {
   ApiError,
 } from "@/lib/api";
 
-/**
- * Page « Modèle maison » — laboratoire du GPT entraîné from scratch.
- *
- * Tout le contenu provient des endpoints réels `GET /api/v1/nanogpt/training`
- * et `GET /api/v1/nanogpt/comparison` (eux-mêmes lus sur disque par le backend,
- * écrits par `nanogpt.train` et `scripts.compare_models`). Aucune donnée n'est
- * inventée : si rien n'a tourné, on affiche un état vide expliquant la commande.
- *
- * Cadre honnête assumé : le modèle maison est volontairement plus faible que
- * Groq/Ollama. L'intérêt est de montrer la méthode (corpus → tokenizer → boucle
- * d'entraînement → courbe de loss) et la comparaison chiffrée, pas de gagner.
- *
- * Mise en page : on ne rend que la zone de contenu (sidebar + topbar viennent
- * de `(dashboard)/layout.tsx`). Racine `.jx` pour hériter du design handoff.
- */
+/** Page labo du modèle maison. */
 
-// Couleur slate (val_loss + libellés sobres), alignée sur la DA analytics.
+// couleur slate
 const SLATE = "#7284A8";
 
-// ── Formatage chiffré (FR : espace fine + virgule décimale) ───────────────
+// formatage chiffré (FR)
 function formatParams(n: number): string {
   if (!n) return "—";
   if (n >= 1_000_000) {
     const millions = n / 1_000_000;
-    // 12 281 856 → « 12,3 M » ; 4 200 000 → « 4,2 M »
+    // ex : 12,3 M
     return `${millions.toFixed(1).replace(".", ",")} M`;
   }
   if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(".", ",")} k`;
@@ -76,14 +62,13 @@ function formatScore(pct: number | null | undefined): string {
   return `${pct.toFixed(1).replace(".", ",")} %`;
 }
 
-// Recharts (v3) type la valeur d'un tooltip comme `ValueType | undefined`
-// (number | string | tableau) ; on la ramène à un nombre pour nos formateurs.
+// ramène la valeur en nombre
 function toNumber(v: ValueType | undefined): number {
   if (Array.isArray(v)) return Number(v[0] ?? 0);
   return Number(v ?? 0);
 }
 
-// ── Petite puce d'info (jmono) façon stat-chip ────────────────────────────
+// petite puce d'info
 function StatChip({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div
@@ -117,7 +102,7 @@ function StatChip({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-// ── Pavé de code copiable (état vide / pédagogie) ─────────────────────────
+// pavé de code copiable
 function CodeBlock({ lines }: { lines: string[] }) {
   return (
     <pre
@@ -144,7 +129,7 @@ function CodeBlock({ lines }: { lines: string[] }) {
   );
 }
 
-// Tooltip recharts harmonisé avec la DA (cf. message-volume-chart).
+// tooltip recharts
 const chartTooltipStyle = {
   background: "var(--surface)",
   border: "1px solid var(--divider)",
@@ -154,7 +139,7 @@ const chartTooltipStyle = {
   boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
 } as const;
 
-// ── Carte courbe d'entraînement ───────────────────────────────────────────
+// carte courbe d'entraînement
 function TrainingCard({ training }: { training: NanoGptTraining }) {
   const { points, state } = training;
   const hasCurve = points.length > 0 && state !== "absent";
@@ -201,7 +186,7 @@ function TrainingCard({ training }: { training: NanoGptTraining }) {
         </span>
       </div>
 
-      {/* Chips de stats (faits du dernier run) */}
+      {/* chips de stats */}
       <div
         style={{
           display: "flex",
@@ -368,7 +353,7 @@ function TrainingCard({ training }: { training: NanoGptTraining }) {
   );
 }
 
-// ── Une ligne de modèle dans la comparaison ───────────────────────────────
+// une ligne de modèle
 function ModelRow({ r }: { r: ModelComparisonResult }) {
   const isNano = r.key === "nanogpt" || r.provider === "nanogpt";
   return (
@@ -439,7 +424,7 @@ function ModelRow({ r }: { r: ModelComparisonResult }) {
         </div>
       </div>
 
-      {/* Note (ex. indisponibilité) */}
+      {/* note éventuelle */}
       {r.note && (
         <div
           style={{
@@ -454,7 +439,7 @@ function ModelRow({ r }: { r: ModelComparisonResult }) {
         </div>
       )}
 
-      {/* Cadre honnête pour le modèle maison */}
+      {/* cadre honnête modèle maison */}
       {isNano && r.available && (
         <div
           style={{
@@ -477,7 +462,7 @@ function ModelRow({ r }: { r: ModelComparisonResult }) {
         </div>
       )}
 
-      {/* Échantillons q→a (si fournis par l'API) */}
+      {/* échantillons q→a */}
       {r.samples && r.samples.length > 0 && (
         <div
           className="jmono"
@@ -514,12 +499,12 @@ function ModelRow({ r }: { r: ModelComparisonResult }) {
   );
 }
 
-// ── Carte comparaison 3 modèles ───────────────────────────────────────────
+// carte comparaison 3 modèles
 function ComparisonCard({ comparison }: { comparison: ModelComparison }) {
   const results = comparison.results;
   const hasData = results.length > 0;
 
-  // Données pour les barres (un point par modèle, libellé court).
+  // données des barres
   const barData = results.map((r) => ({
     name: r.label.split("—")[0].trim() || r.label,
     score: r.score_pct ?? 0,
@@ -583,14 +568,14 @@ function ComparisonCard({ comparison }: { comparison: ModelComparison }) {
         </div>
       ) : (
         <>
-          {/* Lignes détaillées par modèle */}
+          {/* lignes par modèle */}
           <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
             {results.map((r) => (
               <ModelRow key={r.key} r={r} />
             ))}
           </div>
 
-          {/* Deux mini-graphes côte à côte */}
+          {/* deux mini-graphes */}
           <div
             style={{
               display: "grid",
@@ -694,7 +679,7 @@ function ComparisonCard({ comparison }: { comparison: ModelComparison }) {
   );
 }
 
-// ── Squelette de chargement ───────────────────────────────────────────────
+// squelette de chargement
 function LabSkeleton() {
   return (
     <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
@@ -732,8 +717,7 @@ export default function LabPage() {
   const [comparison, setComparison] = useState<ModelComparison | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // On garde l'état « running » dans une ref pour piloter le polling sans
-  // recréer l'intervalle à chaque rafraîchissement.
+  // état running en ref
   const isRunningRef = useRef(false);
 
   const fetchTraining = useCallback(async () => {
@@ -769,9 +753,7 @@ export default function LabPage() {
     fetchAll();
   }, [fetchAll]);
 
-  // Polling de la courbe pendant un entraînement en cours (toutes les 5 s).
-  // L'intervalle vit en permanence mais ne refait un appel que si l'état
-  // courant est « running » — on s'arrête naturellement quand c'est terminé.
+  // polling pendant l'entraînement
   useEffect(() => {
     const id = setInterval(() => {
       if (isRunningRef.current) {
@@ -819,7 +801,7 @@ export default function LabPage() {
   return (
     <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
       <div style={{ maxWidth: 960, margin: "0 auto" }}>
-        {/* ── En-tête éditorial ── */}
+        {/* en-tête */}
         <header style={{ marginBottom: 28 }}>
           <div
             className="jmono"

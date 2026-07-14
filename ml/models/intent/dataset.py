@@ -1,11 +1,4 @@
-"""Dataset PyTorch pour la détection d'intention — Multi-Label.
-
-Supporte deux formats de données :
-1. Single-label :  {"text": "Bonjour", "intent": "greeting"}
-2. Multi-label  :  {"text": "RDV + devis", "intents": ["appointment", "quote"]}
-
-La tokenization est faite par un vocabulaire simple (word-level).
-"""
+"""Dataset intention multi-label."""
 
 from __future__ import annotations
 
@@ -22,14 +15,7 @@ if TYPE_CHECKING:
 
 
 class IntentDataset(Dataset):
-    """Dataset pour l'entraînement du classifieur d'intention multi-label.
-
-    Chaque exemple a un texte et un VECTEUR binaire de labels
-    (1 pour chaque intention active, 0 sinon).
-
-    Ex: "RDV urgent et devis" → [0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0]
-                                             ^appointment          ^quote
-    """
+    """Dataset du classifieur multi-label."""
 
     def __init__(
         self,
@@ -40,12 +26,12 @@ class IntentDataset(Dataset):
     ) -> None:
         self.config = config or IntentModelConfig()
         self.texts = texts
-        # Normaliser : chaque label est une LISTE d'intentions
+        # chaque label devient une liste
         self.labels = [lbl if isinstance(lbl, list) else [lbl] for lbl in labels]
         self.vocab = vocab or self._build_vocab(texts)
 
     def _build_vocab(self, texts: list[str]) -> dict[str, int]:
-        """Construit un vocabulaire simple à partir des textes."""
+        """construit le vocab."""
         vocab: dict[str, int] = {"<PAD>": 0, "<UNK>": 1}
         for text in texts:
             for word in self._tokenize(text):
@@ -55,11 +41,11 @@ class IntentDataset(Dataset):
 
     @staticmethod
     def _tokenize(text: str) -> list[str]:
-        """Tokenization simple par mots (lowercase + split)."""
+        """tokenize par mots."""
         return text.lower().strip().split()
 
     def encode_text(self, text: str) -> list[int]:
-        """Encode un texte en séquence d'IDs."""
+        """texte en IDs."""
         tokens = self._tokenize(text)
         ids = [self.vocab.get(t, 1) for t in tokens]
         if len(ids) > self.config.max_seq_length:
@@ -67,10 +53,7 @@ class IntentDataset(Dataset):
         return ids
 
     def _encode_labels(self, label_list: list[str]) -> torch.Tensor:
-        """Encode une liste d'intentions en vecteur multi-hot.
-
-        Ex: ["appointment", "quote"] → [0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0]
-        """
+        """intentions en multi-hot."""
         multi_hot = torch.zeros(self.config.num_classes, dtype=torch.float)
         for label in label_list:
             label_id = LABEL_TO_ID.get(label)
@@ -87,13 +70,13 @@ class IntentDataset(Dataset):
 
         input_ids = self.encode_text(text)
 
-        # Multi-hot encoding pour les labels
+        # multi-hot des labels
         labels_tensor = self._encode_labels(label_list)
 
-        # Aussi garder le single-label (premier label) pour rétro-compat
+        # garde le single-label
         primary_label_id = LABEL_TO_ID.get(label_list[0], LABEL_TO_ID["general"])
 
-        # Padding
+        # padding
         padding_length = self.config.max_seq_length - len(input_ids)
         attention_mask = [1] * len(input_ids) + [0] * padding_length
         input_ids = input_ids + [0] * padding_length
@@ -101,8 +84,8 @@ class IntentDataset(Dataset):
         return {
             "input_ids": torch.tensor(input_ids, dtype=torch.long),
             "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
-            "labels": torch.tensor(primary_label_id, dtype=torch.long),  # single-label compat
-            "labels_multi": labels_tensor,  # multi-label (multi-hot)
+            "labels": torch.tensor(primary_label_id, dtype=torch.long),  # compat single-label
+            "labels_multi": labels_tensor,  # multi-label
         }
 
     @classmethod
@@ -112,12 +95,7 @@ class IntentDataset(Dataset):
         config: IntentModelConfig | None = None,
         vocab: dict[str, int] | None = None,
     ) -> IntentDataset:
-        """Charge un dataset depuis un fichier JSONL.
-
-        Supporte les deux formats :
-        - {"text": "...", "intent": "greeting"}              (single)
-        - {"text": "...", "intents": ["appointment", "quote"]} (multi)
-        """
+        """charge un JSONL."""
         texts: list[str] = []
         labels: list[list[str]] = []
         with open(path, encoding="utf-8") as f:
@@ -131,27 +109,24 @@ class IntentDataset(Dataset):
         return cls(texts, labels, vocab=vocab, config=config)
 
     def save_vocab(self, path: str | Path) -> None:
-        """Sauvegarde le vocabulaire."""
+        """sauve le vocab."""
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.vocab, f, ensure_ascii=False)
 
     @staticmethod
     def load_vocab(path: str | Path) -> dict[str, int]:
-        """Charge un vocabulaire sauvegardé."""
+        """charge le vocab."""
         with open(path, encoding="utf-8") as f:
             return json.load(f)
 
 
 def generate_sample_data() -> tuple[list[str], list[list[str]]]:
-    """Génère des données d'entraînement enrichies pour le multi-label.
-
-    Inclut des exemples single-label ET multi-label.
-    """
+    """données d'entraînement multi-label."""
     samples: list[tuple[str, list[str]]] = [
         # ═══════════════════════════════════════════
-        #  SINGLE-LABEL (une seule intention)
+        #  single-label
         # ═══════════════════════════════════════════
-        # ── Greeting (10) ──
+        # salutations
         ("Bonjour", ["greeting"]),
         ("Salut, comment ça va ?", ["greeting"]),
         ("Hello", ["greeting"]),
@@ -162,7 +137,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Salut à vous", ["greeting"]),
         ("Coucou, c'est Marie !", ["greeting"]),
         ("Re bonjour !", ["greeting"]),
-        # ── Order status (10) ──
+        # suivi commande
         ("Où en est ma commande ?", ["order_status"]),
         ("Je voudrais suivre mon colis", ["order_status"]),
         ("Ma livraison est en retard", ["order_status"]),
@@ -173,7 +148,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("La livraison devait arriver hier", ["order_status"]),
         ("Suivi de mon colis s'il vous plaît", ["order_status"]),
         ("Mon colis numéro CMD-2026 est où ?", ["order_status"]),
-        # ── Pricing (10) ──
+        # prix
         ("Combien ça coûte ?", ["pricing"]),
         ("Quels sont vos tarifs ?", ["pricing"]),
         ("Quel est le prix pour une prestation photo ?", ["pricing"]),
@@ -184,7 +159,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Le tarif horaire c'est combien ?", ["pricing"]),
         ("Combien pour une coupe femme ?", ["pricing"]),
         ("C'est quel prix le lissage brésilien ?", ["pricing"]),
-        # ── Appointment (10) ──
+        # rdv
         ("Je voudrais prendre rendez-vous", ["appointment"]),
         ("Vous avez des disponibilités ?", ["appointment"]),
         ("Je cherche un créneau la semaine prochaine", ["appointment"]),
@@ -195,7 +170,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Un créneau jeudi matin ça irait ?", ["appointment"]),
         ("Je veux réserver un créneau pour lundi", ["appointment"]),
         ("Possible de prendre rdv demain ?", ["appointment"]),
-        # ── Complaint (10) ──
+        # réclamations
         ("J'ai un problème avec ma commande", ["complaint"]),
         ("Le produit est défectueux", ["complaint"]),
         ("Je ne suis pas satisfait", ["complaint"]),
@@ -206,7 +181,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Très déçu de votre service", ["complaint"]),
         ("Ma couleur a viré, c'est inadmissible", ["complaint"]),
         ("Je ne suis vraiment pas contente du résultat", ["complaint"]),
-        # ── FAQ (10) ──
+        # faq
         ("Comment ça fonctionne ?", ["faq"]),
         ("Quels sont vos horaires ?", ["faq"]),
         ("Où êtes-vous situé ?", ["faq"]),
@@ -217,7 +192,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Quels modes de livraison proposez-vous ?", ["faq"]),
         ("Vous êtes ouvert le dimanche ?", ["faq"]),
         ("Il y a un parking à côté ?", ["faq"]),
-        # ── Closing (10) ──
+        # clôture
         ("Merci beaucoup", ["closing"]),
         ("Au revoir", ["closing"]),
         ("Bonne journée", ["closing"]),
@@ -228,7 +203,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Bonne soirée à vous", ["closing"]),
         ("Merci pour votre aide, au revoir", ["closing"]),
         ("OK c'est tout merci beaucoup !", ["closing"]),
-        # ── Escalation (10) ──
+        # transfert humain
         ("Je veux parler à un humain", ["escalation"]),
         ("Passez-moi un conseiller", ["escalation"]),
         ("Je veux un agent", ["escalation"]),
@@ -239,7 +214,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Je veux parler à la responsable", ["escalation"]),
         ("Passez-moi la gérante s'il vous plaît", ["escalation"]),
         ("Un humain svp", ["escalation"]),
-        # ── Payment (10) ──
+        # paiement
         ("Comment payer ?", ["payment"]),
         ("Je voudrais régler ma facture", ["payment"]),
         ("Quels moyens de paiement acceptez-vous ?", ["payment"]),
@@ -250,7 +225,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Effectuer le paiement de ma commande", ["payment"]),
         ("Je peux payer en 3 fois ?", ["payment"]),
         ("Comment régler ma facture ?", ["payment"]),
-        # ── Quote / Devis (10) ──
+        # devis
         ("Je voudrais un devis", ["quote"]),
         ("Pouvez-vous me faire un devis ?", ["quote"]),
         ("Demande de devis pour une prestation", ["quote"]),
@@ -261,7 +236,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Combien pour un devis personnalisé ?", ["quote"]),
         ("Devis pour une coiffure mariage", ["quote"]),
         ("Préparez-moi un devis s'il vous plaît", ["quote"]),
-        # ── Planning (10) ──
+        # planning
         ("Quelles sont vos disponibilités ?", ["planning"]),
         ("Je veux voir le planning", ["planning"]),
         ("Vos créneaux libres cette semaine ?", ["planning"]),
@@ -272,7 +247,7 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Consulter les créneaux ouverts", ["planning"]),
         ("C'est quoi vos dispos samedi ?", ["planning"]),
         ("Quels jours vous travaillez ?", ["planning"]),
-        # ── General (8) ──
+        # général
         ("Ok", ["general"]),
         ("D'accord", ["general"]),
         ("Je comprends", ["general"]),
@@ -282,9 +257,9 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
         ("Hmm", ["general"]),
         ("Euh je sais pas", ["general"]),
         # ═══════════════════════════════════════════
-        #  MULTI-LABEL (plusieurs intentions)
+        #  multi-label
         # ═══════════════════════════════════════════
-        # ── Appointment + Quote (RDV + Devis) ──
+        # rdv + devis
         ("Je veux prendre rendez-vous et recevoir un devis", ["appointment", "quote"]),
         (
             "Bonjour j'aimerais le rendez-vous le plus rapide dispo c'est urgent et envoyez-moi un devis",
@@ -299,23 +274,23 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
             "J'aimerais un devis pour un balayage et prendre rdv si possible",
             ["appointment", "quote"],
         ),
-        # ── Appointment + Pricing (RDV + Prix) ──
+        # rdv + prix
         ("Je voudrais prendre rdv, c'est combien une coupe ?", ["appointment", "pricing"]),
         ("Dispo pour un rdv ? Et quels sont vos prix ?", ["appointment", "pricing"]),
         ("Combien ça coûte et quand je peux venir ?", ["appointment", "pricing"]),
         ("Tarifs pour une coloration et réserver un créneau", ["appointment", "pricing"]),
         ("Je veux un RDV et connaître vos tarifs", ["appointment", "pricing"]),
-        # ── Appointment + Planning (RDV + Dispos) ──
+        # rdv + dispos
         ("Quelles sont vos dispos ? Je veux réserver", ["appointment", "planning"]),
         ("Montrez-moi le planning et réservez-moi un créneau", ["appointment", "planning"]),
         ("Vos disponibilités ? Je souhaite prendre rdv", ["appointment", "planning"]),
         ("C'est quoi vos horaires et je peux réserver quand ?", ["appointment", "planning"]),
-        # ── Quote + Pricing (Devis + Prix) ──
+        # devis + prix
         ("Combien ça coûte ? Et envoyez-moi un devis", ["quote", "pricing"]),
         ("Quels sont vos tarifs et pouvez-vous me faire un devis ?", ["quote", "pricing"]),
         ("Tarifs pour un lissage et devis svp", ["quote", "pricing"]),
         ("Je veux connaître les prix et avoir un devis personnalisé", ["quote", "pricing"]),
-        # ── Complaint + Escalation (Réclamation + Transfert) ──
+        # réclamation + transfert
         ("Je suis pas content et je veux parler à un responsable", ["complaint", "escalation"]),
         ("C'est nul, passez-moi un humain", ["complaint", "escalation"]),
         (
@@ -326,24 +301,24 @@ def generate_sample_data() -> tuple[list[str], list[list[str]]]:
             "Je me plains et je veux un remboursement, passez-moi quelqu'un",
             ["complaint", "escalation"],
         ),
-        # ── Order status + Complaint (Suivi + Réclamation) ──
+        # suivi + réclamation
         ("Ma commande est en retard et je ne suis pas content", ["order_status", "complaint"]),
         ("Où est mon colis ? C'est inadmissible ce retard", ["order_status", "complaint"]),
         ("CMD-123 jamais arrivée, je veux me plaindre", ["order_status", "complaint"]),
-        # ── Payment + Order status (Paiement + Suivi) ──
+        # paiement + suivi
         ("Je veux payer et savoir où en est ma commande", ["payment", "order_status"]),
         ("Comment régler ma facture et suivre mon colis ?", ["payment", "order_status"]),
-        # ── Greeting + Appointment (Salutation + RDV) ──
+        # salutation + rdv
         ("Bonjour, je voudrais prendre rendez-vous", ["greeting", "appointment"]),
         ("Salut ! Possible de réserver un créneau ?", ["greeting", "appointment"]),
         ("Coucou, je veux un rdv pour un balayage", ["greeting", "appointment"]),
-        # ── Greeting + Quote (Salutation + Devis) ──
+        # salutation + devis
         ("Bonjour, j'aurais besoin d'un devis", ["greeting", "quote"]),
         ("Salut, pouvez-vous me faire un devis pour un mariage ?", ["greeting", "quote"]),
-        # ── Greeting + Pricing (Salutation + Prix) ──
+        # salutation + prix
         ("Bonjour, quels sont vos tarifs ?", ["greeting", "pricing"]),
         ("Salut, combien coûte une coupe homme ?", ["greeting", "pricing"]),
-        # ── Closing + General ──
+        # clôture
         ("OK merci c'est tout", ["closing"]),
         ("Parfait on fait comme ça, merci !", ["closing"]),
     ]

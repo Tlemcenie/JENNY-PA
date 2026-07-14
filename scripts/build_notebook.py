@@ -1,12 +1,4 @@
-"""Génère UN notebook autonome `JENNY_NanoGPT_FromScratch.ipynb`.
-
-Le notebook fait TOUT, sans dépendre du repo jenny : collecte de données FR
-(scraping + datasets HF) → tokenizer BPE maison → modèle GPT (PyTorch) →
-entraînement FROM SCRATCH (GPU/T4, AMP) → courbes → génération → comparaison.
-
-Conçu pour Google Colab / Kaggle avec un GPU Tesla T4. Usage :
-    python scripts/build_notebook.py
-"""
+"""Génère le notebook NanoGPT."""
 
 from __future__ import annotations
 
@@ -15,7 +7,7 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent.parent / "JENNY_NanoGPT_FromScratch.ipynb"
 
-# Chaque entrée = (type, source). type ∈ {"md","code"}.
+# une cellule = (type, source)
 CELLS: list[tuple[str, str]] = []
 def md(s: str) -> None: CELLS.append(("md", s.strip("\n")))
 def code(s: str) -> None: CELLS.append(("code", s.strip("\n")))

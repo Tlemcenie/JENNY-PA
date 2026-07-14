@@ -54,18 +54,17 @@ import { useFocusTrap } from "@/lib/use-focus-trap";
 import { cn } from "@/lib/utils";
 import { easeOutExpo, fadeInUp } from "@/lib/motion";
 
-// ── Constantes d'affichage ────────────────────────────────────────────────
+// constantes d'affichage
 
-// Vue semaine : plage horaire visible (heures pleines).
+// plage horaire visible
 const DAY_START_HOUR = 7;
 const DAY_END_HOUR = 21;
-const HOUR_PX = 52; // hauteur d'une heure dans la grille semaine
+const HOUR_PX = 52; // hauteur d'une heure
 const WEEKDAYS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 
 type CalendarView = "month" | "week";
 
-// Couleur d'un rendez-vous : annulé → rouge, sinon couleur du canal, repli corail.
-// On renvoie des variables CSS (qui basculent clair/sombre automatiquement).
+// couleur d'un RDV
 function appointmentColor(appt: Appointment): string {
   if (appt.status === "cancelled") return "var(--color-jenny-error)";
   switch (appt.channel) {
@@ -94,12 +93,12 @@ function statusMeta(status: string) {
   return STATUS_META[status] ?? { label: status, className: "bg-jenny-divider/60 text-jenny-text-secondary" };
 }
 
-// Capitalise la 1ʳᵉ lettre (les libellés date-fns `fr` sont en minuscules).
+// capitalise la 1re lettre
 function cap(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-// Format "YYYY-MM-DD" en heure locale (clé d'index par jour + valeur d'input date).
+// format YYYY-MM-DD local
 function toDateValue(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -112,7 +111,7 @@ function extractError(err: unknown, fallback: string): string {
   return fallback;
 }
 
-// ── Formulaire de création ────────────────────────────────────────────────
+// formulaire de création
 
 interface CreateForm {
   title: string;
@@ -134,40 +133,40 @@ function emptyForm(day: Date): CreateForm {
   };
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────
+// page
 
 export default function CalendarPage() {
   const toast = useToast();
   const confirm = useConfirm();
 
   const [view, setView] = useState<CalendarView>("month");
-  const [cursor, setCursor] = useState<Date>(() => new Date()); // ancre du mois / de la semaine
+  const [cursor, setCursor] = useState<Date>(() => new Date()); // ancre mois / semaine
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
-  // Modale de création
+  // modale de création
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<CreateForm>(() => emptyForm(new Date()));
   const [saving, setSaving] = useState(false);
   const createRef = useRef<HTMLDivElement>(null);
   useFocusTrap(createOpen, createRef);
 
-  // Modale de détail
+  // modale de détail
   const [selected, setSelected] = useState<Appointment | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const detailRef = useRef<HTMLDivElement>(null);
   useFocusTrap(selected !== null, detailRef);
 
-  // ── Plage visible (selon la vue) ──
+  // plage visible
   const range = useMemo(() => {
     if (view === "week") {
       const start = startOfWeek(cursor, { weekStartsOn: 1 });
       const end = endOfWeek(cursor, { weekStartsOn: 1 });
       return { start, end };
     }
-    // Mois : on englobe les jours débordants pour remplir la grille 7 colonnes.
+    // englobe les jours débordants
     const monthStart = startOfMonth(cursor);
     const monthEnd = endOfMonth(cursor);
     return {
@@ -180,7 +179,7 @@ export default function CalendarPage() {
     setIsLoading(true);
     setError(null);
     try {
-      // Marges d'une journée pour capter les RDV chevauchant les bords de plage.
+      // marge d'un jour aux bords
       const start = new Date(range.start);
       start.setHours(0, 0, 0, 0);
       const end = new Date(range.end);
@@ -204,7 +203,7 @@ export default function CalendarPage() {
     fetchAppointments();
   }, [fetchAppointments]);
 
-  // ── Jours de la grille + index RDV par jour ──
+  // jours + index par jour
   const days = useMemo(
     () => eachDayOfInterval({ start: range.start, end: range.end }),
     [range.start, range.end]
@@ -218,7 +217,7 @@ export default function CalendarPage() {
       if (list) list.push(appt);
       else map.set(key, [appt]);
     }
-    // Tri chronologique à l'intérieur de chaque jour.
+    // tri chrono par jour
     for (const list of map.values()) {
       list.sort((a, b) => +new Date(a.start_at) - +new Date(b.start_at));
     }
@@ -230,7 +229,7 @@ export default function CalendarPage() {
     [byDay]
   );
 
-  // ── Export .ics ──
+  // export .ics
   const handleExportIcs = async () => {
     if (exporting) return;
     setExporting(true);
@@ -243,7 +242,7 @@ export default function CalendarPage() {
     }
   };
 
-  // ── Navigation ──
+  // navigation
   const goToday = () => setCursor(new Date());
   const goPrev = () => setCursor((c) => (view === "week" ? addWeeks(c, -1) : addMonths(c, -1)));
   const goNext = () => setCursor((c) => (view === "week" ? addWeeks(c, 1) : addMonths(c, 1)));
@@ -260,7 +259,7 @@ export default function CalendarPage() {
     return cap(format(cursor, "MMMM yyyy", { locale: fr }));
   }, [cursor, view]);
 
-  // ── Ouverture des modales ──
+  // ouverture des modales
   const openCreate = (day?: Date) => {
     setForm(emptyForm(day ?? new Date()));
     setCreateOpen(true);

@@ -1,8 +1,4 @@
-"""Configuration centralisée via Pydantic Settings.
-
-Toute la configuration de l'application est centralisée ici.
-Les valeurs sont lues depuis les variables d'environnement (préfixe JENNY_).
-"""
+"""Configuration via Pydantic Settings."""
 
 from functools import lru_cache
 from typing import Literal
@@ -21,78 +17,71 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ── Application ──
+    # application
     env: Literal["dev", "test", "prod"] = "dev"
     debug: bool = True
     log_level: str = "INFO"
     app_name: str = "Jenny"
     require_auth: bool = False
-    # Seed (idempotent) du compte démo au démarrage de l'API si activé.
+    # seed du compte démo
     auto_seed: bool = False
 
-    # ── API ──
+    # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
-    # ── Database ──
+    # database
     database_url: str = "postgresql+asyncpg://jenny:jenny_secret@localhost:5432/jenny"
 
-    # ── Redis (OPTIONNEL) ──
-    # Vide = pas de Redis : state manager, rate limit et readiness basculent en
-    # mémoire (mode démo cloud sans Memorystore). Le local le définit toujours
-    # (.env / scripts/start_stack.sh) — Redis est opt-in, plus opt-out.
+    # Redis (optionnel)
+    # vide = pas de Redis, tout en mémoire
     redis_url: str = ""
 
-    # ── Rate limiting (webhooks / ingest) ──
+    # rate limiting
     rate_limit_enabled: bool = True
-    # Nombre de requêtes autorisées par fenêtre glissante et par IP.
+    # requêtes autorisées par IP
     rate_limit_max_requests: int = 120
     rate_limit_window_seconds: int = 60
 
-    # ── LLM ──
+    # LLM
     openai_api_key: str = ""
     groq_api_key: str = ""
     mistral_api_key: str = ""
     llama_base_url: str = "http://localhost:11434"  # Ollama / vLLM local
-    llm_provider: str = "groq"  # groq, openai, mistral, llama, nanogpt
+    llm_provider: str = "groq"  # groq, openai, mistral, llama…
     llm_model: str = "llama-3.3-70b-versatile"  # modèle par défaut Groq
-    llm_temperature: float = 0.4  # ton du LLM : assez bas = stable/posé (évite l'effet « fébrile »)
-    # Durée pendant laquelle Ollama garde le modèle chargé en mémoire entre deux
-    # requêtes. "30m"/"-1" (illimité) évitent le cold-start → réponses « au tac au
-    # tac ». Mettre "0" pour libérer la RAM immédiatement après chaque requête.
+    llm_temperature: float = 0.4  # bas = stable/posé
+    # garde le modèle chargé
     llama_keep_alive: str = "30m"
 
-    # ── ML supervisé (intent / NER) ──
+    # ML supervisé (intent/NER)
     enable_ml_models: bool = True
     intent_model_path: str = "checkpoints/intent/best_model.pt"
     ner_model_path: str = "checkpoints/ner/best_model.pt"
 
-    # ── Embeddings RAG ──
-    # Défaut : sentence-transformer multilingue (768-dim, FR), 100 % en-process.
-    # Aucun service externe requis → le RAG fonctionne partout (local ET cloud),
-    # sans dépendre d'Ollama (absent de Cloud Run). Reste compatible avec la
-    # colonne pgvector existante (vector(768)) : pas de migration.
+    # embeddings RAG
+    # multilingue, 100 % en-process
     embeddings_backend: str = "sentence-transformer"  # ollama, sentence-transformer, openai
     embeddings_model: str = "paraphrase-multilingual-mpnet-base-v2"
-    # Re-ranking lexical après la recherche vectorielle (améliore la finesse).
+    # re-ranking lexical
     rag_rerank: bool = True
-    rag_rerank_candidates: int = 12  # nb de candidats récupérés avant re-ranking
+    rag_rerank_candidates: int = 12  # candidats avant re-ranking
 
-    # ── MLflow ──
+    # MLflow
     mlflow_tracking_uri: str = "http://localhost:5000"
 
-    # ── WhatsApp Business API (Meta Cloud API) ──
+    # WhatsApp (Meta)
     whatsapp_phone_number_id: str = ""
     whatsapp_access_token: str = ""
     whatsapp_verify_token: str = "jenny-whatsapp-verify"
     whatsapp_api_version: str = "v21.0"
 
-    # ── Instagram Messaging API (Meta) ──
+    # Instagram (Meta)
     instagram_page_id: str = ""
     instagram_access_token: str = ""
     instagram_verify_token: str = "jenny-instagram-verify"
 
-    # ── Twitter/X API ──
+    # Twitter/X
     twitter_api_key: str = ""
     twitter_api_secret: str = ""
     twitter_access_token: str = ""
@@ -100,12 +89,12 @@ class Settings(BaseSettings):
     twitter_bearer_token: str = ""
     twitter_webhook_env: str = "production"
 
-    # ── Snapchat for Business ──
+    # Snapchat
     snapchat_client_id: str = ""
     snapchat_client_secret: str = ""
     snapchat_access_token: str = ""
 
-    # ── Email SMTP (envoi de mails) ──
+    # email SMTP
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
     smtp_username: str = ""
@@ -114,46 +103,42 @@ class Settings(BaseSettings):
     smtp_from_name: str = "Jenny"
     smtp_use_tls: bool = True
 
-    # ── Backend d'envoi d'email ──
-    # "auto" : SMTP si identifiants présents, sinon écriture du HTML sur disque
-    # (dev, consultable dans un navigateur) ou console (tests).
+    # backend d'envoi email
+    # auto : SMTP sinon fichier
     email_backend: Literal["auto", "smtp", "file", "console"] = "auto"
     email_preview_dir: str = "var/emails"
-    # URL publique du front (liens dans les emails, ex. confirmation).
+    # URL publique du front
     app_base_url: str = "http://localhost:3000"
-    # Origines CORS autorisées : "*" en dev ; en prod, l'URL du frontend
-    # (plusieurs séparées par des virgules), ce qui active aussi les credentials.
+    # origines CORS autorisées
     cors_origins: str = "*"
-    # Durée de validité du code de confirmation email (minutes).
+    # validité du code (minutes)
     email_verification_ttl_minutes: int = 15
 
-    # ── SMS Twilio ──
+    # SMS Twilio
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_phone_number: str = ""
 
-    # ── Google Calendar ──
+    # Google Calendar
     google_calendar_id: str = "primary"
-    google_service_account_json: str = ""  # Chemin vers le fichier JSON service account
+    google_service_account_json: str = ""  # chemin JSON service account
 
-    # ── Meta webhooks (signature HMAC) ──
+    # webhooks Meta (HMAC)
     facebook_app_secret: str = ""
     skip_meta_signature: bool = False
 
-    # ── Origine PUBLIQUE de l'API (pour les URLs de webhook données à Meta) ──
-    # Vide ⇒ on dérive l'origine de la requête entrante. À définir derrière un
-    # proxy / en prod (ex. https://api.jenny.app).
+    # origine publique de l'API
+    # vide = dérivée de la requête
     public_api_base_url: str = ""
 
-    # ── Chiffrement au repos des identifiants de canal (Fernet) ──
-    # Vide ⇒ identifiants stockés en clair (dev / mono-tenant, HTTPS). En prod,
-    # définir une clé Fernet (base64 urlsafe 32 octets) pour chiffrer les tokens.
+    # chiffrement des identifiants (Fernet)
+    # vide = stockés en clair
     master_key: str = ""
 
-    # ── Dev : business par défaut si aucun channel_accounts (WhatsApp / IG) ──
+    # business par défaut (dev)
     default_business_id: str = ""
 
-    # ── OAuth Google (dashboard) ──
+    # OAuth Google
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     google_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
@@ -161,7 +146,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_exp_minutes: int = 60 * 24
 
-    # ── Email inbound ──
+    # email inbound
     email_inbound_secret: str = ""
     imap_host: str = ""
     imap_user: str = ""
@@ -171,7 +156,7 @@ class Settings(BaseSettings):
     imap_use_ssl: bool = True
     imap_business_id: str = ""
 
-    # ── Stripe / PayPal ──
+    # Stripe / PayPal
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     paypal_client_id: str = ""
@@ -194,5 +179,5 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Retourne l'instance unique des settings (singleton via cache)."""
+    """Settings en singleton."""
     return Settings()

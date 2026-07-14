@@ -1,20 +1,4 @@
-"""Intégration Google Calendar pour Jenny.
-
-Permet à Jenny de :
-- Lire les créneaux disponibles du prestataire en temps réel
-- Créer des rendez-vous directement dans le calendrier
-- Modifier un rendez-vous existant
-- Annuler un rendez-vous
-- Vérifier le prochain créneau disponible (urgent)
-
-Configuration requise :
-    JENNY_GOOGLE_CALENDAR_ID        — ID du calendrier (ou "primary")
-    JENNY_GOOGLE_SERVICE_ACCOUNT_JSON — Chemin vers le fichier JSON credentials
-
-Deux modes :
-    1. Mode API réel : utilise google-api-python-client (production)
-    2. Mode simulé : données fictives (dev/test sans credentials)
-"""
+"""Intégration Google Calendar."""
 
 from __future__ import annotations
 
@@ -30,7 +14,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class CalendarSlot:
-    """Créneau disponible dans le calendrier."""
+    """Un créneau dispo."""
 
     date: str  # "2026-03-16"
     time: str  # "14:00"
@@ -41,7 +25,7 @@ class CalendarSlot:
 
 @dataclass
 class CalendarEvent:
-    """Événement (RDV) dans le calendrier."""
+    """Un RDV du calendrier."""
 
     id: str = ""
     title: str = ""
@@ -59,7 +43,7 @@ class CalendarEvent:
 
 @dataclass
 class CalendarResult:
-    """Résultat d'une opération calendrier."""
+    """Résultat d'une opération."""
 
     success: bool
     message: str
@@ -68,16 +52,12 @@ class CalendarResult:
     data: dict = field(default_factory=dict)
 
 
-# ── Jours de la semaine en français ──
+# jours en français
 JOURS_FR = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 
 
 class GoogleCalendarService:
-    """Service d'intégration Google Calendar.
-
-    Gère toutes les interactions avec le calendrier du prestataire.
-    Fonctionne en mode réel (API Google) ou simulé (dev/test).
-    """
+    """Service Google Calendar."""
 
     def __init__(
         self,
@@ -104,11 +84,11 @@ class GoogleCalendarService:
 
     @property
     def is_configured(self) -> bool:
-        """Vérifie si Google Calendar est configuré (mode réel)."""
+        """vrai si configuré."""
         return bool(self.service_account_json)
 
     def _get_google_service(self):
-        """Initialise le client Google Calendar API (lazy loading)."""
+        """init client Google (lazy)."""
         if self._service is not None:
             return self._service
 
@@ -137,7 +117,7 @@ class GoogleCalendarService:
             return None
 
     # ════════════════════════════════════════════
-    #  LIRE LES DISPONIBILITÉS
+    #  lire les dispos
     # ════════════════════════════════════════════
 
     async def get_available_slots(
@@ -145,18 +125,7 @@ class GoogleCalendarService:
         from_date: datetime | None = None,
         days: int | None = None,
     ) -> list[CalendarSlot]:
-        """Récupère les créneaux disponibles.
-
-        Lit les événements existants dans le calendrier
-        et retourne les créneaux libres.
-
-        Args:
-            from_date: Date de début (défaut: maintenant).
-            days: Nombre de jours à consulter.
-
-        Returns:
-            Liste des créneaux disponibles.
-        """
+        """Les créneaux dispo."""
         start = from_date or datetime.now(UTC)
         num_days = days or self.days_ahead
 
@@ -167,7 +136,7 @@ class GoogleCalendarService:
             return self._get_simulated_slots(start, num_days)
 
     async def _get_real_slots(self, service, start: datetime, days: int) -> list[CalendarSlot]:
-        """Récupère les créneaux depuis l'API Google Calendar."""
+        """créneaux depuis l'API."""
         time_min = start.isoformat()
         time_max = (start + timedelta(days=days)).isoformat()
 
@@ -189,29 +158,29 @@ class GoogleCalendarService:
                 event_end = event["end"].get("dateTime", event["end"].get("date"))
                 busy_times.append((event_start, event_end))
 
-            # Générer les créneaux libres
+            # génère les créneaux
             slots = []
             current = start.replace(hour=0, minute=0, second=0, microsecond=0)
 
             for day_offset in range(days):
                 day = current + timedelta(days=day_offset)
-                if day.weekday() == 6:  # Dimanche fermé
+                if day.weekday() == 6:  # dimanche fermé
                     continue
 
                 day_name = JOURS_FR[day.weekday()]
 
                 for hour in range(self.opening_hour, self.closing_hour):
-                    # Pause déjeuner
+                    # pause déj
                     if self.lunch_start <= hour < self.lunch_end:
                         continue
 
                     slot_start = day.replace(hour=hour, minute=0)
                     slot_start + timedelta(minutes=self.slot_duration)
 
-                    # Vérifier si le créneau est libre
+                    # créneau libre ?
                     is_busy = False
                     for busy_start, busy_end in busy_times:
-                        # Comparaison simplifiée
+                        # comparaison simple
                         if busy_start <= slot_start.isoformat() < busy_end:
                             is_busy = True
                             break
@@ -235,13 +204,13 @@ class GoogleCalendarService:
             return self._get_simulated_slots(start, days)
 
     def _get_simulated_slots(self, start: datetime, days: int) -> list[CalendarSlot]:
-        """Génère des créneaux simulés (mode dev/test)."""
+        """créneaux simulés (dev)."""
         slots = []
         current = start.replace(hour=0, minute=0, second=0, microsecond=0)
 
         for day_offset in range(days):
             day = current + timedelta(days=day_offset)
-            if day.weekday() == 6:  # Dimanche fermé
+            if day.weekday() == 6:  # dimanche fermé
                 continue
 
             day_name = JOURS_FR[day.weekday()]
@@ -252,7 +221,7 @@ class GoogleCalendarService:
 
                 slot_start = day.replace(hour=hour, minute=0)
 
-                # Simuler quelques créneaux occupés
+                # quelques créneaux pris
                 is_booked = any(
                     e.start.startswith(slot_start.strftime("%Y-%m-%dT%H"))
                     for e in self._simulated_events
@@ -273,16 +242,12 @@ class GoogleCalendarService:
         return slots
 
     async def get_next_available_slot(self) -> CalendarSlot | None:
-        """Trouve le prochain créneau disponible (le plus tôt possible).
-
-        Parfait pour les demandes urgentes type :
-        "Je veux le RDV le plus rapide possible"
-        """
+        """Le prochain créneau libre."""
         slots = await self.get_available_slots(days=7)
         return slots[0] if slots else None
 
     # ════════════════════════════════════════════
-    #  CRÉER UN RDV
+    #  créer un rdv
     # ════════════════════════════════════════════
 
     async def create_event(
@@ -297,22 +262,7 @@ class GoogleCalendarService:
         description: str = "",
         location: str = "",
     ) -> CalendarResult:
-        """Crée un rendez-vous dans le calendrier.
-
-        Args:
-            title: Titre du RDV (ex: "Coupe + Brushing — Marie").
-            start_datetime: Début au format ISO (2026-03-16T14:00:00).
-            end_datetime: Fin au format ISO.
-            customer_name: Nom du client.
-            customer_email: Email du client.
-            customer_phone: Téléphone du client.
-            service: Prestation demandée.
-            description: Notes supplémentaires.
-            location: Adresse du salon.
-
-        Returns:
-            CalendarResult avec l'événement créé.
-        """
+        """Crée un RDV."""
         event = CalendarEvent(
             title=title,
             start=start_datetime,
@@ -333,7 +283,7 @@ class GoogleCalendarService:
             return self._create_simulated_event(event)
 
     async def _create_real_event(self, service, event: CalendarEvent) -> CalendarResult:
-        """Crée l'événement via l'API Google Calendar."""
+        """crée le RDV via l'API."""
         try:
             body = {
                 "summary": event.title,
@@ -387,7 +337,7 @@ class GoogleCalendarService:
             )
 
     def _create_simulated_event(self, event: CalendarEvent) -> CalendarResult:
-        """Crée un événement simulé (mode dev/test)."""
+        """RDV simulé (dev)."""
         from uuid import uuid4
 
         event.id = f"gcal-{uuid4().hex[:8]}"
@@ -406,7 +356,7 @@ class GoogleCalendarService:
         )
 
     # ════════════════════════════════════════════
-    #  MODIFIER UN RDV
+    #  modifier un rdv
     # ════════════════════════════════════════════
 
     async def update_event(
@@ -417,7 +367,7 @@ class GoogleCalendarService:
         new_title: str | None = None,
         new_description: str | None = None,
     ) -> CalendarResult:
-        """Modifie un rendez-vous existant."""
+        """modifie un RDV."""
         google_service = self._get_google_service()
         if google_service is not None:
             return await self._update_real_event(
@@ -435,7 +385,7 @@ class GoogleCalendarService:
         new_title: str | None,
         new_description: str | None,
     ) -> CalendarResult:
-        """Modifie via l'API Google Calendar."""
+        """modifie via l'API."""
         try:
             event = service.events().get(calendarId=self.calendar_id, eventId=event_id).execute()
 
@@ -486,7 +436,7 @@ class GoogleCalendarService:
         new_end: str | None,
         new_title: str | None,
     ) -> CalendarResult:
-        """Modifie un événement simulé."""
+        """modif d'un RDV simulé."""
         for event in self._simulated_events:
             if event.id == event_id:
                 if new_start:
@@ -509,11 +459,11 @@ class GoogleCalendarService:
         )
 
     # ════════════════════════════════════════════
-    #  ANNULER UN RDV
+    #  annuler un rdv
     # ════════════════════════════════════════════
 
     async def cancel_event(self, event_id: str) -> CalendarResult:
-        """Annule un rendez-vous."""
+        """annule un RDV."""
         google_service = self._get_google_service()
         if google_service is not None:
             try:
@@ -538,7 +488,7 @@ class GoogleCalendarService:
                     message=f"Erreur lors de l'annulation : {e}",
                 )
         else:
-            # Mode simulé
+            # mode simulé
             self._simulated_events = [e for e in self._simulated_events if e.id != event_id]
             return CalendarResult(
                 success=True,
@@ -547,18 +497,11 @@ class GoogleCalendarService:
             )
 
     # ════════════════════════════════════════════
-    #  HELPERS
+    #  helpers
     # ════════════════════════════════════════════
 
     async def get_day_schedule(self, date: str) -> list[CalendarEvent]:
-        """Récupère tous les RDV d'une journée.
-
-        Args:
-            date: Date au format YYYY-MM-DD.
-
-        Returns:
-            Liste des événements de la journée.
-        """
+        """Les RDV d'un jour."""
         google_service = self._get_google_service()
         if google_service is not None:
             try:
@@ -594,11 +537,11 @@ class GoogleCalendarService:
             except Exception as e:
                 logger.error("google_calendar.schedule_error", error=str(e))
 
-        # Mode simulé
+        # mode simulé
         return [e for e in self._simulated_events if e.start.startswith(date)]
 
     async def health_check(self) -> bool:
-        """Vérifie la connectivité avec Google Calendar."""
+        """ping Google Calendar."""
         service = self._get_google_service()
         if service is None:
             return False

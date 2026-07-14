@@ -34,9 +34,7 @@ import { AnimatedNumber } from "@/components/ui/animated-number";
 import { channelLabel, cn, formatMoney } from "@/lib/utils";
 import { fadeInUp, staggerContainer, staggerItem, easeOutExpo } from "@/lib/motion";
 
-// ── Période → nombre de jours envoyé à getInsights ────────────────────────
-// « Tout » : on demande une large fenêtre (3 ans) plutôt que de laisser le
-// défaut serveur, pour que le libellé reste cohérent quel que soit le backend.
+// période → nb de jours
 const PERIODS = [
   { label: "7j", days: 7 },
   { label: "30j", days: 30 },
@@ -44,7 +42,7 @@ const PERIODS = [
   { label: "Tout", days: 1095 },
 ] as const;
 
-// Couleurs canaux (DA Jenny) — pour la légende, les barres empilées et le donut.
+// couleurs des canaux
 const CHANNEL_COLORS: Record<string, string> = {
   whatsapp: "#25D366",
   instagram: "#E4405F",
@@ -53,17 +51,14 @@ const CHANNEL_COLORS: Record<string, string> = {
   api: "#FF7F6A",
   form: "#7284A8",
 };
-// Ordre d'empilement des barres (du bas vers le haut, comme le design).
+// ordre d'empilement
 const STACK_ORDER = ["whatsapp", "instagram", "email"];
 
 function channelColor(channel: string): string {
   return CHANNEL_COLORS[channel] || "#7284A8";
 }
 
-// Délai moyen de 1ʳᵉ réponse → répartition plausible par tranche.
-// L'API n'expose qu'une moyenne : on en dérive 4 poids monotones (plus la
-// moyenne est basse, plus la part « < 30s » domine) afin de conserver la
-// présentation du design avec des chiffres cohérents avec la donnée réelle.
+// répartition par tranche
 function responseBuckets(avgMinutes: number | null): { l: string; v: number }[] {
   if (avgMinutes == null) {
     return [
@@ -74,7 +69,7 @@ function responseBuckets(avgMinutes: number | null): { l: string; v: number }[] 
     ];
   }
   const avgSec = avgMinutes * 60;
-  // Score de « lenteur » borné dans [0,1] (10 min = très lent).
+  // score de lenteur
   const slow = Math.min(1, avgSec / 600);
   const fast = 1 - slow;
   const raw = [
@@ -85,22 +80,21 @@ function responseBuckets(avgMinutes: number | null): { l: string; v: number }[] 
   ];
   const sum = raw.reduce((a, b) => a + b, 0) || 1;
   const pct = raw.map((r) => Math.round((r / sum) * 100));
-  // Ajuste l'arrondi pour que le total fasse exactement 100.
+  // arrondi à 100
   const diff = 100 - pct.reduce((a, b) => a + b, 0);
   pct[0] += diff;
   const labels = ["< 30s", "30s – 2 min", "2 – 10 min", "> 10 min"];
   return labels.map((l, i) => ({ l, v: Math.max(0, pct[i]) }));
 }
 
-// Sparkline ascendante : cumul progressif des volumes quotidiens réels.
-// Repli sur une ligne plate (zéros) si la série est trop courte / vide.
+// sparkline : cumul progressif
 function computeSparkline(daily: DailyStat[]): number[] {
   if (daily.length < 2) return [0, 0, 0, 0, 0, 0];
   let acc = 0;
   return daily.map((d) => (acc += d.count));
 }
 
-// Variation % entre la 1ʳᵉ et la 2ᵈᵉ moitié de la série quotidienne.
+// variation entre les moitiés
 function computeDelta(daily: DailyStat[]): number | null {
   if (daily.length < 4) return null;
   const mid = Math.floor(daily.length / 2);
@@ -110,10 +104,9 @@ function computeDelta(daily: DailyStat[]): number | null {
   return ((second - first) / first) * 100;
 }
 
-// ── Sous-composants graphiques (recharts) ────────────────────────────────
+// sous-composants graphiques
 
-// Grande carte : barres empilées par canal, dérivées de la série quotidienne
-// (totaux réels) répartie selon les proportions réelles de `by_channel`.
+// barres empilées par canal
 function StackedVolumeChart({
   daily,
   byChannel,
@@ -121,14 +114,13 @@ function StackedVolumeChart({
   daily: DailyStat[];
   byChannel: ChannelStat[];
 }) {
-  // Proportion de chaque canal d'empilement sur l'ensemble de la période.
+  // proportion par canal
   const total = byChannel.reduce((s, c) => s + c.count, 0) || 1;
   const shares = STACK_ORDER.map((ch) => {
     const found = byChannel.find((c) => c.channel === ch);
     return { channel: ch, share: found ? found.count / total : 0 };
   });
-  // Si aucun des 3 canaux connus n'a de volume, on retombe sur 100% WhatsApp
-  // pour éviter des barres vides (ex. données 100% « api »).
+  // repli si aucun volume
   const sharesSum = shares.reduce((s, x) => s + x.share, 0);
   const norm =
     sharesSum > 0
@@ -187,7 +179,7 @@ function StackedVolumeChart({
             dataKey={ch}
             stackId="vol"
             fill={channelColor(ch)}
-            // Coins arrondis seulement sur le segment supérieur de la pile.
+            // coins arrondis en haut
             radius={i === STACK_ORDER.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
             maxBarSize={26}
           />
@@ -197,7 +189,7 @@ function StackedVolumeChart({
   );
 }
 
-// Donut « résolution » — anneau coral sur fond neutre + label central.
+// donut résolution
 function ResolutionDonut({ percent }: { percent: number }) {
   const p = Math.max(0, Math.min(100, percent));
   const data = [
@@ -227,7 +219,7 @@ function ResolutionDonut({ percent }: { percent: number }) {
   );
 }
 
-// Mini sparkline (cf. MiniSpark du design) — ligne coral sans axes.
+// mini sparkline
 function MiniSpark({ values }: { values: number[] }) {
   const data = values.map((v, i) => ({ i, v }));
   return (
@@ -246,7 +238,7 @@ function MiniSpark({ values }: { values: number[] }) {
   );
 }
 
-// ── Libellés présentationnels ─────────────────────────────────────────────
+// libellés
 
 function MonoLabel({ children, className }: { children: ReactNode; className?: string }) {
   return (
@@ -261,7 +253,7 @@ function MonoLabel({ children, className }: { children: ReactNode; className?: s
   );
 }
 
-// ── Squelette de chargement ───────────────────────────────────────────────
+// squelette de chargement
 
 function AnalyticsSkeleton() {
   return (
@@ -290,7 +282,7 @@ function AnalyticsSkeleton() {
   );
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────
+// page
 
 export default function AnalyticsPage() {
   const [insights, setInsights] = useState<Insights | null>(null);

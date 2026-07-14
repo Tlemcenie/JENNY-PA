@@ -1,16 +1,4 @@
-"""Test End-to-End du workflow complet Jenny.
-
-Ce test vérifie que TOUS les composants fonctionnent ensemble :
-1. Modèles ML entraînés (Intent LSTM + NER BiGRU) chargés depuis les checkpoints
-2. Agents métier (FAQ, Action, Payment, Quote, Planning, Fallback)
-3. Action Registry avec handlers réels
-4. RAG avec InMemoryVectorStore + embeddings
-5. Moteur conversationnel complet
-6. LangGraph avec tous les nœuds
-7. API conversation endpoint
-
-C'est le test de vérité — si ça passe, tout s'imbrique bien.
-"""
+"""tests e2e de Jenny."""
 
 from __future__ import annotations
 
@@ -22,39 +10,39 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-# Ajouter le chemin src et racine pour les imports
+# ajoute src au path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from jenny.api.main import create_app
 
 # ═══════════════════════════════════════════════════════════
-#  1. TEST DES MODÈLES ML ENTRAÎNÉS
+#  1. modèles ML
 # ═══════════════════════════════════════════════════════════
 
 
 class TestTrainedModels:
-    """Vérifie que les modèles entraînés from scratch fonctionnent."""
+    """Modèles entraînés from scratch."""
 
     def test_intent_checkpoint_exists(self) -> None:
-        """Le checkpoint intent doit exister."""
+        """checkpoint intent présent."""
         assert Path("checkpoints/intent/best_model.pt").exists(), (
             "Le modèle Intent n'a pas été entraîné ! Lancez: python scripts/train_models.py"
         )
 
     def test_ner_checkpoint_exists(self) -> None:
-        """Le checkpoint NER doit exister."""
+        """checkpoint NER présent."""
         assert Path("checkpoints/ner/best_model.pt").exists(), (
             "Le modèle NER n'a pas été entraîné ! Lancez: python scripts/train_models.py"
         )
 
     def test_intent_predictions(self) -> None:
-        """Le modèle intent prédit les bonnes intentions (multi-label)."""
+        """intent prédit bien."""
         from ml.models.intent.predict import IntentPredictor
 
         predictor = IntentPredictor.from_checkpoint("checkpoints/intent/best_model.pt")
 
-        # Cas de test : on vérifie que l'intent attendu est parmi les détectés
+        # intent attendu détecté
         test_cases = [
             ("Où en est ma commande CMD-123 ?", ["order_status", "complaint"]),
             ("Je veux parler à un humain", ["escalation"]),
@@ -68,23 +56,23 @@ class TestTrainedModels:
                 f"Message: '{message}' → attendu l'un de {expected_intents}, obtenu {detected}"
             )
 
-        # Vérifier la structure multi-label
+        # structure multi-label
         result = predictor.predict_multi("Je voudrais prendre rdv et avoir un devis")
         assert result["is_multi_intent"] is True or len(result["intents"]) >= 1
         assert result["primary_intent"] is not None
         assert result["primary_confidence"] > 0
 
     def test_ner_model_loads(self) -> None:
-        """Le modèle NER se charge et produit des prédictions."""
+        """NER se charge."""
         from ml.models.ner.predict import NERPredictor
 
         predictor = NERPredictor.from_checkpoint("checkpoints/ner/best_model.pt")
         entities = predictor.predict("Ma commande CMD-12345 est en retard")
-        # Le modèle retourne quelque chose (même si pas parfait avec peu de données)
+        # retourne quelque chose
         assert isinstance(entities, dict)
 
     def test_ner_tags(self) -> None:
-        """Le modèle NER produit des tags BIO."""
+        """NER sort des tags BIO."""
         from ml.models.ner.predict import NERPredictor
 
         predictor = NERPredictor.from_checkpoint("checkpoints/ner/best_model.pt")
@@ -94,16 +82,16 @@ class TestTrainedModels:
 
 
 # ═══════════════════════════════════════════════════════════
-#  2. TEST DES AGENTS MÉTIER
+#  2. agents métier
 # ═══════════════════════════════════════════════════════════
 
 
 class TestBusinessAgents:
-    """Vérifie que TOUS les agents métier fonctionnent."""
+    """agents métier."""
 
     @pytest.mark.asyncio
     async def test_payment_agent(self) -> None:
-        """L'agent paiement répond avec les moyens de paiement."""
+        """agent paiement répond."""
         from jenny.agents.payment_agent import PaymentAgent
         from jenny.engine.state_manager import ConversationState
 
@@ -118,7 +106,7 @@ class TestBusinessAgents:
 
     @pytest.mark.asyncio
     async def test_quote_agent(self) -> None:
-        """L'agent devis demande les informations nécessaires."""
+        """agent devis demande les infos."""
         from jenny.agents.quote_agent import QuoteAgent
         from jenny.engine.state_manager import ConversationState
 
@@ -133,7 +121,7 @@ class TestBusinessAgents:
 
     @pytest.mark.asyncio
     async def test_planning_agent(self) -> None:
-        """L'agent planning retourne les disponibilités."""
+        """agent planning: dispos."""
         from jenny.agents.planning_agent import PlanningAgent
         from jenny.engine.state_manager import ConversationState
 
@@ -153,7 +141,7 @@ class TestBusinessAgents:
 
     @pytest.mark.asyncio
     async def test_action_agent_with_registry(self) -> None:
-        """L'agent action utilise le registre pour exécuter les actions."""
+        """action passe par le registre."""
         from jenny.actions.handlers.book_appointment import BookAppointmentAction
         from jenny.actions.handlers.check_planning import CheckPlanningAction
         from jenny.actions.handlers.create_ticket import CreateTicketAction
@@ -170,11 +158,11 @@ class TestBusinessAgents:
         registry.register(CreateTicketAction(), intents=["complaint"])
         registry.register(BookAppointmentAction(), intents=["appointment"])
 
-        # Vérifier que toutes les actions sont enregistrées
+        # toutes enregistrées
         actions = registry.list_actions()
         assert len(actions) == 6
 
-        # Vérifier la résolution par intention
+        # résolution par intention
         assert registry.get_action("order_status") is not None
         assert registry.get_action("payment") is not None
         assert registry.get_action("quote") is not None
@@ -184,7 +172,7 @@ class TestBusinessAgents:
 
     @pytest.mark.asyncio
     async def test_all_action_handlers_execute(self) -> None:
-        """Chaque handler d'action s'exécute sans erreur."""
+        """chaque handler tourne."""
         from jenny.actions.handlers.book_appointment import BookAppointmentAction
         from jenny.actions.handlers.check_planning import CheckPlanningAction
         from jenny.actions.handlers.create_ticket import CreateTicketAction
@@ -195,16 +183,14 @@ class TestBusinessAgents:
         from jenny.db.repositories.support_ticket_repo import SupportTicketRepository
 
         bid = str(uuid4())
-        # Handlers autonomes : succès attendu (logique self-contained ou repo mocké).
+        # handlers autonomes: succès attendu
         self_contained = [
             (CheckOrderAction(), {"order_number": "CMD-123", "business_id": bid}),
             (ProcessPaymentAction(), {"order_number": "CMD-456", "amount": "99.99", "business_id": bid}),
             (CreateTicketAction(), {"email": "client@mail.com", "business_id": bid}),
             (BookAppointmentAction(), {"date": "20/03/2026"}),
         ]
-        # Handlers à contexte réel (DB business/catalogue) : sans contexte complet ils
-        # DÉCLINENT proprement (success=False + message) au lieu d'inventer un résultat.
-        # C'est le comportement attendu depuis que devis et planning sont réels.
+        # sans contexte: déclinent proprement
         context_dependent = [
             (GenerateQuoteAction(), {"product": "iPhone 15", "email": "test@mail.com"}),
             (CheckPlanningAction(), {"date": "15/03/2026"}),
@@ -234,7 +220,7 @@ class TestBusinessAgents:
                 assert result["success"] is True, f"{handler.name} a échoué: {result}"
                 assert "message" in result, f"{handler.name} n'a pas de message"
 
-            # Enveloppe bien formée + dégradation gracieuse (pas de crash, pas de mock).
+            # enveloppe ok, pas de crash
             for handler, params in context_dependent:
                 result = await handler.execute(params)
                 assert isinstance(result, dict), f"{handler.name} n'a pas renvoyé un dict"
@@ -243,16 +229,16 @@ class TestBusinessAgents:
 
 
 # ═══════════════════════════════════════════════════════════
-#  3. TEST DU RAG
+#  3. le RAG
 # ═══════════════════════════════════════════════════════════
 
 
 class TestRAG:
-    """Vérifie le pipeline RAG complet : chunking + embeddings + recherche."""
+    """pipeline RAG complet."""
 
     @pytest.mark.asyncio
     async def test_chunking(self) -> None:
-        """Le document ingester découpe correctement en chunks."""
+        """découpe en chunks."""
         from jenny.rag.ingestion import DocumentIngester
 
         ingester = DocumentIngester(chunk_size=100, chunk_overlap=20)
@@ -271,12 +257,12 @@ class TestRAG:
 
     @pytest.mark.asyncio
     async def test_memory_vector_store(self) -> None:
-        """Le vector store en mémoire stocke et recherche correctement."""
+        """store mémoire: add + search."""
         from jenny.rag.memory_store import InMemoryVectorStore
 
         store = InMemoryVectorStore(collection="test")
 
-        # Ajouter des documents avec des embeddings simples
+        # ajoute des docs
         await store.add_document(
             content="Comment retourner un article ?",
             embedding=[1.0, 0.0, 0.0],
@@ -295,7 +281,7 @@ class TestRAG:
 
         assert store.count == 3
 
-        # Recherche — le vecteur [1,0,0] doit retrouver les docs "retour"
+        # recherche: doit trouver "retour"
         results = await store.search(
             query_embedding=[1.0, 0.0, 0.0],
             top_k=2,
@@ -306,22 +292,22 @@ class TestRAG:
 
     @pytest.mark.asyncio
     async def test_rag_pipeline_end_to_end(self) -> None:
-        """Pipeline RAG complet : ingestion → recherche."""
+        """RAG: ingestion puis recherche."""
         from jenny.rag.ingestion import DocumentIngester
         from jenny.rag.memory_store import InMemoryVectorStore
 
         store = InMemoryVectorStore(collection="faq")
 
-        # Simuler des embeddings simples (sans sentence-transformers)
+        # embeddings bidons
         class SimpleEmbedder:
-            """Embedder simpliste pour le test (hash → vecteur)."""
+            """embedder bidon."""
 
             @property
             def dimension(self) -> int:
                 return 8
 
             async def embed_text(self, text: str) -> list[float]:
-                # Hash simple en vecteur pseudo-unique
+                # hash en vecteur
                 h = hash(text)
                 return [(h >> i & 0xFF) / 255.0 for i in range(8)]
 
@@ -335,7 +321,7 @@ class TestRAG:
             chunk_size=200,
         )
 
-        # Ingérer un document FAQ
+        # ingère une FAQ
         faq_text = (
             "Comment retourner un article ? "
             "Vous disposez de 30 jours pour retourner un article. "
@@ -350,22 +336,22 @@ class TestRAG:
         assert num_chunks >= 1
         assert store.count >= 1
 
-        # Rechercher
+        # recherche
         query_embedding = await embedder.embed_text("retourner un produit")
         results = await store.search(query_embedding=query_embedding, top_k=3)
         assert len(results) >= 1
 
 
 # ═══════════════════════════════════════════════════════════
-#  4. TEST DU MOTEUR CONVERSATIONNEL COMPLET
+#  4. moteur conversationnel
 # ═══════════════════════════════════════════════════════════
 
 
 class TestConversationEngine:
-    """Test le moteur conversationnel avec les vrais modèles branchés."""
+    """moteur avec vrais modèles."""
 
     def _create_full_engine(self):
-        """Crée un engine avec tous les vrais composants."""
+        """engine complet."""
         from jenny.actions.handlers.book_appointment import BookAppointmentAction
         from jenny.actions.handlers.check_planning import CheckPlanningAction
         from jenny.actions.handlers.create_ticket import CreateTicketAction
@@ -383,7 +369,7 @@ class TestConversationEngine:
         from jenny.engine.conversation_engine import ConversationEngine
         from jenny.engine.state_manager import StateManager
 
-        # Action registry
+        # le registre
         registry = ActionRegistry()
         registry.register(CheckOrderAction(), intents=["order_status"])
         registry.register(ProcessPaymentAction(), intents=["payment"])
@@ -392,7 +378,7 @@ class TestConversationEngine:
         registry.register(CreateTicketAction(), intents=["complaint"])
         registry.register(BookAppointmentAction(), intents=["appointment"])
 
-        # Agent router avec tous les agents
+        # router + agents
         router = AgentRouter()
         router.register("faq", FAQAgent())
         router.register("action", ActionAgent(action_registry=registry))
@@ -401,14 +387,14 @@ class TestConversationEngine:
         router.register("quote", QuoteAgent(action_registry=registry))
         router.register("planning", PlanningAgent(action_registry=registry))
 
-        # Intent predictor (depuis checkpoint)
+        # intent predictor
         intent_predictor = None
         if Path("checkpoints/intent/best_model.pt").exists():
             from ml.models.intent.predict import IntentPredictor
 
             intent_predictor = IntentPredictor.from_checkpoint("checkpoints/intent/best_model.pt")
 
-        # NER predictor (depuis checkpoint)
+        # ner predictor
         ner_predictor = None
         if Path("checkpoints/ner/best_model.pt").exists():
             from ml.models.ner.predict import NERPredictor
@@ -424,7 +410,7 @@ class TestConversationEngine:
 
     @pytest.mark.asyncio
     async def test_full_greeting_flow(self) -> None:
-        """Workflow complet : salutation → fallback → réponse."""
+        """flow salutation."""
         from jenny.engine.conversation_engine import EngineRequest
 
         engine = self._create_full_engine()
@@ -443,7 +429,7 @@ class TestConversationEngine:
 
     @pytest.mark.asyncio
     async def test_full_order_flow(self) -> None:
-        """Workflow complet : suivi commande → action agent → résultat."""
+        """flow suivi commande."""
         from jenny.engine.conversation_engine import EngineRequest
 
         engine = self._create_full_engine()
@@ -460,7 +446,7 @@ class TestConversationEngine:
 
     @pytest.mark.asyncio
     async def test_full_escalation_flow(self) -> None:
-        """Workflow complet : escalation → requires_human=True."""
+        """flow escalation."""
         from jenny.engine.conversation_engine import EngineRequest
 
         engine = self._create_full_engine()
@@ -476,7 +462,7 @@ class TestConversationEngine:
 
     @pytest.mark.asyncio
     async def test_full_payment_flow(self) -> None:
-        """Workflow complet : paiement → payment agent."""
+        """flow paiement."""
         from jenny.engine.conversation_engine import EngineRequest
 
         engine = self._create_full_engine()
@@ -487,20 +473,20 @@ class TestConversationEngine:
         )
 
         response = await engine.process(request)
-        # L'intent doit être payment ou pricing
+        # intent payment ou pricing
         assert response.intent in ("payment", "pricing", "faq")
         assert response.response_text is not None
 
     @pytest.mark.asyncio
     async def test_full_multiturn(self) -> None:
-        """Le contexte persiste entre les tours de conversation."""
+        """le contexte persiste."""
         from jenny.engine.conversation_engine import EngineRequest
 
         engine = self._create_full_engine()
         conv_id = uuid4()
         biz_id = uuid4()
 
-        # Tour 1 : salutation
+        # tour 1: salutation
         r1 = await engine.process(
             EngineRequest(
                 conversation_id=conv_id,
@@ -510,7 +496,7 @@ class TestConversationEngine:
         )
         assert r1.intent == "greeting"
 
-        # Tour 2 : demande de commande (même conversation)
+        # tour 2: commande
         r2 = await engine.process(
             EngineRequest(
                 conversation_id=conv_id,
@@ -520,22 +506,22 @@ class TestConversationEngine:
         )
         assert r2.intent == "order_status"
 
-        # Le contexte doit être maintenu (turn_count > 1)
+        # contexte maintenu
         state = engine.state_manager.get_or_create(conv_id, biz_id)
         assert state.turn_count >= 2
 
 
 # ═══════════════════════════════════════════════════════════
-#  5. TEST LANGGRAPH
+#  5. langgraph
 # ═══════════════════════════════════════════════════════════
 
 
 class TestLangGraphIntegration:
-    """Vérifie que le graphe LangGraph traite les messages correctement."""
+    """teste le graphe LangGraph."""
 
     @pytest.mark.asyncio
     async def test_graph_greeting(self) -> None:
-        """Le graphe traite une salutation sans escalade."""
+        """salutation sans escalade."""
         from jenny.agents.graph import process_message_with_graph
 
         result = await process_message_with_graph(
@@ -549,7 +535,7 @@ class TestLangGraphIntegration:
 
     @pytest.mark.asyncio
     async def test_graph_escalation(self) -> None:
-        """Le graphe escalade correctement."""
+        """le graphe escalade."""
         from jenny.agents.graph import process_message_with_graph
 
         result = await process_message_with_graph(
@@ -560,7 +546,7 @@ class TestLangGraphIntegration:
 
     @pytest.mark.asyncio
     async def test_graph_order_status(self) -> None:
-        """Le graphe route vers l'agent action pour une commande."""
+        """route vers l'agent action."""
         from jenny.agents.graph import process_message_with_graph
 
         result = await process_message_with_graph(
@@ -572,12 +558,12 @@ class TestLangGraphIntegration:
 
 
 # ═══════════════════════════════════════════════════════════
-#  6. TEST API ENDPOINT
+#  6. api endpoint
 # ═══════════════════════════════════════════════════════════
 
 
 class TestConversationAPI:
-    """Test l'API /conversation/chat de bout en bout."""
+    """teste l'API chat."""
 
     @pytest.fixture
     async def client(self):
@@ -590,7 +576,7 @@ class TestConversationAPI:
 
     @pytest.mark.asyncio
     async def test_api_chat_full_flow(self, client: AsyncClient) -> None:
-        """L'API traite un message et retourne une réponse structurée."""
+        """réponse structurée."""
         response = await client.post(
             "/api/v1/conversation/chat",
             json={
@@ -607,7 +593,7 @@ class TestConversationAPI:
 
     @pytest.mark.asyncio
     async def test_api_health(self, client: AsyncClient) -> None:
-        """Le healthcheck fonctionne."""
+        """healthcheck ok."""
         response = await client.get("/health")
         assert response.status_code == 200
         data = response.json()
@@ -615,7 +601,7 @@ class TestConversationAPI:
 
     @pytest.mark.asyncio
     async def test_api_multiturn(self, client: AsyncClient) -> None:
-        """L'API supporte les conversations multi-tours."""
+        """conversations multi-tours."""
         conv_id = str(uuid4())
         biz_id = str(uuid4())
 

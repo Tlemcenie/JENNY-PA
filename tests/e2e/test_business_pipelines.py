@@ -1,17 +1,4 @@
-"""Pipelines end-to-end Jenny — auth, chat, RDV, devis, services.
-
-Ces tests exercent les briques fonctionnelles :
-- les vraies routes d'auth (`/api/v1/auth/*`) qui créent user + business
-  en base (tables créées à la volée par la fixture `auth_tables`)
-- la route `/api/v1/conversation/chat` (moteur agentique en mémoire)
-- les agents + actions invoqués directement pour vérifier les sorties
-  côté domain (devis, RDV…).
-
-Lancement :
-
-    pytest tests/e2e/test_business_pipelines.py -v
-    make test-e2e
-"""
+"""Pipelines e2e Jenny."""
 
 from __future__ import annotations
 
@@ -30,14 +17,11 @@ from jenny.db.base import Base
 from jenny.db.session import async_session_factory, engine
 from jenny.domain.models.user import User
 
-# Mot de passe valide vis-à-vis de la politique de l'API (maj + chiffre + spécial).
+# mot de passe valide
 _E2E_PASSWORD = "Strong#1234"
 
 
-# L'auth réelle charge le Business et ses relations (lazy="selectin"), ce qui
-# tire tout le graphe ORM : il faut donc créer le schéma complet. Le type ARRAY
-# de Postgres (customers.tags) n'a pas d'équivalent SQLite — on le rend en JSON
-# pour la seule création DDL en test (ces tests n'écrivent jamais de customers).
+# ARRAY postgres rendu en JSON
 @compiles(ARRAY, "sqlite")
 def _render_array_as_json_on_sqlite(element, compiler, **kw):
     return "JSON"
@@ -45,7 +29,7 @@ def _render_array_as_json_on_sqlite(element, compiler, **kw):
 
 @pytest.fixture
 async def client():
-    """Client HTTP async réutilisable par tous les scénarios e2e."""
+    """Client HTTP async."""
     app = create_app()
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -56,7 +40,7 @@ async def client():
 
 @pytest.fixture
 async def db_tables():
-    """Crée le schéma ORM complet sur l'engine de test puis le nettoie."""
+    """Crée puis nettoie le schéma."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
@@ -65,15 +49,14 @@ async def db_tables():
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  1) Pipeline AUTH (inscription → connexion → profil)
+#  1) pipeline auth
 # ═══════════════════════════════════════════════════════════════════
 
 
 async def _register_and_verify(
     client: AsyncClient, email: str, full_name: str = "E2E User"
 ) -> str:
-    """Inscrit un utilisateur, valide son email avec le code de debug, et
-    renvoie le JWT. Réutilisé par les pipelines qui ont besoin d'un compte actif."""
+    """Inscrit, vérifie, renvoie le JWT."""
     r_reg = await client.post(
         "/api/v1/auth/register",
         json={"full_name": full_name, "email": email, "password": _E2E_PASSWORD},
@@ -91,18 +74,13 @@ async def _register_and_verify(
 
 
 class TestAuthPipeline:
-    """Inscription, confirmation d'email, connexion et profil via `/api/v1/auth/*`.
-
-    Le register envoie un code de confirmation (202) ; tant que l'email n'est pas
-    vérifié, le login est bloqué (403). Après vérification, `/auth/me` expose le
-    `business_id` que le front utilise pour toutes ses requêtes.
-    """
+    """Inscription, vérif, login, profil."""
 
     @pytest.mark.asyncio
     async def test_register_verify_login_me(self, client: AsyncClient, db_tables: None) -> None:
         email = f"alice+{uuid4().hex[:6]}@e2e.jenny.ai"
 
-        # 1) Register : 202, vérification requise, aucun token émis.
+        # register : 202
         r_reg = await client.post(
             "/api/v1/auth/register",
             json={"full_name": "Alice E2E", "email": email, "password": _E2E_PASSWORD},
@@ -114,7 +92,7 @@ class TestAuthPipeline:
         assert "access_token" not in reg
         code = reg["debug_code"]
 
-        # 2) Login avant vérification : bloqué (403 email_not_verified).
+        # login avant vérif : bloqué
         r_blocked = await client.post(
             "/api/v1/auth/login",
             json={"email": email, "password": _E2E_PASSWORD},
@@ -122,7 +100,7 @@ class TestAuthPipeline:
         assert r_blocked.status_code == 403, r_blocked.text
         assert r_blocked.json()["detail"] == "email_not_verified"
 
-        # 3) Vérification du code : renvoie un token bearer.
+        # vérif du code
         r_verify = await client.post(
             "/api/v1/auth/verify-email",
             json={"email": email, "code": code},
@@ -131,7 +109,7 @@ class TestAuthPipeline:
         assert r_verify.json()["token_type"] == "bearer"
         assert r_verify.json()["access_token"]
 
-        # 4) Login après vérification : OK.
+        # login après vérif
         r_log = await client.post(
             "/api/v1/auth/login",
             json={"email": email, "password": _E2E_PASSWORD},
@@ -140,7 +118,7 @@ class TestAuthPipeline:
         token = r_log.json()["access_token"]
         assert token
 
-        # 5) /me expose le business créé à l'inscription.
+        # /me expose le business
         r_me = await client.get(
             "/api/v1/auth/me",
             headers={"Authorization": f"Bearer {token}"},
@@ -152,7 +130,7 @@ class TestAuthPipeline:
 
 
 class TestEmailVerification:
-    """Cas limites du flux de confirmation : mauvais code, tentatives, expiration, renvoi."""
+    """Cas limites du flux confirmation."""
 
     @pytest.mark.asyncio
     async def test_wrong_code_rejected(self, client: AsyncClient, db_tables: None) -> None:
@@ -176,14 +154,14 @@ class TestEmailVerification:
             json={"full_name": "Brute Force", "email": email, "password": _E2E_PASSWORD},
         )
         good_code = r_reg.json()["debug_code"]
-        # 5 mauvaises tentatives → compteur saturé (chacune renvoie 400).
+        # 5 tentatives → saturé
         for _ in range(5):
             r_bad = await client.post(
                 "/api/v1/auth/verify-email",
                 json={"email": email, "code": "000000"},
             )
             assert r_bad.status_code == 400, r_bad.text
-        # 6e tentative, même avec le bon code : verrouillé (429).
+        # 6e essai : verrouillé
         r_locked = await client.post(
             "/api/v1/auth/verify-email",
             json={"email": email, "code": good_code},
@@ -198,7 +176,7 @@ class TestEmailVerification:
             json={"full_name": "Expired", "email": email, "password": _E2E_PASSWORD},
         )
         code = r_reg.json()["debug_code"]
-        # On force l'expiration directement en base.
+        # on force l'expiration
         async with async_session_factory() as s:
             await s.execute(
                 update(User)
@@ -223,11 +201,11 @@ class TestEmailVerification:
         )
         first_code = r_reg.json()["debug_code"]
 
-        # Renvoi immédiat : refusé par le cooldown anti-spam (429).
+        # renvoi immédiat : refusé
         r_cooldown = await client.post("/api/v1/auth/resend-code", json={"email": email})
         assert r_cooldown.status_code == 429, r_cooldown.text
 
-        # On antidate l'envoi pour franchir le cooldown.
+        # on antidate l'envoi
         async with async_session_factory() as s:
             await s.execute(
                 update(User)
@@ -240,7 +218,7 @@ class TestEmailVerification:
         assert r_resend.status_code == 200, r_resend.text
         new_code = r_resend.json()["debug_code"]
 
-        # L'ancien code ne marche plus ; le nouveau active le compte.
+        # ancien code KO, nouveau OK
         r_old = await client.post(
             "/api/v1/auth/verify-email", json={"email": email, "code": first_code}
         )
@@ -255,7 +233,7 @@ class TestEmailVerification:
     async def test_resend_unknown_email_is_generic(
         self, client: AsyncClient, db_tables: None
     ) -> None:
-        # Pas d'énumération de compte : réponse générique « sent ».
+        # pas d'énumération de compte
         r = await client.post(
             "/api/v1/auth/resend-code",
             json={"email": f"nobody+{uuid4().hex[:6]}@e2e.jenny.ai"},
@@ -265,12 +243,12 @@ class TestEmailVerification:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  2) Pipeline CHAT — accès au moteur conversationnel
+#  2) pipeline chat
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestChatPipeline:
-    """L'utilisateur connecté peut discuter avec Jenny."""
+    """Chat avec Jenny."""
 
     @pytest.mark.asyncio
     async def test_simple_greeting(self, client: AsyncClient) -> None:
@@ -317,12 +295,12 @@ class TestChatPipeline:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  3) Pipeline RDV (planning + booking)
+#  3) pipeline RDV
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestAppointmentPipeline:
-    """Demander un créneau puis valider la réservation côté action."""
+    """Créneau puis réservation."""
 
     @pytest.mark.asyncio
     async def test_chat_books_an_appointment(self, client: AsyncClient) -> None:
@@ -379,12 +357,12 @@ class TestAppointmentPipeline:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  4) Pipeline DEVIS (générer un devis fictif)
+#  4) pipeline devis
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestQuotePipeline:
-    """Demande de devis depuis le chat puis création directe."""
+    """Devis depuis le chat."""
 
     @pytest.mark.asyncio
     async def test_chat_quote_intent(self, client: AsyncClient) -> None:
@@ -403,7 +381,7 @@ class TestQuotePipeline:
 
     @pytest.mark.asyncio
     async def test_generate_quote_no_business(self) -> None:
-        """Sans contexte business : échec gracieux (aucun devis fantôme, pas de crash)."""
+        """Sans business : échec propre."""
         from jenny.actions.handlers.generate_quote import GenerateQuoteAction
 
         result = await GenerateQuoteAction().execute(
@@ -414,7 +392,7 @@ class TestQuotePipeline:
 
     @pytest.mark.asyncio
     async def test_generate_quote_action(self, db_tables: None) -> None:
-        """Devis RÉEL : depuis le catalogue, persisté, avec ventilation TVA (HT/TVA/TTC)."""
+        """Devis réel avec TVA."""
         from sqlalchemy import select
 
         from jenny.actions.handlers.generate_quote import GenerateQuoteAction
@@ -445,7 +423,7 @@ class TestQuotePipeline:
         assert result["validity_days"] == 30
         assert result["status"] in {"draft", "sent"}
 
-        # Devis réellement persisté + ventilation TVA cohérente (HT + TVA == TTC).
+        # devis persisté + TVA cohérente
         async with async_session_factory() as db:
             quote = (
                 await db.execute(select(Quote).where(Quote.reference == result["reference"]))
@@ -457,12 +435,12 @@ class TestQuotePipeline:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  5) Pipeline SERVICES (FAQ, support, escalade humaine)
+#  5) pipeline services
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestServicesPipeline:
-    """Les demandes 'services' (FAQ, ticket, escalade) sont gérées."""
+    """FAQ, ticket, escalade."""
 
     @pytest.mark.asyncio
     async def test_faq_request(self, client: AsyncClient) -> None:
@@ -524,12 +502,12 @@ class TestServicesPipeline:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  6) Pipeline COMPLET — un client traverse tout le funnel
+#  6) pipeline complet
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestFullJourney:
-    """Un client réalise un parcours complet : login → chat → RDV → devis."""
+    """Parcours complet du client."""
 
     @pytest.mark.asyncio
     async def test_full_journey(self, client: AsyncClient, db_tables: None) -> None:
@@ -568,18 +546,12 @@ class TestFullJourney:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  6) Pipeline INGESTION (formulaire / email → conversation + message)
+#  6) pipeline ingestion
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestIngestionPipeline:
-    """Ingestion entrante : le happy-path crée bien conversation + message.
-
-    Régression : l'ingestion renvoyait 500 car le modèle ``Conversation`` ne
-    portait pas les colonnes attendues par le service d'ingestion
-    (``external_conversation_id``, ``priority_level``, ``first_message_at``,
-    ``last_message_preview``). Ces tests exercent le chemin complet en base.
-    """
+    """Ingestion : conversation + message."""
 
     @pytest.mark.asyncio
     async def test_form_submission_creates_conversation(
@@ -605,7 +577,7 @@ class TestIngestionPipeline:
         assert body["id"] and body["conversation_id"]
         assert body["status"] == "received"
 
-        # La conversation est persistée et listable via l'API.
+        # conversation persistée et listable
         convs = (await client.get("/api/v1/conversations", headers=auth)).json()
         assert convs["total"] == 1
         assert convs["conversations"][0]["channel"] == "form"
@@ -632,7 +604,7 @@ class TestIngestionPipeline:
 
         r1 = await client.post(f"/api/v1/ingest/email?business_id={bid}", json=email("<m1@x>", None))
         assert r1.status_code == 201, r1.text
-        # Le 2e mail répond au 1er → même external_conversation_id → même thread.
+        # même thread
         r2 = await client.post(
             f"/api/v1/ingest/email?business_id={bid}", json=email("<m2@x>", "<m1@x>")
         )
@@ -646,7 +618,7 @@ class TestIngestionPipeline:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  7) Tolérance du webhook WhatsApp (accusés de statut, contacts sans nom)
+#  7) webhook whatsapp
 # ═══════════════════════════════════════════════════════════════════
 
 _WA_META = {"display_phone_number": "1", "phone_number_id": "PNID"}
@@ -660,12 +632,7 @@ def _wa_payload(value: dict) -> dict:
 
 
 class TestWhatsAppWebhookTolerance:
-    """Le webhook WhatsApp ACQUITTE (200) tout webhook Meta bien formé.
-
-    Régression : un accusé de statut (livré/lu) ou un contact sans nom
-    renvoyait 400/422, et Meta le réessayait alors en boucle. Seul un corps
-    non-JSON doit donner 400.
-    """
+    """WhatsApp acquitte tout webhook Meta."""
 
     @pytest.mark.asyncio
     async def test_status_callback_without_metadata(self, client: AsyncClient, db_tables: None) -> None:
@@ -722,8 +689,7 @@ class TestWhatsAppWebhookTolerance:
 
 @pytest.mark.asyncio
 async def test_created_at_default_is_portable(db_tables: None) -> None:
-    """Régression : ``created_at`` avec server_default ``now()`` (Postgres) cassait
-    les inserts ORM sur SQLite ; le ``default`` Python le rend portable."""
+    """created_at portable postgres/sqlite."""
     from sqlalchemy import select
 
     from jenny.domain.models.webhook_delivery import WebhookDelivery
@@ -740,7 +706,7 @@ async def test_created_at_default_is_portable(db_tables: None) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  8) Tolérance du webhook Instagram (events read/delivery, sans message)
+#  8) webhook instagram
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -752,15 +718,11 @@ def _ig_payload(messaging: dict) -> dict:
 
 
 class TestInstagramWebhookTolerance:
-    """Le webhook Instagram ACQUITTE (200) tout webhook Meta bien formé.
-
-    Régression : la route exigeait un payload strict (FastAPI → 422 sinon), donc
-    Meta réessayait les events read/delivery. Seul un corps non-JSON donne 400.
-    """
+    """Instagram acquitte tout webhook Meta."""
 
     @pytest.mark.asyncio
     async def test_event_without_message(self, client: AsyncClient, db_tables: None) -> None:
-        # Accusé read/delivery : messaging sans champ "message".
+        # accusé read/delivery
         r = await client.post(
             "/api/v1/webhooks/instagram",
             json=_ig_payload({"sender": {"id": "U1"}, "recipient": {"id": "PAGE"}, "timestamp": 1}),
@@ -780,7 +742,7 @@ class TestInstagramWebhookTolerance:
                 }
             ),
         )
-        assert r.status_code == 200, r.text  # pas de business par défaut en test → ignoré
+        assert r.status_code == 200, r.text  # pas de business → ignoré
 
     @pytest.mark.asyncio
     async def test_non_json_body_is_rejected(self, client: AsyncClient, db_tables: None) -> None:
@@ -789,14 +751,12 @@ class TestInstagramWebhookTolerance:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  9) Tolérance des webhooks Twitter / Snapchat
+#  9) webhooks twitter/snapchat
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestTwitterSnapchatWebhookTolerance:
-    """Twitter et Snapchat acquittent (200) tout JSON valide ; 400 seulement
-    si le corps n'est pas du JSON. (En test, pas de business par défaut →
-    les messages valides sont ignorés proprement en 200.)"""
+    """Twitter/Snapchat acquittent tout JSON."""
 
     @pytest.mark.asyncio
     async def test_twitter_dm_acknowledged(self, client: AsyncClient, db_tables: None) -> None:
@@ -845,7 +805,7 @@ class TestTwitterSnapchatWebhookTolerance:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  10) Reprise humaine : répondre à un client depuis le dashboard
+#  10) reprise humaine
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -853,12 +813,12 @@ class TestTwitterSnapchatWebhookTolerance:
 async def test_human_reply_persists_and_takes_over(
     client: AsyncClient, db_tables: None
 ) -> None:
-    """Une réponse humaine est persistée et marque la conversation comme reprise."""
+    """Réponse humaine persistée + reprise."""
     token = await _register_and_verify(client, "reply-agent@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
-    # Un message entrant crée une conversation.
+    # message entrant crée une conv
     await client.post(
         f"/api/v1/ingest/form?business_id={bid}",
         json={
@@ -872,7 +832,7 @@ async def test_human_reply_persists_and_takes_over(
         "id"
     ]
 
-    # L'agent répond depuis le dashboard.
+    # l'agent répond
     r = await client.post(
         f"/api/v1/conversations/{conv_id}/reply",
         headers=auth,
@@ -881,16 +841,16 @@ async def test_human_reply_persists_and_takes_over(
     assert r.status_code == 200, r.text
     res = r.json()
     assert res["message"]["direction"] == "outbound"
-    assert res["assigned_to"]  # conversation reprise → Jenny en pause
+    assert res["assigned_to"]  # reprise → Jenny en pause
 
-    # Le détail reflète la reprise et contient la réponse de l'agent.
+    # détail reflète la reprise
     detail = (await client.get(f"/api/v1/conversations/{conv_id}", headers=auth)).json()
     assert detail["assigned_to"]
     assert any(
         m["content"].startswith("Bonjour, je vous réponds") for m in detail["messages"]
     )
 
-    # L'agent rend la main à Jenny → la conversation est libérée.
+    # l'agent rend la main
     r_resume = await client.post(f"/api/v1/conversations/{conv_id}/resume", headers=auth)
     assert r_resume.status_code == 200, r_resume.text
     assert r_resume.json()["assigned_to"] is None
@@ -900,7 +860,7 @@ async def test_human_reply_persists_and_takes_over(
 
 @pytest.mark.asyncio
 async def test_awaiting_reply_flag(client: AsyncClient, db_tables: None) -> None:
-    """Une conversation dont le dernier message est entrant est « à traiter »."""
+    """Dernier msg entrant = à traiter."""
     token = await _register_and_verify(client, "awaiting@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
@@ -915,20 +875,20 @@ async def test_awaiting_reply_flag(client: AsyncClient, db_tables: None) -> None
         },
     )
     convs = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"]
-    assert convs[0]["awaiting_reply"] is True  # dernier message = entrant
+    assert convs[0]["awaiting_reply"] is True  # dernier msg = entrant
 
-    # L'agent répond → la conversation n'est plus en attente.
+    # l'agent répond
     cid = convs[0]["id"]
     await client.post(
         f"/api/v1/conversations/{cid}/reply", headers=auth, json={"text": "Bonjour !"}
     )
     convs2 = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"]
-    assert convs2[0]["awaiting_reply"] is False  # dernier message = sortant
+    assert convs2[0]["awaiting_reply"] is False  # dernier msg = sortant
 
 
 @pytest.mark.asyncio
 async def test_conversation_status_lifecycle(client: AsyncClient, db_tables: None) -> None:
-    """Une conversation peut être résolue, archivée puis rouverte, et le filtre suit."""
+    """Cycle de vie d'une conv."""
     token = await _register_and_verify(client, "lifecycle@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
@@ -944,7 +904,7 @@ async def test_conversation_status_lifecycle(client: AsyncClient, db_tables: Non
     )
     cid = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"][0]["id"]
 
-    # Résoudre la conversation.
+    # résoudre la conv
     r = await client.patch(
         f"/api/v1/conversations/{cid}/status", headers=auth, json={"status": "closed"}
     )
@@ -952,7 +912,7 @@ async def test_conversation_status_lifecycle(client: AsyncClient, db_tables: Non
     assert r.json()["status"] == "closed"
     assert (await client.get(f"/api/v1/conversations/{cid}", headers=auth)).json()["status"] == "closed"
 
-    # Le filtre par statut suit le changement.
+    # filtre par statut
     open_convs = (
         await client.get("/api/v1/conversations?status=open", headers=auth)
     ).json()["conversations"]
@@ -962,8 +922,8 @@ async def test_conversation_status_lifecycle(client: AsyncClient, db_tables: Non
     ).json()["conversations"]
     assert any(c["id"] == cid for c in closed_convs)
 
-    # Archiver : la conversation disparaît de la vue par défaut (« Tous ») mais
-    # reste consultable en filtrant explicitement sur status=archived.
+    # archiver : masquée de « Tous »
+    # visible via status=archived
     await client.patch(
         f"/api/v1/conversations/{cid}/status", headers=auth, json={"status": "archived"}
     )
@@ -973,9 +933,9 @@ async def test_conversation_status_lifecycle(client: AsyncClient, db_tables: Non
     archived_convs = (
         await client.get("/api/v1/conversations?status=archived", headers=auth)
     ).json()["conversations"]
-    assert any(c["id"] == cid for c in archived_convs)  # visible via le filtre dédié
+    assert any(c["id"] == cid for c in archived_convs)  # visible via le filtre
 
-    # Rouvrir : elle réapparaît dans la vue par défaut.
+    # rouvrir : réapparaît
     r_reopen = await client.patch(
         f"/api/v1/conversations/{cid}/status", headers=auth, json={"status": "open"}
     )
@@ -983,7 +943,7 @@ async def test_conversation_status_lifecycle(client: AsyncClient, db_tables: Non
     reopened = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"]
     assert any(c["id"] == cid for c in reopened)
 
-    # Un statut invalide est rejeté (422), un id inconnu donne 404.
+    # invalide → 422, inconnu → 404
     bad = await client.patch(
         f"/api/v1/conversations/{cid}/status", headers=auth, json={"status": "wat"}
     )
@@ -996,7 +956,7 @@ async def test_conversation_status_lifecycle(client: AsyncClient, db_tables: Non
 
 @pytest.mark.asyncio
 async def test_customer_360_view_and_annotation(client: AsyncClient, db_tables: None) -> None:
-    """La fiche client agrège l'historique et accepte notes + tags."""
+    """Fiche client : historique + notes."""
     token = await _register_and_verify(client, "fiche@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
@@ -1015,7 +975,7 @@ async def test_customer_360_view_and_annotation(client: AsyncClient, db_tables: 
     customer_id = conv["customer_id"]
     assert customer_id, "l'ingestion d'un formulaire avec email doit créer un client"
 
-    # Vue 360°.
+    # vue 360°
     r = await client.get(f"/api/v1/customers/{customer_id}", headers=auth)
     assert r.status_code == 200, r.text
     view = r.json()
@@ -1026,7 +986,7 @@ async def test_customer_360_view_and_annotation(client: AsyncClient, db_tables: 
     assert len(view["conversations"]) >= 1
     assert view["orders"] == [] and view["transactions"] == []
 
-    # Annotation : notes + tags.
+    # annotation : notes + tags
     patched = await client.patch(
         f"/api/v1/customers/{customer_id}",
         headers=auth,
@@ -1036,12 +996,12 @@ async def test_customer_360_view_and_annotation(client: AsyncClient, db_tables: 
     assert patched.json()["notes"] == "Cliente fidèle."
     assert patched.json()["tags"] == ["VIP", "matin"]
 
-    # Persistance.
+    # persistance
     again = (await client.get(f"/api/v1/customers/{customer_id}", headers=auth)).json()
     assert again["notes"] == "Cliente fidèle."
     assert again["tags"] == ["VIP", "matin"]
 
-    # Un id inconnu → 404 ; un client d'un autre business → 404.
+    # inconnu → 404, autre business → 404
     missing = await client.get(f"/api/v1/customers/{uuid4()}", headers=auth)
     assert missing.status_code == 404
 
@@ -1053,7 +1013,7 @@ async def test_customer_360_view_and_annotation(client: AsyncClient, db_tables: 
 
 @pytest.mark.asyncio
 async def test_csv_exports(client: AsyncClient, db_tables: None) -> None:
-    """Les exports CSV conversations/clients renvoient un fichier attaché."""
+    """Exports CSV conv/clients."""
     token = await _register_and_verify(client, "export@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
@@ -1082,7 +1042,7 @@ async def test_csv_exports(client: AsyncClient, db_tables: None) -> None:
 
 @pytest.mark.asyncio
 async def test_customers_list_and_search(client: AsyncClient, db_tables: None) -> None:
-    """La liste clients agrège le nb de conversations et filtre par recherche."""
+    """Liste clients + recherche."""
     token = await _register_and_verify(client, "cust-list@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
@@ -1103,23 +1063,23 @@ async def test_customers_list_and_search(client: AsyncClient, db_tables: None) -
             },
         )
 
-    # Liste complète : 2 clients, chacun avec une conversation.
+    # liste complète : 2 clients
     full = (await client.get("/api/v1/customers", headers=auth)).json()
     assert full["total"] == 2
     assert {c["full_name"] for c in full["customers"]} == {"Claire Martin", "Bruno Petit"}
     assert all(c["conversation_count"] == 1 for c in full["customers"])
 
-    # Recherche par nom.
+    # recherche par nom
     res = (await client.get("/api/v1/customers?search=claire", headers=auth)).json()
     assert res["total"] == 1
     assert res["customers"][0]["full_name"] == "Claire Martin"
 
-    # Recherche par email.
+    # recherche par email
     by_email = (await client.get("/api/v1/customers?search=bruno@x", headers=auth)).json()
     assert by_email["total"] == 1
     assert by_email["customers"][0]["email"] == "bruno@x.com"
 
-    # Cloisonnement : un autre business ne voit aucun de ces clients.
+    # cloisonnement multi-tenant
     other = await _register_and_verify(client, "cust-list-other@example.com")
     other_auth = {"Authorization": f"Bearer {other}"}
     assert (await client.get("/api/v1/customers", headers=other_auth)).json()["total"] == 0
@@ -1127,7 +1087,7 @@ async def test_customers_list_and_search(client: AsyncClient, db_tables: None) -
 
 @pytest.mark.asyncio
 async def test_conversation_stats_awaiting(client: AsyncClient, db_tables: None) -> None:
-    """Le compteur /stats reflète les conversations à traiter (dernier msg entrant)."""
+    """Compteur /stats des à-traiter."""
     token = await _register_and_verify(client, "stats@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
@@ -1140,7 +1100,7 @@ async def test_conversation_stats_awaiting(client: AsyncClient, db_tables: None)
     )
     assert (await client.get("/api/v1/conversations/stats", headers=auth)).json()["awaiting"] == 1
 
-    # Après réponse, plus en attente.
+    # après réponse : plus d'attente
     cid = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"][0]["id"]
     await client.post(f"/api/v1/conversations/{cid}/reply", headers=auth, json={"text": "Bonjour !"})
     assert (await client.get("/api/v1/conversations/stats", headers=auth)).json()["awaiting"] == 0
@@ -1148,7 +1108,7 @@ async def test_conversation_stats_awaiting(client: AsyncClient, db_tables: None)
 
 @pytest.mark.asyncio
 async def test_sentiment_snooze_summary(client: AsyncClient, db_tables: None) -> None:
-    """Message négatif → flag mécontent ; snooze masque ; résumé non vide."""
+    """Sentiment, snooze, résumé."""
     token = await _register_and_verify(client, "senti@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
@@ -1167,20 +1127,20 @@ async def test_sentiment_snooze_summary(client: AsyncClient, db_tables: None) ->
     assert "mécontent" in conv["tags"]
 
     cid = conv["id"]
-    # Snooze 60 min → disparaît de la vue par défaut.
+    # snooze 60 min → masqué
     await client.post(f"/api/v1/conversations/{cid}/snooze", headers=auth, json={"minutes": 60})
     assert (await client.get("/api/v1/conversations", headers=auth)).json()["total"] == 0
-    # Annulation du snooze → réapparaît.
+    # annulation snooze → réapparaît
     await client.post(f"/api/v1/conversations/{cid}/snooze", headers=auth, json={"minutes": None})
     assert (await client.get("/api/v1/conversations", headers=auth)).json()["total"] == 1
-    # Résumé.
+    # résumé
     r = await client.post(f"/api/v1/conversations/{cid}/summarize", headers=auth)
     assert r.status_code == 200 and r.json()["summary"].strip()
 
 
 @pytest.mark.asyncio
 async def test_business_config_and_members(client: AsyncClient, db_tables: None) -> None:
-    """Horaires/auto-reply/SLA éditables + ajout d'un membre d'équipe."""
+    """Config business + membres."""
     token = await _register_and_verify(client, "cfg@example.com")
     auth = {"Authorization": f"Bearer {token}"}
 
@@ -1198,7 +1158,7 @@ async def test_business_config_and_members(client: AsyncClient, db_tables: None)
     assert body["sla_minutes"] == 15
     assert body["auto_reply_message"] == "Fermé, on revient vite."
 
-    # Ajout d'un membre (crée le compte) → apparaît dans l'équipe.
+    # ajout d'un membre
     add = await client.post(
         "/api/v1/business/members",
         headers=auth,
@@ -1211,14 +1171,14 @@ async def test_business_config_and_members(client: AsyncClient, db_tables: None)
 
 @pytest.mark.asyncio
 async def test_channels_and_customer_import(client: AsyncClient, db_tables: None) -> None:
-    """Liste des canaux + import CSV de clients."""
+    """Canaux + import CSV clients."""
     token = await _register_and_verify(client, "chan@example.com")
     auth = {"Authorization": f"Bearer {token}"}
 
     channels = (await client.get("/api/v1/channels", headers=auth)).json()
     by_ch = {c["channel"]: c for c in channels}
     assert by_ch["form"]["connected"] is True  # intégré nativement
-    # Canal listé mais non raccordé pour un business neuf (ni compte ni identifiants).
+    # canal listé mais non raccordé
     assert by_ch["messenger"]["connected"] is False
 
     csv_bytes = b"nom,email,telephone\nZoe Test,zoe-imp@x.com,0600000000\nLou Test,lou-imp@x.com,\n"
@@ -1234,7 +1194,7 @@ async def test_channels_and_customer_import(client: AsyncClient, db_tables: None
 
 @pytest.mark.asyncio
 async def test_insights_by_agent_and_days(client: AsyncClient, db_tables: None) -> None:
-    """L'endpoint insights expose by_agent, le KPI 1ʳᵉ réponse et le param days."""
+    """Insights : by_agent, KPI, days."""
     token = await _register_and_verify(client, "kpi@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
@@ -1254,7 +1214,7 @@ async def test_insights_by_agent_and_days(client: AsyncClient, db_tables: None) 
 
 @pytest.mark.asyncio
 async def test_suggest_reply_for_conversation(client: AsyncClient, db_tables: None) -> None:
-    """Le moteur propose un brouillon de réponse au dernier message client."""
+    """Brouillon de réponse suggéré."""
     token = await _register_and_verify(client, "suggest@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
@@ -1275,14 +1235,14 @@ async def test_suggest_reply_for_conversation(client: AsyncClient, db_tables: No
     suggestion = r.json()["suggestion"]
     assert isinstance(suggestion, str) and suggestion.strip()  # brouillon non vide
 
-    # Id inconnu → 404.
+    # inconnu → 404
     missing = await client.post(f"/api/v1/conversations/{uuid4()}/suggest", headers=auth)
     assert missing.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_conversation_overdue_sla(client: AsyncClient, db_tables: None) -> None:
-    """Une conversation en attente depuis > 30 min est marquée « en retard »."""
+    """Attente > 30 min = en retard."""
     from jenny.domain.models.conversation import Conversation
 
     token = await _register_and_verify(client, "sla@example.com")
@@ -1299,11 +1259,11 @@ async def test_conversation_overdue_sla(client: AsyncClient, db_tables: None) ->
         },
     )
     conv = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"][0]
-    # Tout juste ingéré : en attente mais pas encore en retard.
+    # en attente, pas en retard
     assert conv["awaiting_reply"] is True
     assert conv["overdue"] is False
 
-    # On recule last_message_at d'une heure → désormais en retard.
+    # recule d'une heure → en retard
     cid = conv["id"]
     async with async_session_factory() as s:
         await s.execute(
@@ -1320,7 +1280,7 @@ async def test_conversation_overdue_sla(client: AsyncClient, db_tables: None) ->
 
 @pytest.mark.asyncio
 async def test_conversation_tags_and_filter(client: AsyncClient, db_tables: None) -> None:
-    """Étiquettes de conversation : pose (avec dédoublonnage) + filtre."""
+    """Étiquettes : pose + filtre."""
     token = await _register_and_verify(client, "tags@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
@@ -1336,7 +1296,7 @@ async def test_conversation_tags_and_filter(client: AsyncClient, db_tables: None
     )
     cid = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"][0]["id"]
 
-    # Pose d'étiquettes avec doublons (insensibles à la casse) → dédoublonnées.
+    # pose avec doublons → dédoublonnées
     r = await client.patch(
         f"/api/v1/conversations/{cid}/tags",
         headers=auth,
@@ -1345,11 +1305,11 @@ async def test_conversation_tags_and_filter(client: AsyncClient, db_tables: None
     assert r.status_code == 200, r.text
     assert r.json()["tags"] == ["Urgent", "à relancer"]
 
-    # Le détail et la liste exposent les étiquettes.
+    # détail + liste exposent
     detail = (await client.get(f"/api/v1/conversations/{cid}", headers=auth)).json()
     assert detail["tags"] == ["Urgent", "à relancer"]
 
-    # Filtre par étiquette (présence exacte).
+    # filtre par étiquette
     tagged = (await client.get("/api/v1/conversations?tag=Urgent", headers=auth)).json()
     assert tagged["total"] == 1 and tagged["conversations"][0]["id"] == cid
     none = (await client.get("/api/v1/conversations?tag=inconnu", headers=auth)).json()
@@ -1358,12 +1318,12 @@ async def test_conversation_tags_and_filter(client: AsyncClient, db_tables: None
 
 @pytest.mark.asyncio
 async def test_assign_conversation_and_my_filter(client: AsyncClient, db_tables: None) -> None:
-    """Attribution d'une conversation à un membre + filtre « mes conversations »."""
+    """Attribution + filtre « à moi »."""
     token = await _register_and_verify(client, "assign@example.com")
     auth = {"Authorization": f"Bearer {token}"}
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
-    # L'équipe contient au moins le propriétaire.
+    # au moins le propriétaire
     members = (await client.get("/api/v1/business/members", headers=auth)).json()
     assert any(m["email"] == "assign@example.com" for m in members)
 
@@ -1378,11 +1338,11 @@ async def test_assign_conversation_and_my_filter(client: AsyncClient, db_tables:
     )
     cid = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"][0]["id"]
 
-    # Pas encore à moi.
+    # pas encore à moi
     mine = (await client.get("/api/v1/conversations?assigned_to=me", headers=auth)).json()
     assert mine["total"] == 0
 
-    # Attribution à moi.
+    # attribution à moi
     r = await client.post(
         f"/api/v1/conversations/{cid}/assign",
         headers=auth,
@@ -1392,7 +1352,7 @@ async def test_assign_conversation_and_my_filter(client: AsyncClient, db_tables:
     mine2 = (await client.get("/api/v1/conversations?assigned_to=me", headers=auth)).json()
     assert mine2["total"] == 1 and mine2["conversations"][0]["id"] == cid
 
-    # Libération.
+    # libération
     r2 = await client.post(
         f"/api/v1/conversations/{cid}/assign", headers=auth, json={"assignee": None}
     )
@@ -1403,11 +1363,11 @@ async def test_assign_conversation_and_my_filter(client: AsyncClient, db_tables:
 
 @pytest.mark.asyncio
 async def test_canned_responses_crud(client: AsyncClient, db_tables: None) -> None:
-    """CRUD des réponses enregistrées, scopé au business."""
+    """CRUD des réponses enregistrées."""
     token = await _register_and_verify(client, "canned@example.com")
     auth = {"Authorization": f"Bearer {token}"}
 
-    # Création.
+    # création
     r = await client.post(
         "/api/v1/canned-responses",
         headers=auth,
@@ -1417,17 +1377,17 @@ async def test_canned_responses_crud(client: AsyncClient, db_tables: None) -> No
     cid = r.json()["id"]
     assert r.json()["shortcut"] == "horaires"
 
-    # Liste.
+    # liste
     items = (await client.get("/api/v1/canned-responses", headers=auth)).json()
     assert len(items) == 1 and items[0]["title"] == "Horaires"
 
-    # Mise à jour.
+    # mise à jour
     upd = await client.patch(
         f"/api/v1/canned-responses/{cid}", headers=auth, json={"content": "Ouvert 8h-20h."}
     )
     assert upd.status_code == 200 and upd.json()["content"] == "Ouvert 8h-20h."
 
-    # Cloisonnement : un autre business ne voit rien et ne peut pas modifier.
+    # cloisonnement multi-tenant
     other = await _register_and_verify(client, "canned-other@example.com")
     other_auth = {"Authorization": f"Bearer {other}"}
     assert (await client.get("/api/v1/canned-responses", headers=other_auth)).json() == []
@@ -1437,7 +1397,7 @@ async def test_canned_responses_crud(client: AsyncClient, db_tables: None) -> No
         )
     ).status_code == 404
 
-    # Suppression.
+    # suppression
     assert (
         await client.delete(f"/api/v1/canned-responses/{cid}", headers=auth)
     ).status_code == 204
@@ -1446,6 +1406,6 @@ async def test_canned_responses_crud(client: AsyncClient, db_tables: None) -> No
 
 @pytest.mark.asyncio
 async def test_sse_stream_requires_auth(client: AsyncClient) -> None:
-    """Le flux temps réel exige un jeton (401 sans Authorization)."""
+    """Le flux SSE exige un jeton."""
     r = await client.get("/api/v1/realtime/stream")
     assert r.status_code == 401

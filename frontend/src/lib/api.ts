@@ -61,7 +61,7 @@ async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T
     throw new ApiError(res.status, res.statusText, data);
   }
 
-  // 204 No Content (ex. DELETE) → pas de corps JSON à parser.
+  // 204 : pas de corps
   if (res.status === 204) {
     return undefined as T;
   }
@@ -131,8 +131,7 @@ export async function register(
   email: string,
   password: string
 ): Promise<RegisterResult> {
-  // Le backend renvoie 202 (vérification requise) — aucun token n'est émis
-  // tant que l'email n'est pas confirmé via /verify-email.
+  // 202 : email à confirmer
   return request<RegisterResult>("/api/v1/auth/register", {
     method: "POST",
     body: { full_name: fullName, email, password },
@@ -204,7 +203,7 @@ export interface ConversationResponse {
   action_result: Record<string, unknown>;
   conversation_phase: string;
   requires_human: boolean;
-  // Id du message Jenny persisté → cible d'un feedback 👍/👎.
+  // cible du feedback
   message_id: string | null;
 }
 
@@ -231,7 +230,7 @@ export async function getConversationStatus(conversationId: string) {
   return request(`/api/v1/conversation/status/${conversationId}`);
 }
 
-// ==================== FEEDBACK RÉPONSES (👍/👎) ====================
+// ==================== FEEDBACK RÉPONSES ====================
 
 export type FeedbackRating = 1 | -1;
 
@@ -245,9 +244,9 @@ export interface FeedbackMetrics {
   total_rated: number;
   positive: number;
   negative: number;
-  satisfaction_pct: number; // part de 👍 parmi les avis (0–100)
+  satisfaction_pct: number; // % d'avis positifs (0–100)
   coverage_rated: number;
-  responses_total: number; // nombre total de réponses de Jenny
+  responses_total: number; // total des réponses Jenny
   last_7_days: { positive: number; negative: number };
   recent_comments: FeedbackContext[];
   recent_positive: FeedbackContext[];
@@ -388,7 +387,7 @@ export async function getKnowledgeStats(businessId: string): Promise<KnowledgeSt
   return request<KnowledgeStats>(`/api/v1/knowledge/stats/${businessId}`);
 }
 
-// ── Édition d'une entrée (#12) ──
+// édition d'une entrée
 export async function updateKnowledgeEntry(
   businessId: string,
   entryId: string,
@@ -400,7 +399,7 @@ export async function updateKnowledgeEntry(
   );
 }
 
-// ── Recherche sémantique dans la base (#12) ──
+// recherche sémantique
 export interface KnowledgeSearchHit {
   content: string;
   score: number;
@@ -417,7 +416,7 @@ export async function searchKnowledge(
   return request<KnowledgeSearchHit[]>(`/api/v1/knowledge/search/${businessId}?${qs}`);
 }
 
-// ── Import multi-fichiers (#13) ──
+// import multi-fichiers
 export interface MultiImportResult {
   imported: KnowledgeEntry[];
   errors: { file: string; error: string }[];
@@ -453,18 +452,18 @@ export interface BusinessConfig {
   sla_minutes: number;
   sla_rules: SlaRules | null;
   persona: JennyPersona | null;
-  // Acompte anti-no-show (#brain) : demander un acompte réduit les RDV manqués.
+  // acompte anti no-show
   deposit_enabled: boolean;
-  deposit_percent: number; // % du prix de la prestation demandé en acompte (0–100)
-  deposit_min_cents: number; // acompte forfaitaire (en centimes) quand le prix est inconnu
-  // Rappels & fidélité (#salon) : délais de relance + seuil de récompense.
-  reminder_lead_minutes: number; // rappel imminent : minutes avant le RDV
-  day_reminder_lead_hours: number; // rappel la veille : heures avant le RDV
-  loyalty_threshold: number; // récompense après N rendez-vous (0 = désactivé)
+  deposit_percent: number; // % demandé en acompte
+  deposit_min_cents: number; // acompte forfaitaire (centimes)
+  // rappels & fidélité
+  reminder_lead_minutes: number; // minutes avant le RDV
+  day_reminder_lead_hours: number; // heures avant, la veille
+  loyalty_threshold: number; // récompense après N RDV
   created_at: string;
 }
 
-// « Cerveau de Jenny » — personnalité configurable (#brain).
+// personnalité configurable
 export interface JennyPersona {
   tone?: string; // pro | cool | vendeur | chaleureux
   sliders?: Record<string, number>; // formel↔décontracté, concis↔détaillé, …
@@ -473,7 +472,7 @@ export interface JennyPersona {
   rules?: { label: string; on: boolean }[];
 }
 
-// SLA fins par priorité/canal (#7) : minutes avant « en retard ».
+// SLA par priorité/canal
 export interface SlaRules {
   priority?: Partial<Record<PriorityLevel, number>>;
   channel?: Record<string, number>;
@@ -838,7 +837,7 @@ export async function getConversationStats(): Promise<{ awaiting: number }> {
   return request<{ awaiting: number }>("/api/v1/conversations/stats");
 }
 
-// ── Priorité (#4) ──
+// priorité
 export async function updateConversationPriority(
   conversationId: string,
   priority_level: PriorityLevel
@@ -849,7 +848,7 @@ export async function updateConversationPriority(
   );
 }
 
-// ── Actions groupées (#1) ──
+// actions groupées
 export type BulkAction = "status" | "assign" | "priority" | "tag_add" | "tag_remove";
 
 export async function bulkConversationAction(
@@ -863,7 +862,7 @@ export async function bulkConversationAction(
   });
 }
 
-// ── Fusion (#10) ──
+// fusion
 export async function mergeConversations(
   targetId: string,
   sourceId: string
@@ -874,7 +873,7 @@ export async function mergeConversations(
   });
 }
 
-// ── Recherche plein-texte des messages (#8) ──
+// recherche plein-texte
 export interface MessageSearchHit {
   conversation_id: string;
   message_id: string;
@@ -1078,21 +1077,13 @@ export interface RealtimeEvent {
   conversation_id: string | null;
   kind: "inbound" | "outbound" | "status" | "update" | "processing" | string;
   channel?: string | null;
-  // Présents pour les événements `notification.new` (#14/#15).
+  // pour notification.new
   recipient?: string | null;
   title?: string;
   notification_id?: string | null;
 }
 
-/**
- * S'abonne au flux temps réel des conversations via SSE.
- *
- * On utilise `fetch` + ReadableStream (et non `EventSource` natif) car le flux
- * est protégé par un header `Authorization: Bearer` qu'`EventSource` ne sait pas
- * envoyer. Reconnexion automatique avec back-off exponentiel.
- *
- * Renvoie une fonction de désabonnement (à appeler au démontage).
- */
+/** abonnement au flux SSE */
 export function subscribeToConversationEvents(
   onEvent: (event: RealtimeEvent) => void,
   onConnectionChange?: (connected: boolean) => void
@@ -1122,18 +1113,18 @@ export function subscribeToConversationEvents(
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
-          // Les événements SSE sont séparés par une ligne vide (\n\n).
+          // events séparés par ligne vide
           const frames = buffer.split("\n\n");
           buffer = frames.pop() ?? "";
           for (const frame of frames) {
             const dataLine = frame.split("\n").find((l) => l.startsWith("data:"));
-            if (!dataLine) continue; // commentaire (heartbeat) ou ligne d'event
+            if (!dataLine) continue; // heartbeat ou ligne d'event
             const payload = dataLine.slice(5).trim();
             if (!payload) continue;
             try {
               onEvent(JSON.parse(payload) as RealtimeEvent);
             } catch {
-              // trame partielle / non-JSON → ignorer
+              // trame partielle, on ignore
             }
           }
         }
@@ -1323,7 +1314,7 @@ export async function deleteAppointment(id: string): Promise<{ status: string }>
   return request<{ status: string }>(`/api/v1/appointments/${id}`, { method: "DELETE" });
 }
 
-// Avis client laissé par l'équipe après un rendez-vous passé (#salon).
+// avis client après un RDV
 export async function createReview(body: {
   rating: number;
   comment?: string;
@@ -1390,8 +1381,8 @@ export async function setUserSuperuser(id: string, isSuperuser: boolean): Promis
   });
 }
 
-// ── Journal d'audit GLOBAL (toutes entreprises) ──
-// Même forme que `AuditItem`, enrichie de l'entreprise rattachée à chaque ligne.
+// audit global, toutes entreprises
+// comme AuditItem, + entreprise
 export interface AdminAuditItem {
   id: string;
   actor: string | null;
@@ -1454,9 +1445,7 @@ export function exportAppointmentsIcs(): Promise<void> {
   return downloadExport("/api/v1/appointments/export.ics", "jenny-agenda.ics");
 }
 
-// Ouvre le devis PDF (généré par Jenny) dans un nouvel onglet, via un flux blob
-// authentifié — un simple <a href> ne porterait pas le token JWT. `path` est le
-// `pdf_url` renvoyé dans l'action_result (ex. /api/v1/quotes/{id}/pdf).
+// ouvre le devis PDF (flux authentifié)
 export async function openQuotePdf(path: string): Promise<void> {
   const token = getToken();
   const res = await fetch(`${API_BASE}${path}`, {
@@ -1466,19 +1455,18 @@ export async function openQuotePdf(path: string): Promise<void> {
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   window.open(url, "_blank", "noopener,noreferrer");
-  // Laisse le temps au nouvel onglet de charger le blob avant révocation.
+  // laisse le temps de charger
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 // ==================== RGPD (CLIENT) ====================
 
-// Export RGPD d'un client : télécharge le JSON renvoyé par le backend
-// (Content-Disposition: attachment), via le même flux blob authentifié.
+// export RGPD d'un client
 export function exportCustomerData(customerId: string): Promise<void> {
   return downloadExport(`/api/v1/customers/${customerId}/export`, `client-${customerId}.json`);
 }
 
-// Anonymisation RGPD d'un client. IRRÉVERSIBLE : confirmer avant d'appeler.
+// anonymisation RGPD (irréversible)
 export async function anonymizeCustomer(
   customerId: string
 ): Promise<{ anonymized?: boolean; already_anonymized?: boolean }> {
@@ -1729,10 +1717,10 @@ export interface SalonStats {
   revenue_upcoming_eur: number;
   deposits: { enabled: boolean; pending: number; paid: number; collected_eur: number };
   waitlist: { waiting: number; notified: number };
-  // Satisfaction & absences (#salon).
-  average_rating: number | null; // note moyenne /5 (null tant qu'aucun avis)
-  reviews_count: number; // nombre d'avis pris en compte
-  no_show: number; // rendez-vous où le client ne s'est pas présenté
+  // satisfaction & absences
+  average_rating: number | null; // note moyenne /5
+  reviews_count: number; // nombre d'avis
+  no_show: number; // client non présenté
 }
 
 export async function getSalonStats(rangeDays = 30): Promise<SalonStats> {
@@ -1872,11 +1860,7 @@ export interface StreamChatPayload {
   language?: string | null;
 }
 
-/**
- * Chat client en streaming : `onToken` est appelé au fil de l'eau (mot à mot),
- * `onDone` reçoit les métadonnées finales (intent, action_result…). La réponse
- * complète est déjà passée au garde-fou persona côté serveur avant diffusion.
- */
+/** chat client en streaming */
 export async function streamChat(
   payload: StreamChatPayload,
   onToken: (token: string) => void,
@@ -1908,10 +1892,9 @@ export async function streamChat(
       try {
         data = JSON.parse(line.slice(5).trim());
       } catch {
-        continue; // ligne SSE partielle ou non-JSON : on ignore
+        continue; // ligne partielle, on ignore
       }
-      // Erreur côté serveur → on lève pour que l'appelant bascule sur le fallback
-      // (appel non-streamé), plutôt que de laisser une bulle vide.
+      // erreur serveur → fallback
       if (data.error) throw new ApiError(502, "stream_error", data);
       if (data.done) onDone(data);
       else if (typeof data.token === "string") onToken(data.token as string);
@@ -1925,16 +1908,13 @@ export async function checkHealth(): Promise<{ status: string }> {
   return request<{ status: string }>("/health");
 }
 
-// Readiness profonde : reflète exactement la forme renvoyée par `/ready`
-// (health.py). Chaque check porte son propre `status` ("ok" | "warning" |
-// "error" | "skip") + des champs spécifiques. Le endpoint répond 200 si prêt,
-// 503 si dégradé — on lit le corps dans les deux cas.
+// readiness profonde (/ready)
 export interface ReadinessCheck {
   status: "ok" | "warning" | "error" | "skip" | string;
   type?: string;
   error?: string;
   reason?: string;
-  // ml_models expose en plus l'état de chaque modèle.
+  // ml_models : état des modèles
   intent_model?: string;
   ner_model?: string;
 }
@@ -1952,8 +1932,7 @@ export interface Readiness {
 }
 
 export async function getReadiness(): Promise<Readiness> {
-  // `/ready` renvoie 503 quand le service est dégradé : on récupère quand même
-  // le JSON (qui décrit quel check a échoué) plutôt que de lever une ApiError.
+  // JSON lu même en 503
   const token = getToken();
   const res = await fetch(`${API_BASE}/ready`, {
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -1993,7 +1972,7 @@ export async function switchLlm(key: string): Promise<LlmState> {
 
 // ==================== MODÈLE MAISON (NanoGPT from scratch) ====================
 
-// Un point de la courbe d'entraînement (un palier de `step`).
+// un point de la courbe
 export interface NanoGptTrainingPoint {
   step: number;
   train_loss: number;
@@ -2003,7 +1982,7 @@ export interface NanoGptTrainingPoint {
   elapsed_s: number;
 }
 
-// Hyperparamètres de l'architecture du GPT maison (null tant qu'il n'a pas tourné).
+// hyperparamètres du GPT maison
 export interface NanoGptModelArch {
   n_layer: number;
   n_head: number;
@@ -2012,7 +1991,7 @@ export interface NanoGptModelArch {
 }
 
 export interface NanoGptTraining {
-  // « running » = entraînement en cours, « done » = terminé, « absent » = jamais lancé.
+  // running / done / absent
   state: "running" | "done" | "absent";
   points: NanoGptTrainingPoint[];
   step: number;
@@ -2029,14 +2008,14 @@ export async function getNanoGptTraining(): Promise<NanoGptTraining> {
   return request<NanoGptTraining>("/api/v1/nanogpt/training");
 }
 
-// Un échantillon question→réponse joué contre un modèle lors de la comparaison.
+// un échantillon question→réponse
 export interface ModelComparisonSample {
   q: string;
   a: string;
   ok: boolean;
 }
 
-// Résultat d'un modèle (Groq / Ollama / NanoGPT) sur le même jeu de prompts.
+// résultat d'un modèle
 export interface ModelComparisonResult {
   key: string;
   label: string;

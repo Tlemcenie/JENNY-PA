@@ -1,24 +1,4 @@
-"""Routes webhook pour les connecteurs de messagerie.
-
-Endpoints qui reçoivent les messages des différentes plateformes,
-les font passer dans le pipeline Jenny, et renvoient la réponse
-automatiquement sur le canal d'origine.
-
-Flux complet :
-    1. WhatsApp/Instagram/Twitter/Snapchat → POST webhook
-    2. Jenny parse le message
-    3. Pipeline : intent → NER → agent → réponse
-    4. Jenny renvoie la réponse sur le même canal
-
-Routes :
-    GET  /webhooks/whatsapp   — Vérification du webhook Meta
-    POST /webhooks/whatsapp   — Réception des messages WhatsApp
-    GET  /webhooks/instagram  — Vérification du webhook Meta
-    POST /webhooks/instagram  — Réception des DMs Instagram
-    GET  /webhooks/twitter    — Vérification CRC Twitter
-    POST /webhooks/twitter    — Réception des DMs Twitter
-    POST /webhooks/snapchat   — Réception des messages Snapchat
-"""
+"""Webhooks des connecteurs de messagerie."""
 
 from __future__ import annotations
 
@@ -31,15 +11,10 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request, Response
 
-# DbSession doit rester importé au runtime : FastAPI résout l'annotation
-# `db: DbSession` au démarrage (comme les schémas plus bas).
+# gardé au runtime (FastAPI)
 from jenny.api.dependencies import DbSession  # noqa: TC001
 
-# Les schémas de body de webhook restent importés au runtime (et non sous
-# TYPE_CHECKING) : avec `from __future__ import annotations`, FastAPI résout ces
-# annotations via get_type_hints au démarrage ; sans l'import réel, le
-# TypeAdapter échoue (forward-ref non défini → 500). Le noqa empêche `ruff
-# --fix` de les redéplacer sous TYPE_CHECKING et de recasser la route.
+# schémas gardés au runtime (FastAPI)
 from jenny.connectors.instagram.ingest_bridge import (
     ig_messaging_to_message_in,
     payload_recipient_id,
@@ -78,29 +53,23 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
-# ── Singletons des connecteurs ──
+# les connecteurs
 
 _whatsapp = WhatsAppConnector()
 _instagram = InstagramConnector()
 _twitter = TwitterConnector()
 _snapchat = SnapchatConnector()
 
-# Moteur conversationnel partagé (factory globale pour rester en phase
-# avec /api/v1/conversation/chat et /api/v1/webhooks/*).
+# moteur partagé (factory)
 
 
 def _get_engine() -> ConversationEngine:
-    """Renvoie le moteur conversationnel partagé (factory)."""
+    """le moteur partagé."""
     return _get_engine_factory()
 
 
 async def _engine_context(business_id, customer_id):
-    """Charge faits client + catalogue prestations pour enrichir le moteur.
-
-    Parité avec ``/api/v1/conversation/chat`` : sur les canaux entrants
-    (WhatsApp/Insta…), Jenny doit connaître le client (mémoire durable) et les
-    prix/durées réels — sinon elle répond « moins bien » que dans le Test Jenny.
-    """
+    """charge faits + catalogue."""
     from jenny.services.learning_service import load_customer_context
     from jenny.services.prestation_service import format_catalog, load_active_prestations
 
@@ -110,7 +79,7 @@ async def _engine_context(business_id, customer_id):
             prestations = await load_active_prestations(session, business_id)
             catalog = format_catalog(prestations)
         return facts, (catalog or None), ([p.name for p in prestations] or None)
-    except Exception as e:  # pragma: no cover - best-effort
+    except Exception as e:  # pragma: no cover
         logger.warning("webhook.engine_context_failed", error=str(e))
         return None, None, None
 
@@ -118,11 +87,7 @@ async def _engine_context(business_id, customer_id):
 async def _persist_engine_signals_safe(
     *, business_id, customer_id, conversation_id, channel, result
 ):
-    """Enregistre les signaux du moteur (faits client, lacunes, questions au coiffeur).
-
-    Indispensable sur les canaux entrants : c'est ce qui fait remonter au coiffeur
-    les questions sans réponse posées sur WhatsApp/Insta et mémorise le client.
-    """
+    """enregistre les signaux moteur."""
     from jenny.services.learning_service import persist_engine_signals
 
     try:
@@ -135,7 +100,7 @@ async def _persist_engine_signals_safe(
                 channel=channel,
                 result=result,
             )
-    except Exception as e:  # pragma: no cover - best-effort
+    except Exception as e:  # pragma: no cover
         logger.warning("webhook.persist_signals_failed", error=str(e))
 
 
@@ -146,12 +111,7 @@ async def _ingest_and_reply(
     reply_recipient: str,
     send_reply: Callable[[str, str], Awaitable[bool]],
 ) -> None:
-    """Flux commun à tous les webhooks entrants.
-
-    Dédup → ingestion (conversation + message) → enqueue worker → moteur →
-    réponse envoyée sur le canal → persistance de la réponse. Identique pour
-    Twitter et Snapchat (et symétrique des chemins WhatsApp/Instagram).
-    """
+    """flux commun des webhooks."""
     async with async_session_factory() as session:
         async with session.begin():
             wd_repo = WebhookDeliveryRepository(session)
@@ -176,7 +136,7 @@ async def _ingest_and_reply(
         customer_id = ing.conversation.customer_id
         handled = ing.conversation.assigned_to is not None
 
-    # Message entrant committé → notifier le dashboard (temps réel).
+    # notifie le dashboard
     publish_conversation_event(
         message_in.business_id, conversation_id=conv_id, kind="inbound", channel=channel
     )
@@ -188,18 +148,18 @@ async def _ingest_and_reply(
     except Exception as e:
         logger.error("webhook.enqueue_failed", channel=channel, error=str(e))
 
-    # Conversation reprise par un humain → Jenny ne répond plus automatiquement.
+    # repris par un humain
     if handled:
         logger.info("webhook.human_handled", channel=channel, conversation_id=str(conv_id))
         return
 
-    # Hors horaires d'ouverture → message auto (et on ne sollicite pas le moteur).
+    # hors horaires : auto-réponse
     if await _outside_hours_auto_reply(
         message_in.business_id, conv_id, channel, reply_recipient, send_reply
     ):
         return
 
-    # Jenny « écrit » → indicateur de frappe en temps réel sur le dashboard.
+    # indicateur de frappe
     publish_conversation_event(
         message_in.business_id, conversation_id=conv_id, kind="processing", channel=channel
     )
@@ -233,7 +193,7 @@ async def _ingest_and_reply(
 
 
 async def _twitter_ingest_and_reply(event_data: dict, business_id_str: str, sender_name: str) -> None:
-    """Ingestion + réponse pour un DM Twitter/X."""
+    """ingestion + réponse Twitter."""
     business_id = UUID(business_id_str)
     event = TwitterDMEvent.model_validate(event_data)
     data = event.message_create.message_data
@@ -259,7 +219,7 @@ async def _twitter_ingest_and_reply(event_data: dict, business_id_str: str, send
 
 
 async def _snapchat_ingest_and_reply(msg_data: dict, business_id_str: str) -> None:
-    """Ingestion + réponse pour un message Snapchat."""
+    """ingestion + réponse Snapchat."""
     business_id = UUID(business_id_str)
     msg = SnapMessage.model_validate(msg_data)
     if not msg.text:
@@ -290,11 +250,7 @@ async def _outside_hours_auto_reply(
     recipient: str,
     send_reply: Callable[[str, str], Awaitable[bool]],
 ) -> bool:
-    """Hors horaires d'ouverture + message auto configuré → envoie l'auto-réponse.
-
-    Retourne ``True`` si l'auto-réponse a été envoyée (le moteur ne doit alors
-    PAS générer de réponse). ``False`` sinon (business ouvert ou non configuré).
-    """
+    """auto-réponse hors horaires."""
     async with async_session_factory() as session:
         biz = await session.get(Business, business_id)
         if biz is None or not biz.auto_reply_message:
@@ -318,11 +274,7 @@ async def _persist_outbound_reply(
     *,
     delivered: bool,
 ) -> None:
-    """Persiste la réponse de Jenny (message sortant) dans la conversation.
-
-    Sans ça, le dashboard n'affiche que le message du client et pas la réponse.
-    Best-effort : un échec de persistance ne casse pas le flux du webhook.
-    """
+    """persiste la réponse sortante."""
     try:
         async with async_session_factory() as session, session.begin():
             now = datetime.now(UTC)
@@ -345,12 +297,12 @@ async def _persist_outbound_reply(
                 conv.message_count = (conv.message_count or 0) + 1
                 conv.last_message_at = now
                 conv.last_message_preview = text[:200]
-        # Réponse de Jenny committée → notifier le dashboard (temps réel).
+        # notifie le dashboard
         publish_conversation_event(
             business_id, conversation_id=conversation_id, kind="outbound", channel=channel
         )
     except Exception as e:
-        # La persistance de la réponse ne doit jamais casser le flux du webhook.
+        # ne doit pas casser le flux
         logger.error("webhook.persist_outbound_failed", channel=channel, error=str(e))
 
 
@@ -359,7 +311,7 @@ async def _whatsapp_ingest_and_reply(
     business_id_str: str,
     contact_names: dict[str, str],
 ) -> None:
-    """Ingestion DB + moteur + réponse WhatsApp (session dédiée)."""
+    """ingestion + réponse WhatsApp."""
     business_id = UUID(business_id_str)
     msg = WhatsAppMessage.model_validate(msg_data)
     if msg.type != "text" or not msg.text:
@@ -385,11 +337,10 @@ async def _whatsapp_ingest_and_reply(
 
         conv_id = ing.conversation.id
         mid = ing.message.id
-        # Le client est résolu/créé à l'ingestion (par son numéro WhatsApp + nom de
-        # profil) : on rattache la conversation ET le futur RDV à CE client.
+        # client résolu à l'ingestion
         customer_id = ing.conversation.customer_id
         handled = ing.conversation.assigned_to is not None
-        # Identifiants WhatsApp DE CE business (base chiffrée, sinon env global).
+        # identifiants du business
         wa_creds = await creds_svc.resolve(session, business_id, "whatsapp")
 
     publish_conversation_event(
@@ -445,12 +396,7 @@ async def _whatsapp_ingest_and_reply(
 
 
 async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str) -> None:
-    """Ingestion DB + moteur + réponse Instagram (session dédiée).
-
-    Symétrique de ``_whatsapp_ingest_and_reply`` : le DM est dédupliqué,
-    persisté (conversation + message), classé par le worker, puis Jenny répond
-    et sa réponse est persistée à son tour.
-    """
+    """ingestion + réponse Instagram."""
     business_id = UUID(business_id_str)
     messaging = IGMessaging.model_validate(messaging_data)
     if messaging.message is None or not messaging.message.text:
@@ -546,12 +492,7 @@ async def whatsapp_verify(
     hub_verify_token: str = Query("", alias="hub.verify_token"),
     hub_challenge: str = Query("", alias="hub.challenge"),
 ) -> Response:
-    """Vérification du webhook WhatsApp par Meta.
-
-    Meta envoie un GET avec hub.mode, hub.verify_token, hub.challenge.
-    On retourne le challenge si le token est valide : token global d'environnement
-    OU verify token collé par un business (multi-tenant).
-    """
+    """vérif webhook WhatsApp (Meta)."""
     if hub_mode == "subscribe" and await creds_svc.matches_verify_token(
         db, "whatsapp", hub_verify_token
     ):
@@ -566,7 +507,7 @@ async def whatsapp_webhook(
     db: DbSession,
     x_hub_signature_256: Annotated[str | None, Header(alias="X-Hub-Signature-256")] = None,
 ) -> dict:
-    """Réception des messages WhatsApp (signature Meta + idempotence + mapping business)."""
+    """réception messages WhatsApp."""
     settings = get_settings()
     body = await request.body()
 
@@ -583,9 +524,7 @@ async def whatsapp_webhook(
     try:
         payload = WhatsAppWebhookPayload.model_validate(data)
     except Exception as e:
-        # Webhook Meta valide mais non pris en charge (accusé de statut, type
-        # d'événement inconnu…) : on ACQUITTE en 200 pour que Meta ne le renvoie
-        # pas en boucle. Seul un corps non-JSON mérite un 400.
+        # non géré : acquitté en 200
         logger.warning("webhook.whatsapp.unsupported_payload", error=str(e))
         return {"status": "ignored", "reason": "unsupported_payload"}
 
@@ -639,7 +578,7 @@ async def instagram_verify(
     hub_verify_token: str = Query("", alias="hub.verify_token"),
     hub_challenge: str = Query("", alias="hub.challenge"),
 ) -> Response:
-    """Vérification du webhook Instagram par Meta (token env OU business)."""
+    """vérif webhook Instagram (Meta)."""
     if hub_mode == "subscribe" and await creds_svc.matches_verify_token(
         db, "instagram", hub_verify_token
     ):
@@ -654,13 +593,7 @@ async def instagram_webhook(
     db: DbSession,
     x_hub_signature_256: Annotated[str | None, Header(alias="X-Hub-Signature-256")] = None,
 ) -> dict:
-    """Réception des DMs Instagram (signature Meta + idempotence + mapping business).
-
-    Même robustesse que WhatsApp : on ACQUITTE en 200 tout webhook Meta valide
-    (accusés read/delivery, events sans message…) pour que Meta ne les renvoie
-    pas en boucle ; seul un corps non-JSON donne 400. Chaque DM est ingéré
-    (conversation + message) puis Jenny répond, et sa réponse est persistée.
-    """
+    """réception DMs Instagram."""
     settings = get_settings()
     body = await request.body()
 
@@ -721,11 +654,7 @@ async def instagram_webhook(
 async def twitter_crc(
     crc_token: str = Query("", description="CRC token envoyé par Twitter"),
 ) -> dict:
-    """Vérification CRC du webhook Twitter.
-
-    Twitter envoie un GET avec crc_token.
-    On retourne un HMAC-SHA256 signé.
-    """
+    """vérif CRC Twitter."""
     response_token = _twitter.compute_crc_response(crc_token)
     return {"response_token": response_token}
 
@@ -736,11 +665,7 @@ async def twitter_webhook(
     background_tasks: BackgroundTasks,
     db: DbSession,
 ) -> dict:
-    """Réception des DMs Twitter via Account Activity API (idempotence + persistance).
-
-    On ACQUITTE en 200 tout JSON valide (events sans DM, accusés…) ; seul un
-    corps non-JSON donne 400. Chaque DM est ingéré puis Jenny répond.
-    """
+    """réception DMs Twitter."""
     body = await request.body()
     try:
         data = json.loads(body)
@@ -774,7 +699,7 @@ async def twitter_webhook(
             continue
         data_ = event.message_create.message_data
         if data_.sender_id == payload.for_user_id or not data_.text:
-            continue  # on ne traite pas nos propres DM ni les events vides
+            continue  # pas nos DM ni vides
         user = payload.users.get(data_.sender_id)
         sender_name = f"@{user.screen_name}" if user else data_.sender_id
         background_tasks.add_task(
@@ -797,12 +722,7 @@ async def snapchat_webhook(
     background_tasks: BackgroundTasks,
     db: DbSession,
 ) -> dict:
-    """Réception des messages Snapchat (idempotence + persistance).
-
-    On ACQUITTE en 200 tout JSON valide ; seul un corps non-JSON donne 400.
-    Le payload Snapchat ne porte pas d'identifiant de compte : le routage vers
-    le business s'appuie sur ``JENNY_DEFAULT_BUSINESS_ID``.
-    """
+    """réception messages Snapchat."""
     body = await request.body()
     try:
         data = json.loads(body)
@@ -843,7 +763,7 @@ async def snapchat_webhook(
 
 @router.get("/health")
 async def webhooks_health() -> dict:
-    """État de connexion de tous les canaux."""
+    """état des canaux."""
     return {
         "whatsapp": await _whatsapp.health_check(),
         "instagram": await _instagram.health_check(),

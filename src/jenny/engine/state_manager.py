@@ -1,18 +1,4 @@
-"""Gestionnaire d'état conversationnel multi-tour.
-
-Conserve le contexte d'une conversation en cours :
-- historique des messages récents,
-- intention courante,
-- entités extraites (slots),
-- informations manquantes,
-- état d'avancement de la demande.
-
-Permet aux agents de savoir où on en est dans un échange multi-tour.
-
-Persistence :
-- Redis si disponible (prod) — survit aux redémarrages
-- Mémoire sinon (dev) — fallback automatique
-"""
+"""Gestion de l'état conversationnel."""
 
 from __future__ import annotations
 
@@ -32,20 +18,20 @@ class ConversationPhase(StrEnum):
     """Phase de la conversation."""
 
     GREETING = "greeting"
-    UNDERSTANDING = "understanding"  # On collecte l'intention + entités
-    SLOT_FILLING = "slot_filling"  # On demande les infos manquantes
-    PROCESSING = "processing"  # On exécute l'action / recherche
-    RESPONDING = "responding"  # On génère la réponse
+    UNDERSTANDING = "understanding"  # collecte intention + entités
+    SLOT_FILLING = "slot_filling"  # demande les infos manquantes
+    PROCESSING = "processing"  # exécute l'action
+    RESPONDING = "responding"  # génère la réponse
     CLOSING = "closing"
 
 
 @dataclass
 class ExtractedSlot:
-    """Entité extraite (slot) avec sa valeur et son statut."""
+    """Entité extraite (slot)."""
 
     name: str
     value: str | None = None
-    entity_type: str = ""  # ORDER_NUMBER, DATE, PHONE, etc.
+    entity_type: str = ""  # ex. DATE, PHONE
     confidence: float = 0.0
     required: bool = False
     filled: bool = False
@@ -53,75 +39,67 @@ class ExtractedSlot:
 
 @dataclass
 class ConversationState:
-    """État complet d'une conversation en cours.
+    """État d'une conversation en cours."""
 
-    C'est l'objet central qui transite entre les composants du moteur.
-    Il accumule le contexte au fil des échanges multi-tour.
-    """
-
-    # ── Identifiants ──
+    # identifiants
     conversation_id: UUID = field(default_factory=uuid4)
     business_id: UUID | None = None
     customer_id: UUID | None = None
     session_id: str = field(default_factory=lambda: str(uuid4()))
 
-    # ── Historique ──
+    # historique
     message_history: list[dict[str, str]] = field(default_factory=list)
-    max_history: int = 20  # Garder les N derniers messages
+    max_history: int = 20  # garde les N derniers
 
-    # ── Intention ──
+    # intention
     current_intent: str | None = None
     intent_confidence: float = 0.0
     previous_intents: list[str] = field(default_factory=list)
-    # Action en cours de collecte d'infos (slot-filling multi-tours) : tant qu'elle
-    # est posée, les messages suivants complètent CETTE demande (ex. RDV coiffeur).
+    # demande en cours de collecte
     pending_intent: str | None = None
-    # Un RDV vient d'être réservé → un « oui » du client le CONFIRME.
+    # oui = confirme le RDV
     awaiting_confirmation: bool = False
-    # Salon complet : Jenny a proposé la liste d'attente → un « oui » INSCRIT le client.
+    # oui = inscrit en attente
     awaiting_waitlist: bool = False
-    # RDV pris pour un client sans nom → le prochain message est son NOM à enregistrer.
+    # prochain message = son nom
     awaiting_name: bool = False
-    # Fiche créée sans téléphone → le prochain message contenant un numéro est
-    # son TÉLÉPHONE de rappel à enregistrer.
+    # prochain numéro = son téléphone
     awaiting_phone: bool = False
 
-    # ── Entités / Slots ──
+    # slots
     slots: dict[str, ExtractedSlot] = field(default_factory=dict)
 
-    # ── Phase ──
+    # phase
     phase: ConversationPhase = ConversationPhase.GREETING
     turn_count: int = 0
 
-    # ── Contexte RAG ──
+    # contexte RAG
     retrieved_documents: list[dict] = field(default_factory=list)
 
-    # ── Réponse ──
+    # réponse
     suggested_response: str | None = None
     agent_used: str | None = None
     action_result: dict | None = None
 
-    # ── Métadonnées ──
+    # métadonnées
     channel: str = ""
     language: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
-    # ── Cerveau de Jenny (persona configurable, runtime — non sérialisé) ──
-    # {"tone": "cool", "tutoiement": true, "vocab": [...], "rules": [{label,on}]}.
-    # Injecté par requête depuis la config du business ; None = comportement défaut.
+    # persona du business (runtime)
     business_persona: dict | None = None
     business_name: str | None = None
 
-    # ── Couche d'intelligence (runtime, recalculé par requête — non sérialisé) ──
-    detected_language: str | None = None  # code ISO (fr, en, es…) du message client
+    # couche intelligence (runtime)
+    detected_language: str | None = None  # code ISO du message
     customer_facts: list[str] = field(default_factory=list)  # faits durables connus
-    clarification_instruction: str | None = None  # consigne « pose une question »
-    knowledge_gap: bool = False  # aucune réponse fiable disponible
-    business_catalog: str | None = None  # catalogue prestations formaté (prix/durée)
+    clarification_instruction: str | None = None  # consigne de clarification
+    knowledge_gap: bool = False  # pas de réponse fiable
+    business_catalog: str | None = None  # catalogue prestations formaté
 
     def add_user_message(self, content: str) -> None:
-        """Ajoute un message utilisateur à l'historique."""
+        """Ajoute un message utilisateur."""
         self.message_history.append(
             {
                 "role": "user",
@@ -136,7 +114,7 @@ class ConversationState:
         self.updated_at = datetime.now(UTC)
 
     def add_assistant_message(self, content: str) -> None:
-        """Ajoute une réponse assistant à l'historique."""
+        """Ajoute une réponse assistant."""
         self.message_history.append(
             {
                 "role": "assistant",
@@ -149,7 +127,7 @@ class ConversationState:
         self.updated_at = datetime.now(UTC)
 
     def set_intent(self, intent: str, confidence: float) -> None:
-        """Met à jour l'intention détectée."""
+        """Met à jour l'intention."""
         if self.current_intent and self.current_intent != intent:
             self.previous_intents.append(self.current_intent)
         self.current_intent = intent
@@ -163,7 +141,7 @@ class ConversationState:
         entity_type: str = "",
         confidence: float = 1.0,
     ) -> None:
-        """Remplit un slot avec une valeur extraite."""
+        """Remplit un slot."""
         self.slots[name] = ExtractedSlot(
             name=name,
             value=value,
@@ -174,15 +152,15 @@ class ConversationState:
         self.updated_at = datetime.now(UTC)
 
     def get_missing_slots(self) -> list[ExtractedSlot]:
-        """Retourne les slots requis mais non remplis."""
+        """Slots requis non remplis."""
         return [s for s in self.slots.values() if s.required and not s.filled]
 
     def has_missing_required_slots(self) -> bool:
-        """Vérifie s'il manque des informations requises."""
+        """Manque des infos requises ?"""
         return len(self.get_missing_slots()) > 0
 
     def get_context_summary(self) -> str:
-        """Génère un résumé du contexte pour le LLM."""
+        """Résumé du contexte."""
         parts = []
         if self.current_intent:
             parts.append(f"Intention: {self.current_intent} ({self.intent_confidence:.0%})")
@@ -195,10 +173,10 @@ class ConversationState:
         parts.append(f"Tour: {self.turn_count}, Phase: {self.phase.value}")
         return " | ".join(parts)
 
-    # ── Sérialisation JSON (pour Redis) ──
+    # sérialisation JSON
 
     def to_dict(self) -> dict:
-        """Sérialise l'état en dict JSON-compatible."""
+        """Sérialise l'état en dict."""
         data = {
             "conversation_id": str(self.conversation_id),
             "business_id": str(self.business_id) if self.business_id else None,
@@ -240,7 +218,7 @@ class ConversationState:
 
     @classmethod
     def from_dict(cls, data: dict) -> ConversationState:
-        """Reconstruit un état depuis un dict (depuis Redis)."""
+        """Reconstruit depuis un dict."""
         state = cls(
             conversation_id=UUID(data["conversation_id"]),
             business_id=UUID(data["business_id"]) if data.get("business_id") else None,
@@ -271,20 +249,16 @@ class ConversationState:
             if data.get("updated_at")
             else datetime.now(UTC),
         )
-        # Reconstruire les slots
+        # reconstruit les slots
         for k, v in data.get("slots", {}).items():
             state.slots[k] = ExtractedSlot(**v)
         return state
 
 
 class StateManager:
-    """Gestionnaire centralisé des états de conversation.
+    """Gère les états de conversation."""
 
-    Utilise Redis si disponible (survit aux redémarrages),
-    sinon fallback en mémoire (dev).
-    """
-
-    # Préfixe des clés Redis + TTL
+    # préfixe clés Redis + TTL
     REDIS_PREFIX = "jenny:conv:"
     REDIS_TTL = 3600 * 24  # 24h
 
@@ -292,7 +266,7 @@ class StateManager:
         self._states: dict[str, ConversationState] = {}
         self._redis = None
 
-        # Tenter la connexion Redis
+        # tente Redis
         if redis_url:
             self._init_redis(redis_url)
         else:
@@ -311,7 +285,7 @@ class StateManager:
             logger.info("state_manager.backend", backend="memory")
 
     def _init_redis(self, redis_url: str) -> None:
-        """Initialise la connexion Redis (sync pour le state manager)."""
+        """Connexion Redis."""
         try:
             import redis
 
@@ -320,7 +294,7 @@ class StateManager:
                 socket_connect_timeout=2,
                 decode_responses=True,
             )
-            # Test rapide
+            # test rapide
             self._redis.ping()
         except Exception as e:
             logger.warning("state_manager.redis_unavailable", error=str(e))
@@ -332,26 +306,26 @@ class StateManager:
         business_id: UUID | None = None,
         channel: str = "",
     ) -> ConversationState:
-        """Récupère ou crée un état de conversation."""
+        """Récupère ou crée un état."""
         key = str(conversation_id)
 
-        # 1. Essayer Redis
+        # 1. essaie Redis
         if self._redis is not None:
             try:
                 raw = self._redis.get(f"{self.REDIS_PREFIX}{key}")
                 if raw:
                     data = json.loads(raw)
                     state = ConversationState.from_dict(data)
-                    self._states[key] = state  # Cache local
+                    self._states[key] = state  # cache local
                     return state
             except Exception as e:
                 logger.warning("state_manager.redis_get_error", error=str(e))
 
-        # 2. Essayer le cache mémoire
+        # 2. cache mémoire
         if key in self._states:
             return self._states[key]
 
-        # 3. Créer un nouvel état
+        # 3. nouvel état
         state = ConversationState(
             conversation_id=conversation_id,
             business_id=business_id,
@@ -362,11 +336,11 @@ class StateManager:
         return state
 
     def save(self, state: ConversationState) -> None:
-        """Sauvegarde l'état dans Redis (si dispo) + mémoire."""
+        """Sauvegarde l'état."""
         key = str(state.conversation_id)
         self._states[key] = state
 
-        # Persister dans Redis
+        # persiste dans Redis
         if self._redis is not None:
             try:
                 data = json.dumps(state.to_dict(), ensure_ascii=False)
@@ -379,7 +353,7 @@ class StateManager:
                 logger.warning("state_manager.redis_save_error", error=str(e))
 
     def delete(self, conversation_id: UUID) -> None:
-        """Supprime un état de conversation."""
+        """Supprime un état."""
         key = str(conversation_id)
         self._states.pop(key, None)
 
@@ -391,11 +365,11 @@ class StateManager:
         """Récupère un état existant."""
         key = str(conversation_id)
 
-        # Cache mémoire d'abord
+        # cache mémoire d'abord
         if key in self._states:
             return self._states[key]
 
-        # Puis Redis
+        # puis Redis
         if self._redis is not None:
             try:
                 raw = self._redis.get(f"{self.REDIS_PREFIX}{key}")
@@ -411,5 +385,5 @@ class StateManager:
 
     @property
     def backend(self) -> str:
-        """Retourne le backend utilisé."""
+        """Backend utilisé."""
         return "redis" if self._redis is not None else "memory"

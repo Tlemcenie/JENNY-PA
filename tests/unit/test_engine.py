@@ -1,4 +1,4 @@
-"""Tests unitaires pour le moteur conversationnel."""
+"""tests du moteur conv."""
 
 from uuid import uuid4
 

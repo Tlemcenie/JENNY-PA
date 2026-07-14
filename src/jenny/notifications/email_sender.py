@@ -1,21 +1,4 @@
-"""Service d'envoi d'emails SMTP.
-
-Envoie des emails transactionnels :
-- Confirmation de rendez-vous
-- Modification de rendez-vous
-- Annulation de rendez-vous
-- Confirmation de devis
-- Confirmation de commande
-- Réponse aux réclamations
-
-Configuration requise (variables d'env) :
-    JENNY_SMTP_HOST
-    JENNY_SMTP_PORT
-    JENNY_SMTP_USERNAME
-    JENNY_SMTP_PASSWORD
-    JENNY_SMTP_FROM_EMAIL
-    JENNY_SMTP_FROM_NAME
-"""
+"""envoi d'emails SMTP."""
 
 from __future__ import annotations
 
@@ -38,8 +21,7 @@ from jenny.notifications.email_layout import MASCOT_CID
 
 logger = get_logger(__name__)
 
-# Mascotte Jenny embarquée inline (CID) dans les emails HTML. Légère (~25 Ko),
-# packagée avec le backend (donc présente dans l'image Docker, src/ étant copié).
+# mascotte inline dans les mails
 _MASCOT_PATH = Path(__file__).resolve().parent / "assets" / "jenny-email.png"
 
 
@@ -54,7 +36,7 @@ class EmailMessage:
     reply_to: str | None = None
     cc: list[str] = field(default_factory=list)
     bcc: list[str] = field(default_factory=list)
-    # Pièces jointes : [{"filename", "content": bytes, "mimetype"}] (ex. devis PDF).
+    # pièces jointes (ex. devis pdf)
     attachments: list[dict] = field(default_factory=list)
 
 
@@ -70,7 +52,7 @@ EmailType = Literal[
 ]
 
 
-# ── Templates d'emails ──
+# templates d'emails
 
 TEMPLATES: dict[EmailType, dict[str, str]] = {
     "appointment_confirmation": {
@@ -201,7 +183,7 @@ N'hésitez pas à nous contacter pour toute question.
 }
 
 
-# Eyebrow + titre serif (heading + accent corail) par type d'email transactionnel.
+# titres html par type
 _HTML_META: dict[str, tuple[str, str, str]] = {
     "appointment_confirmation": ("rendez-vous", "Votre rendez-vous est", "confirmé."),
     "appointment_modification": ("rendez-vous", "Votre rendez-vous a été", "modifié."),
@@ -215,7 +197,7 @@ _HTML_META: dict[str, tuple[str, str, str]] = {
 
 
 def _template_html(email_type: str, subject: str, body: str, variables: dict[str, str]) -> str:
-    """Habille le corps texte d'un template dans le gabarit premium Jenny."""
+    """habille le texte en html."""
     from jenny.notifications.email_layout import MUTED, SANS, render_email
 
     eyebrow, heading, accent = _HTML_META.get(email_type, ("information", "Information", ""))
@@ -234,16 +216,11 @@ def _template_html(email_type: str, subject: str, body: str, variables: dict[str
 
 
 class EmailSender:
-    """Service d'envoi d'emails transactionnels via SMTP.
-
-    Supporte Gmail, SendGrid, Mailgun, ou tout serveur SMTP.
-    """
+    """envoi d'emails via SMTP."""
 
     def __init__(self, creds=None) -> None:
         self.settings = get_settings()
-        # Paramètres SMTP effectifs : identifiants DU business (``creds``) s'ils
-        # sont fournis, sinon configuration globale d'environnement. ``creds=None``
-        # ⇒ comportement strictement identique à avant (emails transactionnels).
+        # creds du business sinon config
         self.smtp_host = (getattr(creds, "smtp_host", "") or self.settings.smtp_host)
         self.smtp_port = (getattr(creds, "smtp_port", 0) or self.settings.smtp_port)
         self.smtp_username = (getattr(creds, "smtp_username", "") or self.settings.smtp_username)
@@ -256,7 +233,7 @@ class EmailSender:
         )
 
     def _build_message(self, email: EmailMessage) -> MIMEMultipart:
-        """Construit le message MIME (multipart/related : texte+HTML + mascotte inline)."""
+        """construit le message MIME."""
         root = MIMEMultipart("related")
         root["From"] = f"{self.smtp_from_name} <{self.smtp_from_email}>"
         root["To"] = email.to
@@ -272,7 +249,7 @@ class EmailSender:
             alt.attach(MIMEText(email.body_html, "html", "utf-8"))
         root.attach(alt)
 
-        # Mascotte Jenny en pièce jointe inline (CID) si le HTML la référence.
+        # mascotte inline si référencée
         if email.body_html and f"cid:{MASCOT_CID}" in email.body_html and _MASCOT_PATH.exists():
             try:
                 img = MIMEImage(_MASCOT_PATH.read_bytes(), _subtype="png")
@@ -282,7 +259,7 @@ class EmailSender:
             except OSError as e:
                 logger.warning("email.mascot_attach_failed", error=str(e))
 
-        # Pièces jointes (ex. devis PDF).
+        # pièces jointes
         for att in email.attachments or []:
             try:
                 content = att.get("content")
@@ -327,11 +304,7 @@ class EmailSender:
             return False
 
     def _resolve_backend(self) -> str:
-        """Détermine le canal d'envoi effectif.
-
-        ``auto`` : SMTP si des identifiants sont présents, sinon console en test
-        et écriture fichier (consultable dans un navigateur) en dev.
-        """
+        """choisit le canal d'envoi."""
         backend = getattr(self.settings, "email_backend", "auto")
         if backend != "auto":
             return backend
@@ -342,7 +315,7 @@ class EmailSender:
         return "file"
 
     def _write_file(self, email: EmailMessage) -> bool:
-        """Écrit l'email rendu sur disque (HTML ouvrable dans un navigateur)."""
+        """écrit l'email sur disque."""
         try:
             directory = Path(getattr(self.settings, "email_preview_dir", "var/emails"))
             directory.mkdir(parents=True, exist_ok=True)
@@ -352,14 +325,13 @@ class EmailSender:
             content = email.body_html or (
                 f"<pre>{html_lib.escape(email.body_text)}</pre>"
             )
-            # Aperçu navigateur : on inline la mascotte en data-URI (le CID n'existe
-            # qu'au sein du mail réel).
+            # mascotte en data-uri pour l'aperçu
             if email.body_html and f"cid:{MASCOT_CID}" in content and _MASCOT_PATH.exists():
                 b64 = base64.b64encode(_MASCOT_PATH.read_bytes()).decode()
                 content = content.replace(
                     f"cid:{MASCOT_CID}", f"data:image/png;base64,{b64}"
                 )
-            # En-tête commenté : métadonnées + version texte (pratique en dev).
+            # métadonnées en commentaire
             meta = (
                 f"<!--\nTo: {email.to}\nSubject: {email.subject}\n\n"
                 f"{email.body_text}\n-->\n"
@@ -377,7 +349,7 @@ class EmailSender:
             return False
 
     def _log_console(self, email: EmailMessage) -> bool:
-        """Trace l'email dans les logs (backend de test)."""
+        """log l'email (backend test)."""
         logger.info(
             "email.console",
             to=email.to,
@@ -387,12 +359,7 @@ class EmailSender:
         return True
 
     async def send(self, email: EmailMessage) -> bool:
-        """Envoie un email selon le backend configuré.
-
-        - ``smtp`` : envoi réel (exécuté dans un thread pour ne pas bloquer) ;
-        - ``file`` : écrit le HTML sur disque (dev, consultable au navigateur) ;
-        - ``console`` : trace dans les logs (tests).
-        """
+        """envoie selon le backend configuré."""
         backend = self._resolve_backend()
         if backend == "file":
             return self._write_file(email)
@@ -407,16 +374,7 @@ class EmailSender:
         to: str,
         variables: dict[str, str],
     ) -> bool:
-        """Envoie un email basé sur un template.
-
-        Args:
-            email_type: Type d'email (appointment_confirmation, etc.).
-            to: Adresse email du destinataire.
-            variables: Variables à injecter dans le template.
-
-        Returns:
-            True si l'envoi a réussi.
-        """
+        """envoie un email par template."""
         template = TEMPLATES.get(email_type)
         if not template:
             logger.error("email.template_not_found", type=email_type)
@@ -452,7 +410,7 @@ class EmailSender:
         reference: str,
         business_name: str,
     ) -> bool:
-        """Raccourci pour envoyer une confirmation de RDV."""
+        """raccourci confirmation de RDV."""
         return await self.send_template(
             "appointment_confirmation",
             to,
@@ -478,7 +436,7 @@ class EmailSender:
         service: str,
         business_name: str,
     ) -> bool:
-        """Raccourci pour envoyer un rappel de RDV."""
+        """raccourci rappel de RDV."""
         return await self.send_template(
             "appointment_reminder",
             to,

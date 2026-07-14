@@ -1,9 +1,4 @@
-"""Liste et détail des conversations (historique).
-
-Endpoints de consultation, scopés au business du JWT :
-- ``GET /conversations`` : liste paginée avec aperçu du dernier message.
-- ``GET /conversations/{id}`` : détail avec tous les messages ordonnés.
-"""
+"""liste et détail des conversations."""
 
 import csv
 import io
@@ -34,12 +29,10 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/conversations", tags=["Conversations"])
 
-# Seuil SLA par défaut : une conversation en attente de réponse depuis plus de N
-# minutes est considérée « en retard ». Surchargeable par business (sla_minutes)
-# et affinable par priorité/canal (sla_rules) — voir resolve_sla_minutes.
+# seuil SLA par défaut
 SLA_RESPONSE_MINUTES = 30
 
-# Ordre de tri des priorités (plus haut = plus urgent), pour le tri serveur.
+# ordre de tri priorités
 PRIORITY_RANK: dict[str, int] = {"critical": 3, "high": 2, "medium": 1, "low": 0}
 
 
@@ -49,13 +42,7 @@ def resolve_sla_minutes(
     priority: str | None = None,
     channel: str | None = None,
 ) -> int:
-    """Seuil SLA effectif pour une conversation (#7).
-
-    Part du ``sla_minutes`` du business (ou défaut), puis applique la surcharge
-    la plus stricte (min) parmi celles définies dans ``sla_rules`` pour la
-    priorité et le canal concernés. Permet d'exiger une réponse plus rapide sur
-    les conversations critiques ou un canal donné.
-    """
+    """seuil SLA effectif."""
     base = biz.sla_minutes if biz and biz.sla_minutes else SLA_RESPONSE_MINUTES
     rules = (biz.sla_rules if biz else None) or {}
     candidates = [base]
@@ -69,7 +56,7 @@ def resolve_sla_minutes(
 
 
 def _waiting_minutes(last_message_at: datetime | None, now: datetime) -> int | None:
-    """Minutes écoulées depuis le dernier message (None si inconnu)."""
+    """minutes depuis le dernier message."""
     if last_message_at is None:
         return None
     lma = last_message_at if last_message_at.tzinfo else last_message_at.replace(tzinfo=UTC)
@@ -112,7 +99,7 @@ class ConversationMessage(BaseModel):
     status: str
     attachment_count: int = 0
     created_at: datetime
-    # Avis 👍/👎 déjà enregistré sur cette réponse (hydrate l'UI au rechargement).
+    # avis déjà enregistré
     feedback_rating: int | None = None
     feedback_comment: str | None = None
 
@@ -151,12 +138,7 @@ async def list_conversations(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ConversationListResponse:
-    """Liste les conversations du business (les plus récentes d'abord).
-
-    ``search`` filtre côté serveur sur le nom du client OU le contenu d'un
-    message (recherche sur TOUTES les conversations, pas seulement la page).
-    ``priority`` filtre par niveau ; ``sort_by`` trie par récence ou priorité.
-    """
+    """liste les conversations du business."""
     bid = principal.business_id
     if bid is None:
         return ConversationListResponse(conversations=[], total=0, limit=limit, offset=offset)
@@ -168,8 +150,7 @@ async def list_conversations(
     if status:
         filters.append(Conversation.status == status)
     else:
-        # Vue par défaut (« Tous ») = conversations actives : on masque les
-        # archivées et les reportées (snooze) tant qu'elles ne sont pas dues.
+        # par défaut = actives
         filters.append(Conversation.status != "archived")
         filters.append(
             or_(Conversation.snoozed_until.is_(None), Conversation.snoozed_until <= now)
@@ -179,13 +160,11 @@ async def list_conversations(
     if priority and priority.strip():
         filters.append(Conversation.priority_level == priority.strip())
     if assigned_to:
-        # "me" → conversations attribuées à l'utilisateur courant.
+        # "me" = utilisateur courant
         who = principal.email if assigned_to == "me" else assigned_to
         filters.append(Conversation.assigned_to == who)
     if tag and tag.strip():
-        # tags est une colonne JSON (liste sérialisée) : on filtre sur la
-        # présence du tag exact, entre guillemets, dans le JSON textuel.
-        # Portable Postgres/SQLite (pas d'opérateur ARRAY natif requis).
+        # filtre le tag exact
         filters.append(cast(Conversation.tags, String).ilike(f'%"{tag.strip()}"%'))
     if search and search.strip():
         pattern = f"%{search.strip()}%"
@@ -210,7 +189,7 @@ async def list_conversations(
     if sort_by == "oldest":
         order_by = [recency.asc()]
     elif sort_by == "priority":
-        # Tri par urgence décroissante (critical → low), puis par récence.
+        # urgence puis récence
         from sqlalchemy import case
 
         rank = case(PRIORITY_RANK, value=Conversation.priority_level, else_=1)
@@ -231,8 +210,7 @@ async def list_conversations(
 
     conv_ids = [conv.id for conv, _ in rows]
     previews: dict[UUID, str] = {}
-    # Direction du dernier message de chaque conversation : si c'est "inbound",
-    # le client attend une réponse → la conversation est "à traiter".
+    # direction du dernier message
     last_direction: dict[UUID, str] = {}
     if conv_ids:
         msg_rows = (
@@ -249,7 +227,7 @@ async def list_conversations(
         ).all()
         for cid, text, direction, _created in msg_rows:
             if cid not in last_direction:
-                last_direction[cid] = direction  # première ligne = message le plus récent
+                last_direction[cid] = direction  # le plus récent
                 if text:
                     previews[cid] = text[:160]
 
@@ -257,7 +235,7 @@ async def list_conversations(
     for conv, customer_name in rows:
         awaiting = last_direction.get(conv.id) == "inbound"
         wmin = _waiting_minutes(conv.last_message_at, now) if awaiting else None
-        # SLA effectif tenant compte de la priorité et du canal (#7).
+        # SLA selon priorité/canal
         sla_minutes = resolve_sla_minutes(
             biz, priority=conv.priority_level, channel=conv.channel
         )
@@ -297,7 +275,7 @@ async def conversation_stats(
     db: DbSession,
     principal: CurrentUser,
 ) -> ConversationStats:
-    """Compteur léger : conversations « à traiter » (dernier message entrant)."""
+    """conversations à traiter."""
     bid = principal.business_id
     if bid is None:
         return ConversationStats(awaiting=0)
@@ -330,7 +308,7 @@ async def export_conversations_csv(
     db: DbSession,
     principal: CurrentUser,
 ) -> StreamingResponse:
-    """Exporte les conversations du business au format CSV (toutes, hors limite raisonnable)."""
+    """export CSV des conversations."""
     bid = principal.business_id
     rows = []
     if bid is not None:
@@ -384,7 +362,7 @@ async def export_conversations_csv(
     )
 
 
-# ── Recherche plein-texte des messages (#8) ──────────────────────────────────
+# recherche plein-texte
 
 
 class MessageSearchHit(BaseModel):
@@ -404,7 +382,7 @@ class MessageSearchResponse(BaseModel):
 
 
 def _snippet(content: str | None, query: str, width: int = 160) -> str:
-    """Extrait un fragment centré sur la 1re occurrence du terme recherché."""
+    """fragment autour du terme."""
     text_val = (content or "").replace("\n", " ").strip()
     if not text_val:
         return ""
@@ -426,12 +404,7 @@ async def search_messages(
     q: Annotated[str, Query(min_length=2, max_length=200)],
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
 ) -> MessageSearchResponse:
-    """Recherche plein-texte dans le contenu des messages du business (#8).
-
-    Sur Postgres : index GIN ``to_tsvector('french', …)`` + ``plainto_tsquery``
-    (rapide, tolérant aux accents/stop-words). Ailleurs (SQLite de test) : repli
-    sur ``ILIKE``. Renvoie les messages correspondants avec leur contexte.
-    """
+    """recherche plein-texte messages."""
     bid = principal.business_id
     if bid is None:
         return MessageSearchResponse(query=q, hits=[], total=0)
@@ -506,7 +479,7 @@ async def search_messages(
     return MessageSearchResponse(query=q, hits=hits, total=int(total or 0))
 
 
-# ── Actions groupées (#1) ────────────────────────────────────────────────────
+# actions groupées
 
 
 class BulkActionRequest(BaseModel):
@@ -525,12 +498,7 @@ async def bulk_action(
     db: DbSession,
     principal: CurrentUser,
 ) -> BulkActionResult:
-    """Applique une action à plusieurs conversations d'un coup (#1).
-
-    Actions : changer le statut, attribuer/libérer, changer la priorité, ajouter
-    ou retirer une étiquette. Tout est scopé au business ; chaque modification
-    est tracée dans le journal d'audit.
-    """
+    """action groupée."""
     bid = principal.business_id
     if bid is None:
         return BulkActionResult(updated=0)
@@ -602,7 +570,7 @@ async def get_conversation(
     db: DbSession,
     principal: CurrentUser,
 ) -> ConversationDetail:
-    """Détail d'une conversation avec tous ses messages (scopé au business)."""
+    """détail d'une conversation."""
     bid = principal.business_id
     row = (
         await db.execute(
@@ -623,8 +591,7 @@ async def get_conversation(
         )
     ).scalars().all()
 
-    # Avis 👍/👎 de tous les messages de la conversation en UNE requête (pas de N+1) :
-    # on hydrate ainsi les boutons de feedback sans un appel par message.
+    # avis en une requête
     from jenny.domain.models.message_feedback import MessageFeedback
 
     fb_rows = (
@@ -690,18 +657,12 @@ async def reply_to_conversation(
     db: DbSession,
     principal: CurrentUser,
 ) -> ReplyResult:
-    """Réponse humaine à un client depuis le dashboard (reprise en main).
-
-    Envoie le message sur le canal d'origine (best-effort, selon le connecteur)
-    et le persiste. La conversation est marquée ``assigned_to`` : Jenny cesse de
-    répondre automatiquement sur ce fil (l'humain a pris la main).
-    """
+    """réponse humaine depuis le dashboard."""
     conv = await db.get(Conversation, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
 
-    # Pour l'email, le destinataire est l'adresse du client (l'identifiant de
-    # conversation email est un fil, pas une adresse).
+    # email : adresse du client
     recipient_override: str | None = None
     if conv.channel == "email" and conv.customer_id:
         cust = await db.get(Customer, conv.customer_id)
@@ -731,7 +692,7 @@ async def reply_to_conversation(
         source_created_at=now,
     )
     db.add(msg)
-    conv.assigned_to = agent  # reprise humaine → Jenny se met en pause sur ce fil
+    conv.assigned_to = agent  # reprise humaine, Jenny en pause
     conv.message_count = (conv.message_count or 0) + 1
     conv.last_message_at = now
     conv.last_message_preview = body.text[:200]
@@ -783,11 +744,7 @@ async def suggest_reply(
     db: DbSession,
     principal: CurrentUser,
 ) -> SuggestResult:
-    """Propose un brouillon de réponse (généré par le moteur) au dernier message client.
-
-    Sert à l'agent qui a repris la main : il obtient une suggestion rédigée,
-    qu'il peut éditer avant de l'envoyer. Rien n'est persisté ni envoyé ici.
-    """
+    """brouillon de réponse suggéré."""
     conv = await db.get(Conversation, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
@@ -816,7 +773,7 @@ async def suggest_reply(
     )
     base = out.response_text
     variants = [base]
-    # 2 reformulations alternatives (ton légèrement différent) via le LLM.
+    # 2 reformulations via le LLM
     rg = getattr(get_engine(), "response_generator", None)
     provider = getattr(rg, "llm", None)
     if provider is not None:
@@ -850,11 +807,7 @@ async def resume_conversation(
     db: DbSession,
     principal: CurrentUser,
 ) -> AssignmentResult:
-    """Rend la main à Jenny : libère la conversation (``assigned_to = None``).
-
-    Jenny recommence alors à répondre automatiquement aux prochains messages
-    du client sur ce fil. Idempotent.
-    """
+    """rend la main à Jenny."""
     conv = await db.get(Conversation, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
@@ -878,12 +831,7 @@ async def assign_conversation(
     db: DbSession,
     principal: CurrentUser,
 ) -> AssignmentResult:
-    """Attribue la conversation à un membre (``assignee`` = email) ou la libère.
-
-    Tant qu'une conversation est attribuée, Jenny ne répond plus
-    automatiquement (un humain en a la charge). ``assignee = null`` la libère
-    (équivalent à « rendre la main à Jenny »).
-    """
+    """attribue ou libère la conversation."""
     conv = await db.get(Conversation, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
@@ -900,7 +848,7 @@ async def assign_conversation(
         entity_id=conv.id,
         summary=f"Conversation attribuée à {new_assignee or 'personne'}",
     )
-    # Notifie l'agent ciblé, sauf s'il s'attribue lui-même la conversation (#15).
+    # notifie l'agent ciblé (pas soi-même)
     notif = None
     if new_assignee and new_assignee != actor:
         cust = await db.scalar(
@@ -952,7 +900,7 @@ async def update_conversation_status(
     db: DbSession,
     principal: CurrentUser,
 ) -> StatusResult:
-    """Change le statut d'une conversation : ouverte, résolue (closed) ou archivée."""
+    """change le statut."""
     conv = await db.get(Conversation, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
@@ -993,7 +941,7 @@ async def update_conversation_priority(
     db: DbSession,
     principal: CurrentUser,
 ) -> PriorityResult:
-    """Change la priorité d'une conversation (low/medium/high/critical) (#4)."""
+    """change la priorité."""
     conv = await db.get(Conversation, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
@@ -1036,11 +984,11 @@ async def update_conversation_tags(
     db: DbSession,
     principal: CurrentUser,
 ) -> TagsResult:
-    """Remplace les étiquettes d'une conversation (liste de chaînes)."""
+    """remplace les étiquettes."""
     conv = await db.get(Conversation, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
-    # Normalise : trim, dédoublonne en gardant l'ordre, ignore les vides.
+    # nettoie et dédoublonne
     seen: set[str] = set()
     cleaned: list[str] = []
     for raw in body.tags:
@@ -1082,8 +1030,7 @@ async def snooze_conversation(
     db: DbSession,
     principal: CurrentUser,
 ) -> SnoozeResult:
-    """Reporte (snooze) une conversation : masquée de la vue active jusqu'à
-    ``now + minutes``. ``minutes = null`` annule le report."""
+    """reporte (snooze) une conversation."""
     conv = await db.get(Conversation, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
@@ -1109,7 +1056,7 @@ async def summarize_conversation(
     db: DbSession,
     principal: CurrentUser,
 ) -> SummaryResult:
-    """Génère (via LLM) un résumé concis de la conversation et le persiste."""
+    """résumé de la conversation (LLM)."""
     conv = await db.get(Conversation, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
@@ -1131,7 +1078,7 @@ async def summarize_conversation(
         if m.content_text
     )
     rg = getattr(get_engine(), "response_generator", None)
-    provider = getattr(rg, "llm", None)  # réutilise le provider LLM configuré
+    provider = getattr(rg, "llm", None)  # réutilise le provider LLM
     summary = ""
     if provider is not None:
         out = await provider.generate(
@@ -1141,7 +1088,7 @@ async def summarize_conversation(
         )
         summary = (out.content or "").strip()
     if not summary:
-        # Repli sans LLM : aperçu du premier message client.
+        # repli sans LLM
         first_in = next((m.content_text for m in msgs if m.direction == "inbound"), "")
         summary = (first_in or "Conversation")[:200]
 
@@ -1168,12 +1115,7 @@ async def merge_conversations(
     db: DbSession,
     principal: CurrentUser,
 ) -> MergeResult:
-    """Fusionne la conversation ``source_id`` dans ``conversation_id`` (cible) (#10).
-
-    Tous les messages de la source sont rattachés à la cible (ordre chronologique
-    préservé), les étiquettes fusionnées, les compteurs recalculés ; la source est
-    archivée. Utile quand un même client a écrit via deux fils distincts.
-    """
+    """fusionne source dans cible."""
     bid = principal.business_id
     target = await db.get(Conversation, conversation_id)
     if target is None or target.business_id != bid:
@@ -1191,7 +1133,7 @@ async def merge_conversations(
     )
     moved = res.rowcount or 0
 
-    # Recalcule les compteurs et le dernier message de la cible.
+    # recalcule les compteurs cible
     target.message_count = (
         await db.scalar(
             select(func.count(Message.id)).where(Message.conversation_id == target.id)
@@ -1209,7 +1151,7 @@ async def merge_conversations(
         target.last_message_at = last.created_at
         target.last_message_preview = (last.content_text or "")[:200]
 
-    # Fusionne les étiquettes (union, sans doublon, ordre stable).
+    # fusionne les étiquettes
     merged_tags = list(target.tags or [])
     seen = {t.lower() for t in merged_tags}
     for t in source.tags or []:

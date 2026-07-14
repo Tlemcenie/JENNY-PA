@@ -104,7 +104,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 const PAGE = 30;
 
-// Priorités (#4) — ordre du plus urgent au moins urgent pour le sélecteur.
+// priorités, urgent d'abord
 const PRIORITIES: { value: PriorityLevel; label: string; cls: string }[] = [
   { value: "critical", label: "Critique", cls: "text-jenny-error" },
   { value: "high", label: "Haute", cls: "text-jenny-warning" },
@@ -118,7 +118,7 @@ const SORTS: { value: ConversationSort; label: string }[] = [
   { value: "priority", label: "Priorité" },
 ];
 
-// Groupe de date d'une conversation (#3) — libellé de section pour la liste.
+// libellé du groupe
 function dateGroupLabel(dateStr: string | null): string {
   if (!dateStr) return "Plus ancien";
   const d = new Date(dateStr);
@@ -129,7 +129,7 @@ function dateGroupLabel(dateStr: string | null): string {
   return "Plus ancien";
 }
 
-// Réponses rapides proposées à l'agent (cliquables → remplissent le champ).
+// réponses rapides cliquables
 const QUICK_REPLIES = [
   "Bonjour ! Comment puis-je vous aider ?",
   "Je vérifie et je reviens vers vous tout de suite.",
@@ -145,12 +145,10 @@ interface Segment {
   mineOnly: boolean;
 }
 
-// Vue active des pastilles de la refonte (présentation uniquement : pilote les
-// filtres réels via leurs setters, ne remplace aucune logique de chargement).
+// pastille active
 type InboxView = "all" | "unread" | "you" | "jenny";
 
-// Mappe les canaux de l'app vers ceux des primitives de la refonte
-// (ChannelAvatar/ChannelChip). « form » et l'inconnu retombent sur « email ».
+// canal design
 type DesignChannel = "whatsapp" | "instagram" | "email" | "twitter";
 function designChannel(ch: string): DesignChannel {
   if (ch === "whatsapp" || ch === "instagram" || ch === "email" || ch === "twitter") {
@@ -159,10 +157,7 @@ function designChannel(ch: string): DesignChannel {
   return "email";
 }
 
-// Statut visuel d'une conversation pour le StatusBadge de la refonte :
-//  - fermée/archivée → « RÉSOLU »
-//  - reprise humaine (assignée) OU en attente de réponse → « → VOUS »
-//  - sinon (Jenny gère) → « JENNY »
+// statut du badge
 function conversationStatusKind(c: {
   status: string;
   assigned_to?: string | null;
@@ -173,14 +168,14 @@ function conversationStatusKind(c: {
   return "jenny";
 }
 
-// Durée d'attente compacte (« 2h », « 35min », « 1j ») pour le badge « en retard ».
+// durée d'attente compacte
 function formatWaitShort(minutes: number): string {
   if (minutes >= 1440) return `${Math.floor(minutes / 1440)}j`;
   if (minutes >= 60) return `${Math.floor(minutes / 60)}h`;
   return `${minutes}min`;
 }
 
-// Heure courte « 14:32 » à partir d'une date ISO (axe temporel des lignes).
+// heure courte
 function shortTime(dateStr: string | null): string {
   if (!dateStr) return "";
   const d = new Date(dateStr);
@@ -216,7 +211,7 @@ export default function ConversationsPage() {
   const [suggesting, setSuggesting] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [suggestVariants, setSuggestVariants] = useState<string[]>([]);
-  // Co-pilote (#43) : brouillon proposé par Jenny au dernier message client.
+  // co-pilote
   const [copilotBusy, setCopilotBusy] = useState(false);
   const [copilot, setCopilot] = useState<CopilotSuggestion | null>(null);
   const [typingConvId, setTypingConvId] = useState<string | null>(null);
@@ -225,7 +220,7 @@ export default function ConversationsPage() {
   const [threadSearchOpen, setThreadSearchOpen] = useState(false);
   const replyRef = useRef<HTMLTextAreaElement>(null);
   const [customerPanelId, setCustomerPanelId] = useState<string | null>(null);
-  // Planification d'un RDV depuis la conversation ouverte (#27).
+  // planifier un rdv
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [live, setLive] = useState(false);
   const { user } = useAuth();
@@ -234,26 +229,25 @@ export default function ConversationsPage() {
   const [cannedManagerOpen, setCannedManagerOpen] = useState(false);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [mineOnly, setMineOnly] = useState(false);
-  // Pastille de filtre active dans la refonte (Tous / Non lus / → Vous / Jenny).
+  // filtre actif
   const [inboxView, setInboxView] = useState<InboxView>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
   const [segments, setSegments] = useState<Segment[]>([]);
-  // Tri + filtre priorité (#4).
+  // tri + priorité
   const [sortBy, setSortBy] = useState<ConversationSort>("recent");
   const [priorityFilter, setPriorityFilter] = useState<PriorityLevel | null>(null);
-  // Sélection multiple (#1).
+  // sélection multiple
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
-  // Fusion (#10).
+  // fusion
   const [mergeOpen, setMergeOpen] = useState(false);
-  // Réponse rapide depuis la liste (#2).
+  // réponse rapide en liste
   const [quickReplyId, setQuickReplyId] = useState<string | null>(null);
   const [quickReplyText, setQuickReplyText] = useState("");
   const [quickReplySending, setQuickReplySending] = useState(false);
-  // Questions en attente de la conversation ouverte (#56) — mises de côté par
-  // Jenny faute de réponse ; le coiffeur y répond ou les ignore.
+  // questions en attente
   const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
   const [pqAnswerOpenId, setPqAnswerOpenId] = useState<string | null>(null);
   const [pqAnswerText, setPqAnswerText] = useState("");
@@ -306,7 +300,7 @@ export default function ConversationsPage() {
     try {
       setCanned(await listCannedResponses());
     } catch {
-      // silencieux : les réponses enregistrées sont un confort, pas un bloquant
+      // silencieux, pas bloquant
     }
   }, []);
 
@@ -314,8 +308,7 @@ export default function ConversationsPage() {
     void loadCanned();
   }, [loadCanned]);
 
-  // Rafraîchissement silencieux de la liste (sans skeleton ni perte de focus),
-  // déclenché par les événements temps réel ou le poll de secours.
+  // refresh silencieux
   const silentRefresh = useCallback(async () => {
     try {
       const params: {
@@ -340,7 +333,7 @@ export default function ConversationsPage() {
       setTotal(data.total);
       setConversations(data.conversations);
     } catch {
-      // silencieux : un échec ne doit pas perturber l'écran
+      // silencieux
     }
   }, [selectedStatus, selectedChannel, search, mineOnly, tagFilter, priorityFilter, sortBy]);
 
@@ -389,38 +382,35 @@ export default function ConversationsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStatus, selectedChannel, mineOnly, tagFilter, priorityFilter, sortBy]);
 
-  // Recherche serveur (debounce 350 ms) : cherche dans TOUTES les conversations.
+  // recherche, debounce 350ms
   useEffect(() => {
     const t = setTimeout(() => fetchConversations(true), 350);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  // Handler temps réel gardé dans une ref : capture les valeurs fraîches
-  // (filtres, conversation ouverte) sans reconnecter le flux SSE à chaque rendu.
+  // handler temps réel
   const realtimeHandlerRef = useRef<(event: RealtimeEvent) => void>(() => {});
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   realtimeHandlerRef.current = (event: RealtimeEvent) => {
-    // « processing » = Jenny génère une réponse → indicateur de frappe, pas de refetch.
+    // jenny rédige
     if (event.kind === "processing") {
       if (event.conversation_id && event.conversation_id === selectedId) {
         setTypingConvId(event.conversation_id);
       }
       return;
     }
-    // Coalesce les rafales d'événements en un seul rafraîchissement (400 ms).
+    // regroupe les rafales
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     refreshTimerRef.current = setTimeout(() => void silentRefresh(), 400);
-    // Si l'événement concerne la conversation ouverte, rafraîchir son détail
-    // (et lever l'indicateur de frappe : la réponse est arrivée).
+    // refresh le détail
     if (event.conversation_id && event.conversation_id === selectedId) {
       setTypingConvId(null);
       getConversation(selectedId).then(setDetail).catch(() => {});
     }
   };
 
-  // Flux temps réel (SSE) : abonnement unique au montage. Les nouveaux messages,
-  // réponses et changements de statut remontent instantanément, sans polling.
+  // abonnement sse
   useEffect(() => {
     const unsubscribe = subscribeToConversationEvents(
       (event) => realtimeHandlerRef.current(event),
@@ -432,9 +422,7 @@ export default function ConversationsPage() {
     };
   }, []);
 
-  // Filet de sécurité : un rafraîchissement lent (60 s) couvre une éventuelle
-  // coupure du flux SSE. Bien plus léger que l'ancien poll à 15 s. On évite de
-  // solliciter l'API quand l'onglet est en arrière-plan.
+  // filet de sécurité
   useEffect(() => {
     const interval = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
@@ -443,7 +431,7 @@ export default function ConversationsPage() {
     return () => clearInterval(interval);
   }, [silentRefresh]);
 
-  // Au retour sur l'onglet, on rattrape ce qui a pu être manqué pendant l'absence.
+  // rattrapage au retour
   useEffect(() => {
     const onVisible = () => {
       if (!document.hidden) void silentRefresh();
@@ -461,12 +449,12 @@ export default function ConversationsPage() {
     setTypingConvId(null);
     setThreadSearch("");
     setThreadSearchOpen(false);
-    // Questions en attente (#56) : on repart de zéro puis on (re)charge pour ce fil.
+    // recharge les questions
     setPendingQuestions([]);
     setPqAnswerOpenId(null);
     setPqAnswerText("");
     void loadPendingQuestions(id);
-    // Restaure un éventuel brouillon sauvegardé pour cette conversation.
+    // restaure le brouillon
     let draft = "";
     try {
       draft = localStorage.getItem(`jenny-draft-${id}`) || "";
@@ -484,18 +472,17 @@ export default function ConversationsPage() {
     }
   };
 
-  // Ouverture directe via ?open=<id> (depuis la fiche client, par exemple).
+  // ouverture via ?open=
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("open");
     if (id) {
       handleSelect(id);
-      window.history.replaceState({}, "", "/conversations"); // évite la ré-ouverture au refresh
+      window.history.replaceState({}, "", "/conversations"); // évite la ré-ouverture
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Ouverture depuis le centre de notifications quand on est déjà sur la page
-  // (pas de remontage → on écoute un événement window dispatché par la cloche).
+  // depuis les notifications
   useEffect(() => {
     const onOpen = (e: Event) => {
       const id = (e as CustomEvent<string>).detail;
@@ -526,7 +513,7 @@ export default function ConversationsPage() {
       setReplyText("");
       setSuggestVariants([]);
       setCopilot(null);
-      fetchConversations(true); // rafraîchit l'aperçu dans la liste
+      fetchConversations(true); // rafraîchit l'aperçu
       toast.success(
         res.delivered ? "Réponse envoyée au client" : "Réponse enregistrée (non livrée)"
       );
@@ -553,12 +540,10 @@ export default function ConversationsPage() {
     }
   };
 
-  // Co-pilote (#43) : Jenny propose un BROUILLON de réponse au dernier message
-  // ENTRANT du client. Le brouillon n'est jamais envoyé automatiquement —
-  // l'agent l'insère dans le champ de réponse (« Utiliser ») puis l'édite.
+  // co-pilote
   const handleCopilot = async () => {
     if (!detail || copilotBusy) return;
-    // Dernier message client (direction "inbound") avec du texte.
+    // dernier message client
     const lastInbound = [...detail.messages]
       .reverse()
       .find((m) => m.direction === "inbound" && (m.content || "").trim());
@@ -582,7 +567,7 @@ export default function ConversationsPage() {
     }
   };
 
-  // Insère le brouillon du co-pilote dans le champ de réponse (éditable avant envoi).
+  // insère le brouillon
   const useCopilotDraft = () => {
     if (!copilot) return;
     setReplyText(copilot.suggestion);
@@ -590,7 +575,7 @@ export default function ConversationsPage() {
     replyRef.current?.focus();
   };
 
-  // Questions en attente (#56) : charge les questions ouvertes de la conversation.
+  // charge les questions
   const loadPendingQuestions = useCallback(async (conversationId: string) => {
     try {
       const { questions } = await listPendingQuestions({
@@ -599,18 +584,18 @@ export default function ConversationsPage() {
       });
       setPendingQuestions(questions);
     } catch {
-      // silencieux : l'absence de questions en attente ne doit pas gêner l'écran
+      // silencieux
       setPendingQuestions([]);
     }
   }, []);
 
-  // Ouvre/ferme le mini-formulaire de réponse pour une question en attente.
+  // ouvre/ferme le formulaire
   const togglePendingAnswer = (id: string) => {
     setPqAnswerOpenId((cur) => (cur === id ? null : id));
     setPqAnswerText("");
   };
 
-  // Répond à une question en attente → la retire de la liste après succès.
+  // répond puis retire
   const handleAnswerPending = async (id: string) => {
     const answer = pqAnswerText.trim();
     if (!answer || pqBusyId) return;
@@ -628,7 +613,7 @@ export default function ConversationsPage() {
     }
   };
 
-  // Ignore une question en attente → la retire de la liste après succès.
+  // ignore puis retire
   const handleDismissPending = async (id: string) => {
     if (pqBusyId) return;
     setPqBusyId(id);
@@ -644,7 +629,7 @@ export default function ConversationsPage() {
     }
   };
 
-  // Raccourcis clavier : j/k naviguent la liste, r répond, Échap ferme le détail.
+  // raccourcis clavier
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
@@ -676,7 +661,7 @@ export default function ConversationsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations, selectedId]);
 
-  // Sauvegarde automatique du brouillon par conversation (localStorage).
+  // sauvegarde auto
   useEffect(() => {
     if (!selectedId) return;
     try {
@@ -775,7 +760,7 @@ export default function ConversationsPage() {
   const handleTags = async (tags: string[]) => {
     if (!detail) return;
     const previous = detail.tags;
-    // Mise à jour optimiste : l'UI réagit instantanément, rollback si erreur.
+    // maj optimiste
     setDetail((d) => (d ? { ...d, tags } : d));
     try {
       const res = await updateConversationTags(detail.id, tags);
@@ -787,7 +772,7 @@ export default function ConversationsPage() {
     }
   };
 
-  // Priorité (#4) : mise à jour optimiste avec rollback.
+  // priorité, maj optimiste
   const handlePriority = async (priority: PriorityLevel) => {
     if (!detail) return;
     const previous = detail.priority_level;
@@ -801,7 +786,7 @@ export default function ConversationsPage() {
     }
   };
 
-  // Fusion (#10) : fusionne `sourceId` dans la conversation ouverte (cible).
+  // fusion dans le fil ouvert
   const handleMerge = async (sourceId: string) => {
     if (!detail || sourceId === detail.id) return;
     try {
@@ -815,7 +800,7 @@ export default function ConversationsPage() {
     }
   };
 
-  // Sélection multiple (#1).
+  // sélection multiple
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -854,18 +839,17 @@ export default function ConversationsPage() {
     setTagInput("");
   };
 
-  // Substitue les variables des réponses enregistrées ({{client}}, {{boutique}}…).
+  // remplace les variables
   const applyVars = (text: string): string =>
     text
       .replace(/\{\{\s*client\s*\}\}/gi, detail?.customer_name?.split(" ")[0] || "")
       .replace(/\{\{\s*nom\s*\}\}/gi, detail?.customer_name || "")
       .replace(/\{\{\s*boutique\s*\}\}/gi, user?.business_name || "");
 
-  // La recherche est faite côté serveur (debounce) → on affiche la liste telle quelle.
+  // recherche côté serveur
   const filtered = conversations;
 
-  // Candidats à la fusion (#10) : on privilégie les autres fils du même client,
-  // sinon les autres conversations chargées (l'agent choisit lequel fusionner).
+  // candidats à la fusion
   const mergeCandidates = detail
     ? (() => {
         const same = conversations.filter(
@@ -882,13 +866,12 @@ export default function ConversationsPage() {
       })()
     : [];
 
-  // Callbacks stables pour la liste mémoïsée (#2) : évite de re-rendre toutes
-  // les lignes quand un état sans rapport change (ex. frappe dans le composer).
+  // callbacks stables pour la liste
   const handleSelectRef = useRef<(id: string) => void>(() => {});
   handleSelectRef.current = handleSelect;
   const onSelectRow = useCallback((id: string) => handleSelectRef.current(id), []);
   const onTagRow = useCallback((t: string) => setTagFilter(t), []);
-  // Ouvre/ferme le mini-composer de réponse rapide pour une ligne (#2).
+  // ouvre/ferme la réponse rapide
   const onQuickReplyRow = useCallback((id: string) => {
     setQuickReplyId((cur) => (cur === id ? null : id));
     setQuickReplyText("");
@@ -914,7 +897,7 @@ export default function ConversationsPage() {
     }
   };
 
-  // Virtualisation de la liste (#14) : seules les lignes visibles sont rendues.
+  // virtualise la liste
   const listScrollRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
     count: filtered.length,
@@ -923,7 +906,7 @@ export default function ConversationsPage() {
     overscan: 8,
   });
 
-  // Recherche locale dans le fil de la conversation ouverte (#16).
+  // recherche dans le fil
   const threadMessages = detail
     ? threadSearch.trim()
       ? detail.messages.filter((m) =>
@@ -935,15 +918,12 @@ export default function ConversationsPage() {
   const hasMore = conversations.length < total;
   const awaitingCount = conversations.filter((c) => c.awaiting_reply).length;
   const overdueCount = conversations.filter((c) => c.overdue).length;
-  // Conversations encore gérées par Jenny (non fermées, non reprises par un humain),
-  // parmi celles chargées — sert au compteur de la pastille « Jenny ».
+  // conversations gérées par jenny
   const jennyCount = conversations.filter(
     (c) => c.status !== "closed" && c.status !== "archived" && !c.awaiting_reply
   ).length;
 
-  // Pastilles de filtre de la refonte (Tous / Non lus / → Vous / Jenny).
-  // Chacune pilote l'état RÉEL déjà en place (statut, « mes conversations »…) ;
-  // les compteurs sont dérivés des données chargées (honnêtes, sans invention).
+  // pastilles de filtre
   const inboxFilters: {
     key: InboxView;
     label: string;
@@ -1000,21 +980,19 @@ export default function ConversationsPage() {
       <div
         className={cn(
           "relative flex-col border-r border-jenny-divider bg-jenny-surface min-w-0",
-          // Mobile : on n'affiche jamais la liste et le détail côte à côte.
-          // Quand une conversation est ouverte, la liste cède la place au détail.
-          // Desktop : largeur fixe (392px, comme la maquette) ; le détail remplit le reste.
+          // responsive liste/détail
           selectedId
             ? "hidden md:flex md:w-[392px]"
             : "flex flex-1 md:flex-none md:w-[392px]"
         )}
       >
-        {/* En-tête de la refonte : bandeau « pilote automatique » + pastilles */}
+        {/* en-tête */}
         <motion.div
           variants={fadeInUp}
           initial="hidden"
           animate="show"
         >
-          {/* Bandeau auto-pilote : Jenny gère N conversations, X attendent. */}
+          {/* bandeau auto-pilote */}
           <button
             type="button"
             onClick={() => inboxFilters[2].apply()}
@@ -1050,7 +1028,7 @@ export default function ConversationsPage() {
             <ChevronRight style={{ width: 16, height: 16, color: "var(--coral)" }} />
           </button>
 
-          {/* Pastilles de filtre (Tous / Non lus / → Vous / Jenny) */}
+          {/* pastilles de filtre */}
           <div style={{ padding: "12px 16px", display: "flex", gap: 6, overflow: "auto" }}>
             {inboxFilters.map((f) => {
               const active = inboxView === f.key;
@@ -1097,9 +1075,7 @@ export default function ConversationsPage() {
           </div>
         </motion.div>
 
-        {/* Filtres avancés (recherche, canal, statut, tri, priorité, sélection,
-            segments) — toute la logique existante, repliée pour épouser la
-            sobriété de la refonte sans rien perdre. */}
+        {/* filtres avancés */}
         <motion.details
           variants={fadeInUp}
           initial="hidden"
@@ -1234,7 +1210,7 @@ export default function ConversationsPage() {
             </button>
           </div>
 
-          {/* Tri + priorité + sélection multiple (#1/#4) */}
+          {/* tri + priorité + sélection */}
           <div className="flex items-center gap-2 flex-wrap">
             <ArrowUpDown className="w-3.5 h-3.5 text-jenny-text-secondary flex-shrink-0" />
             <select
@@ -1297,7 +1273,7 @@ export default function ConversationsPage() {
             </button>
           </div>
 
-          {/* Segments (filtres enregistrés) */}
+          {/* segments enregistrés */}
           <div className="flex items-center gap-1.5 flex-wrap">
             {segments.map((s) => (
               <span
@@ -1331,7 +1307,7 @@ export default function ConversationsPage() {
           </div>
         </motion.details>
 
-        {/* Bandeau de filtre par étiquette */}
+        {/* filtre par étiquette */}
         {tagFilter && (
           <div className="flex items-center justify-between gap-2 px-4 py-2 bg-jenny-coral/5 border-b border-jenny-divider">
             <span className="flex items-center gap-1.5 text-[11px] text-jenny-text-secondary min-w-0">
@@ -1375,8 +1351,7 @@ export default function ConversationsPage() {
                 {rowVirtualizer.getVirtualItems().map((vi) => {
                   const conv = filtered[vi.index];
                   const prev = vi.index > 0 ? filtered[vi.index - 1] : null;
-                  // En-tête de groupe de date (#3) — uniquement en tri
-                  // chronologique (en tri par priorité, la date n'est pas l'axe).
+                  // en-tête de groupe (date)
                   const group = dateGroupLabel(conv.last_message_at || conv.created_at);
                   const showHeader =
                     sortBy !== "priority" &&
@@ -1653,7 +1628,7 @@ export default function ConversationsPage() {
           )}
         </div>
 
-        {/* Barre d'actions groupées (#1) */}
+        {/* actions groupées */}
         {selectMode && selectedIds.size > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 12 }}
@@ -1740,8 +1715,7 @@ export default function ConversationsPage() {
         )}
       </div>
 
-      {/* Détail — pane vide (desktop) quand aucune conversation n'est ouverte,
-          pour conserver la grille deux colonnes de la maquette. */}
+      {/* détail : pane vide */}
       {!selectedId && (
         <div
           className="hidden md:flex flex-1 flex-col items-center justify-center min-w-0 text-center px-8"
@@ -1827,8 +1801,7 @@ export default function ConversationsPage() {
                       <span className="jbadge jbadge--warn">ESCALADÉE</span>
                     )}
                   </div>
-                  {/* Ligne méta — uniquement des champs réels (canal, statut, intention,
-                      nb de messages, date de création). Aucune donnée inventée. */}
+                  {/* ligne méta */}
                   <div
                     className="flex items-center gap-2 flex-wrap"
                     style={{ fontSize: 11.5, color: "var(--text-2)", marginTop: 3 }}
@@ -1887,7 +1860,7 @@ export default function ConversationsPage() {
                       ))}
                     </select>
                   </div>
-                  {/* Étiquettes */}
+                  {/* étiquettes */}
                   <div className="flex items-center gap-1.5 flex-wrap mt-2">
                     <Tag className="w-3.5 h-3.5 text-jenny-text-secondary flex-shrink-0" />
                     {detail.tags.map((t) => (
@@ -1932,7 +1905,7 @@ export default function ConversationsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
-                  {/* Action primaire de la refonte : « Demander à Jenny » (co-pilote réel). */}
+                  {/* action primaire */}
                   <button
                     type="button"
                     onClick={handleCopilot}
@@ -2098,7 +2071,7 @@ export default function ConversationsPage() {
                 </div>
               </div>
 
-              {/* Barre de recherche dans le fil */}
+              {/* recherche dans le fil */}
               {threadSearchOpen && (
                 <div className="px-4 py-2 border-b border-jenny-divider bg-jenny-bg/50">
                   <div className="relative">
@@ -2128,8 +2101,7 @@ export default function ConversationsPage() {
                   className="mx-auto flex flex-col"
                   style={{ maxWidth: 640, gap: 16 }}
                 >
-                {/* Questions en attente (#56) — Jenny les a mises de côté faute de
-                    savoir répondre. Affiché uniquement s'il y en a, sans gêner le fil. */}
+                {/* questions en attente */}
                 {pendingQuestions.length > 0 && !threadSearch && (
                   <Card className="border-jenny-warning/30 bg-jenny-warning/[0.06] p-4">
                     <div className="flex items-center gap-2 mb-3">
@@ -2236,7 +2208,7 @@ export default function ConversationsPage() {
                 ) : (
                   threadMessages.map((m, idx) => {
                     const outbound = m.direction === "outbound";
-                    // Séparateur de date (style refonte) au changement de jour.
+                    // séparateur de date
                     const prevMsg = idx > 0 ? threadMessages[idx - 1] : null;
                     const dayLabel = new Date(m.created_at).toLocaleDateString("fr-FR", {
                       weekday: "long",
@@ -2304,10 +2276,7 @@ export default function ConversationsPage() {
                             {m.sender_name ? `${m.sender_name} · ` : ""}
                             <RelativeTime date={m.created_at} />
                           </div>
-                          {/* Contrôle qualité : le gérant note la VRAIE réponse de
-                              Jenny (👍/👎) pour alimenter la satisfaction et la
-                              boucle d'amélioration. Seulement sur les réponses de
-                              Jenny (outbound) non vides. */}
+                          {/* note la réponse de jenny */}
                           {outbound && (m.content || "").trim() && (
                             <div style={{ display: "flex", justifyContent: "flex-end" }}>
                               <FeedbackButtons
@@ -2338,7 +2307,7 @@ export default function ConversationsPage() {
                 </div>
               </div>
 
-              {/* Composer de réponse (reprise humaine) */}
+              {/* composer de réponse */}
               <div
                 className="border-t border-jenny-divider"
                 style={{ padding: "14px 28px 18px", background: "var(--surface)" }}
@@ -2465,9 +2434,7 @@ export default function ConversationsPage() {
                     </button>
                   </div>
                 )}
-                {/* Dock de saisie (style refonte) : emoji + zone de texte + actions
-                    Jenny (co-pilote/suggestion) + envoi corail. Toute la logique
-                    d'envoi/suggestion existante est conservée. */}
+                {/* dock de saisie */}
                 <div
                   className="flex items-end gap-2"
                   style={{
@@ -2554,7 +2521,7 @@ export default function ConversationsPage() {
         </motion.div>
       )}
 
-      {/* Fiche client 360° (tiroir) */}
+      {/* fiche client */}
       <CustomerPanel
         customerId={customerPanelId}
         onClose={() => setCustomerPanelId(null)}
@@ -2564,14 +2531,14 @@ export default function ConversationsPage() {
         }}
       />
 
-      {/* Gestion des réponses enregistrées */}
+      {/* réponses enregistrées */}
       <CannedManager
         open={cannedManagerOpen}
         onClose={() => setCannedManagerOpen(false)}
         onChanged={loadCanned}
       />
 
-      {/* Planifier un RDV depuis la conversation ouverte (#27) */}
+      {/* planifier un rdv */}
       <ScheduleAppointmentDialog
         open={scheduleOpen}
         onClose={() => setScheduleOpen(false)}

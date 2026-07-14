@@ -26,11 +26,9 @@ import { useToast } from "@/components/ui/toast";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { cn } from "@/lib/utils";
 
-// « Cerveau de Jenny » — page de configuration de la personnalité (DA handoff,
-// recréation de l'écran `ScreenConfig`). Le chrome (Sidebar + Topbar) est fourni
-// par le layout `(dashboard)` ; cette page ne rend que la zone de contenu.
+// page config de la personnalité
 
-// ── Tons disponibles (base, puis affinage) ──
+// tons dispo
 const TONES = [
   { id: "pro", name: "Pro", desc: "Posé, courtois" },
   { id: "cool", name: "Cool", desc: "Décontracté, jeune" },
@@ -40,7 +38,7 @@ const TONES = [
 
 type ToneId = (typeof TONES)[number]["id"];
 
-// Curseurs 0–100 (le tutoiement est géré à part, comme un toggle).
+// curseurs 0–100
 const SLIDER_DEFS = [
   { key: "formel", label: "Formel ↔ Décontracté" },
   { key: "concision", label: "Concis ↔ Détaillé" },
@@ -56,8 +54,7 @@ interface Rule {
   on: boolean;
 }
 
-// Valeurs par défaut quand le business n'a pas encore de persona enregistrée :
-// elles reflètent le mockup pour que l'écran « parle » dès la première visite.
+// valeurs par défaut
 const DEFAULT_SLIDERS: Sliders = { formel: 70, concision: 45, vente: 60 };
 const DEFAULT_RULES: Rule[] = [
   { label: "Toujours répondre en français sauf si le client écrit en anglais", on: true },
@@ -74,8 +71,7 @@ function extractError(err: unknown, fallback: string): string {
   return fallback;
 }
 
-// La persona stocke des clés libres (#brain) ; on lit `sector` en tant qu'extra
-// sans casser le type `JennyPersona`.
+// lit sector en extra
 function readSector(persona: JennyPersona | null): string {
   if (!persona) return "";
   const sector = (persona as { sector?: unknown }).sector;
@@ -85,25 +81,24 @@ function readSector(persona: JennyPersona | null): string {
 export default function BrainPage() {
   const toast = useToast();
 
-  // ── État de chargement ──
+  // état de chargement
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Tests de cohérence : vrais scores du dernier banc d'essai (null = pas encore lancé).
+  // scores du banc d'essai
   const [coherence, setCoherence] = useState<{ l: string; v: number }[] | null>(null);
 
-  // ── 01 · Identité ──
+  // identité
   const [name, setName] = useState("");
   const [sector, setSector] = useState("");
   const [description, setDescription] = useState("");
 
-  // ── 02 · Ton de voix ──
+  // ton de voix
   const [tone, setTone] = useState<ToneId>("cool");
   const [sliders, setSliders] = useState<Sliders>(DEFAULT_SLIDERS);
   const [tutoiement, setTutoiement] = useState(true);
-  // Vocabulaire par défaut ADAPTÉ AU MÉTIER (ces mots sont injectés dans les
-  // prompts de Jenny : un vocabulaire hors-sujet fuit dans ses réponses).
+  // vocabulaire par défaut
   const [vocab, setVocab] = useState<string[]>([
     "le salon",
     "prestation",
@@ -112,22 +107,22 @@ export default function BrainPage() {
   ]);
   const [vocabDraft, setVocabDraft] = useState("");
 
-  // ── 03 · Règles d'or ──
+  // règles d'or
   const [rules, setRules] = useState<Rule[]>(DEFAULT_RULES);
   const [ruleDraft, setRuleDraft] = useState("");
   const [addingRule, setAddingRule] = useState(false);
 
-  // ── 04 · Acompte anti-no-show ──
+  // acompte anti no-show
   const [depositEnabled, setDepositEnabled] = useState(false);
   const [depositPercent, setDepositPercent] = useState(30);
   const [depositMinCents, setDepositMinCents] = useState(1000);
 
-  // ── 05 · Rappels & fidélité ──
+  // rappels & fidélité
   const [reminderLeadMinutes, setReminderLeadMinutes] = useState(120);
   const [dayReminderLeadHours, setDayReminderLeadHours] = useState(24);
   const [loyaltyThreshold, setLoyaltyThreshold] = useState(0);
 
-  // ── 06 · Fermetures exceptionnelles (état local, hors autosave) ──
+  // fermetures exceptionnelles
   const [closures, setClosures] = useState<Closure[]>([]);
   const [closuresLoading, setClosuresLoading] = useState(true);
   const [closureStart, setClosureStart] = useState("");
@@ -135,11 +130,10 @@ export default function BrainPage() {
   const [closureReason, setClosureReason] = useState("");
   const [closureSubmitting, setClosureSubmitting] = useState(false);
 
-  // Garde le premier chargement pour éviter un autosave au montage.
+  // évite l'autosave au montage
   const hydrated = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Empreinte du dernier état persisté : évite qu'un écho serveur (nouveaux
-  // objets renvoyés par l'API) ne relance un autosave en boucle.
+  // empreinte du dernier état sauvé
   const lastSaved = useRef<string>("");
 
   const applyBusiness = useCallback((b: BusinessConfig) => {
@@ -228,8 +222,7 @@ export default function BrainPage() {
       setSaving(true);
       try {
         const updated = await updateBusiness(payload);
-        // On fige l'empreinte AVANT de réappliquer la réponse serveur, pour que
-        // les nouveaux objets renvoyés ne déclenchent pas un nouvel autosave.
+        // fige l'empreinte avant de réappliquer
         lastSaved.current = JSON.stringify(payload);
         applyBusiness(updated);
         if (!opts.silent) toast.success("Personnalité de Jenny enregistrée.");
@@ -242,16 +235,16 @@ export default function BrainPage() {
     [buildPayload, applyBusiness, toast]
   );
 
-  // ── Autosave débouncé (1,2 s après la dernière modification) ──
+  // autosave débouncé
   useEffect(() => {
     if (loading || loadError) return;
     const snapshot = JSON.stringify(buildPayload());
     if (!hydrated.current) {
       hydrated.current = true;
-      lastSaved.current = snapshot; // état initial chargé = déjà « sauvé »
+      lastSaved.current = snapshot; // déjà sauvé
       return;
     }
-    if (snapshot === lastSaved.current) return; // simple écho serveur → on ignore
+    if (snapshot === lastSaved.current) return; // écho serveur, on ignore
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       void persist({ silent: true });
@@ -259,7 +252,7 @@ export default function BrainPage() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-    // On dépend des valeurs de formulaire (via buildPayload), pas de `persist`.
+    // dépend des valeurs du form
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     name,
@@ -278,7 +271,7 @@ export default function BrainPage() {
     loyaltyThreshold,
   ]);
 
-  // ── Fermetures exceptionnelles : chargement + actions (état local) ──
+  // fermetures : chargement + actions
   const loadClosures = useCallback(async () => {
     setClosuresLoading(true);
     try {
@@ -294,8 +287,7 @@ export default function BrainPage() {
     void loadClosures();
   }, [loadClosures]);
 
-  // Tests de cohérence = critères réels du dernier banc d'essai (best-effort :
-  // si aucune éval n'existe, on n'affiche pas de chiffres inventés).
+  // critères du banc d'essai
   useEffect(() => {
     let alive = true;
     const LABELS: Record<string, string> = {
@@ -317,7 +309,7 @@ export default function BrainPage() {
         }));
         if (bars.length) setCoherence(bars);
       } catch {
-        // silencieux : le panneau affiche alors un repli « lance le banc d'essai »
+        // silencieux
       }
     })();
     return () => {
@@ -356,13 +348,13 @@ export default function BrainPage() {
     }
   };
 
-  // Affiche une date ISO (AAAA-MM-JJ) au format français JJ/MM/AAAA.
+  // date ISO en JJ/MM/AAAA
   const formatDate = (iso: string): string => {
     const [y, m, d] = iso.slice(0, 10).split("-");
     return y && m && d ? `${d}/${m}/${y}` : iso;
   };
 
-  // ── Helpers vocabulaire ──
+  // helpers vocabulaire
   const addVocab = () => {
     const v = vocabDraft.trim();
     if (!v || vocab.includes(v)) {
@@ -382,7 +374,7 @@ export default function BrainPage() {
     }
   };
 
-  // ── Helpers règles ──
+  // helpers règles
   const toggleRule = (i: number) =>
     setRules((prev) => prev.map((r, idx) => (idx === i ? { ...r, on: !r.on } : r)));
   const removeRule = (i: number) => setRules((prev) => prev.filter((_, idx) => idx !== i));
@@ -399,7 +391,7 @@ export default function BrainPage() {
 
   const toneLabel = (TONES.find((t) => t.id === tone)?.name || "Cool").toUpperCase();
 
-  // ── Input partagé (style DA : fond clair, bord divider, radius 10) ──
+  // input partagé
   const fieldClass =
     "w-full h-[42px] px-3.5 rounded-[10px] bg-jenny-bg border border-jenny-divider text-[13.5px] text-jenny-text " +
     "placeholder:text-jenny-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral transition-all";
@@ -439,7 +431,7 @@ export default function BrainPage() {
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1180px] mx-auto px-6 md:px-8 py-7">
         <div className="grid lg:grid-cols-[1fr_360px] gap-7 items-start">
-          {/* ════════ Colonne formulaire ════════ */}
+          {/* colonne formulaire */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
             <div className="font-mono text-[11px] tracking-[0.22em] uppercase text-jenny-coral mb-3">
               — le cerveau de jenny —
@@ -452,7 +444,7 @@ export default function BrainPage() {
               sauvegarde automatiquement.
             </p>
 
-            {/* ── 01 · Identité ── */}
+            {/* identité */}
             <motion.section
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
@@ -501,7 +493,7 @@ export default function BrainPage() {
               </div>
             </motion.section>
 
-            {/* ── 02 · Ton de voix ── */}
+            {/* ton de voix */}
             <motion.section
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
@@ -513,7 +505,7 @@ export default function BrainPage() {
                 Choisissez la base, puis affinez.
               </div>
 
-              {/* Cartes de ton */}
+              {/* cartes de ton */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-5">
                 {TONES.map((t) => {
                   const active = t.id === tone;
@@ -537,7 +529,7 @@ export default function BrainPage() {
                 })}
               </div>
 
-              {/* Curseurs 0–100 */}
+              {/* curseurs */}
               {SLIDER_DEFS.map((s) => (
                 <div key={s.key} className="mb-3.5">
                   <div className="flex justify-between mb-[7px]">
@@ -561,7 +553,7 @@ export default function BrainPage() {
                 </div>
               ))}
 
-              {/* Tutoiement — toggle */}
+              {/* tutoiement */}
               <div className="mb-5">
                 <div className="flex justify-between items-center mb-[7px]">
                   <span className="text-[12.5px] text-jenny-text font-medium">Tutoiement</span>
@@ -587,7 +579,7 @@ export default function BrainPage() {
                 </button>
               </div>
 
-              {/* Vocabulaire — chips */}
+              {/* vocabulaire */}
               <div>
                 <label className="block text-xs font-semibold text-jenny-text mb-1.5">
                   Mots et expressions à utiliser
@@ -622,7 +614,7 @@ export default function BrainPage() {
               </div>
             </motion.section>
 
-            {/* ── 03 · Règles d'or ── */}
+            {/* règles d'or */}
             <motion.section
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
@@ -712,7 +704,7 @@ export default function BrainPage() {
               )}
             </motion.section>
 
-            {/* ── 04 · Acompte anti-no-show ── */}
+            {/* acompte anti no-show */}
             <motion.section
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
@@ -724,7 +716,7 @@ export default function BrainPage() {
                 Demander un acompte réduit fortement les rendez-vous manqués.
               </div>
 
-              {/* Activation — toggle (même style que le tutoiement) */}
+              {/* activation toggle */}
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <span className="block text-[13.5px] text-jenny-text font-medium">
@@ -812,7 +804,7 @@ export default function BrainPage() {
               </div>
             </motion.section>
 
-            {/* ── 05 · Rappels & fidélité ── */}
+            {/* rappels & fidélité */}
             <motion.section
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
@@ -903,7 +895,7 @@ export default function BrainPage() {
               </div>
             </motion.section>
 
-            {/* ── 06 · Fermetures exceptionnelles ── */}
+            {/* fermetures exceptionnelles */}
             <motion.section
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
@@ -915,7 +907,7 @@ export default function BrainPage() {
                 Congés, jours fériés… Jenny ne proposera aucun créneau sur ces dates.
               </div>
 
-              {/* Liste des fermetures */}
+              {/* liste des fermetures */}
               {closuresLoading ? (
                 <div className="space-y-2">
                   <div className="h-[52px] rounded-[10px] animate-shimmer" />
@@ -956,7 +948,7 @@ export default function BrainPage() {
                 </ul>
               )}
 
-              {/* Formulaire d'ajout */}
+              {/* formulaire d'ajout */}
               <div className="mt-4 pt-4 border-t border-jenny-divider/60">
                 <div className="grid sm:grid-cols-2 gap-3.5">
                   <div>
@@ -1027,7 +1019,7 @@ export default function BrainPage() {
               </div>
             </motion.section>
 
-            {/* Enregistrer (l'autosave tourne déjà ; bouton pour sauver tout de suite) */}
+            {/* bouton enregistrer */}
             <div className="flex items-center gap-3 mt-6">
               <button
                 type="button"
@@ -1051,7 +1043,7 @@ export default function BrainPage() {
             </div>
           </motion.div>
 
-          {/* ════════ Colonne aperçu (sticky) ════════ */}
+          {/* colonne aperçu */}
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1063,7 +1055,7 @@ export default function BrainPage() {
               <span className={eyebrowClass}>aperçu en direct</span>
             </div>
 
-            {/* Téléphone sombre */}
+            {/* téléphone sombre */}
             <div
               className="rounded-[24px] px-4 pt-10 pb-4 h-[520px] flex flex-col"
               style={{ background: "#0E0B14" }}
@@ -1122,7 +1114,7 @@ export default function BrainPage() {
               </div>
             </div>
 
-            {/* Tests de cohérence */}
+            {/* tests de cohérence */}
             <div className="mt-4 p-4 bg-jenny-surface border border-jenny-divider rounded-[14px]">
               <div className="flex items-center gap-2 text-xs font-semibold text-jenny-text mb-2.5">
                 <Sparkles className="w-3.5 h-3.5 text-jenny-coral" />
@@ -1165,7 +1157,7 @@ export default function BrainPage() {
         </div>
       </div>
 
-      {/* Style du curseur (track corail rempli + thumb blanc cerclé corail) */}
+      {/* style du curseur */}
       <style>{`
         .jenny-range {
           -webkit-appearance: none;

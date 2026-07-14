@@ -1,17 +1,4 @@
-"""Moteur conversationnel principal de Jenny.
-
-C'est le chef d'orchestre du traitement. Pour chaque message entrant :
-1. Récupérer le contexte (StateManager)
-2. Détecter l'intention (modèle Intent)
-3. Extraire les entités (modèle NER)
-4. Router vers le bon agent (AgentRouter)
-5. Générer la réponse via LLM (ResponseGenerator)
-6. Mettre à jour l'état
-7. Retourner la réponse
-
-TOUTES les réponses passent par le LLM pour un ton naturel.
-Les agents exécutent les actions, le LLM formule la réponse.
-"""
+"""Moteur conversationnel principal de Jenny."""
 
 from __future__ import annotations
 
@@ -38,27 +25,19 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# En dessous de ce seuil, une prédiction d'intention ML est jugée trop
-# incertaine pour écraser un match mot-clé franc des règles déterministes.
+# seuil de confiance ML
 ML_CONFIDENCE_FLOOR = 0.5
 
-# Intentions « conversationnelles » (politesse). Quand elles ouvrent un message
-# ("Bonjour, je veux un devis"), le modèle les sur-classe à ~1.0 et écrase la
-# vraie demande : on les traite à part pour ne pas masquer l'intention utile.
+# intentions de politesse
 GREETING_INTENTS = frozenset({"greeting", "small_talk"})
 
-# Slot-filling : comment Jenny demande chaque info manquante (cas coiffeur).
-# Une seule info à la fois, chaleureusement.
-# Continuité de dialogue : intentions qui interrompent franchement une action en
-# cours, vs celles qui la complètent. Un « closing » n'interrompt que s'il contient
-# de VRAIS mots de clôture (« merci », « au revoir ») — sinon c'est souvent un
-# fragment de RDV (« mardi », « à 14h ») mal classé par le petit modèle.
+# une info à la fois
+# interrompt ou complète l'action
 _INTERRUPTING_INTENTS = frozenset({"escalation", "complaint"})
 _CONTINUABLE_INTENTS = frozenset(
     {"general", "greeting", "small_talk", "planning", "faq", "appointment", "closing"}
 )
-# Demandes d'information à honorer même au milieu d'une prise de RDV (on répond au
-# prix/devis/paiement plutôt que de happer le message dans le slot-filling).
+# demandes d'info à honorer
 _INFO_REQUEST_INTENTS = frozenset({"pricing", "quote", "payment", "payment_question"})
 _CLOSING_RE = re.compile(
     r"\b(merci|au\s*revoir|bonne\s+journ[ée]e|[àa]\s+bient[ôo]t|[àa]\s+plus|"
@@ -66,7 +45,7 @@ _CLOSING_RE = re.compile(
     re.I,
 )
 
-# ── Gestion par le CLIENT de son propre RDV (annuler / déplacer / confirmer) ──
+# gestion du rdv client
 _MGMT_CANCEL_RE = re.compile(
     r"\b(annul|d[ée]command)|\bsupprim\w*\s+(?:mon|le)\s+(?:rdv|rendez)", re.I
 )
@@ -79,10 +58,7 @@ _MGMT_CONFIRM_RE = re.compile(
     r"\bje\s+confirme|c['’]est\s+confirm|je\s+valide|je\s+maintiens",  # noqa: RUF001
     re.I,
 )
-# Question GÉNÉRIQUE sur le catalogue (« vos prestations », « la grille des
-# tarifs ») : couverte par le catalogue injecté au prompt, donc jamais une
-# « lacune de connaissance ». Volontairement étroit : « le prix du permis moto »
-# (service ABSENT du catalogue) doit rester une lacune à signaler au gérant.
+# question générique catalogue
 _CATALOG_TOPIC_RE = re.compile(
     r"(?:vos|tes|les|des)\s+(?:prestations|tarifs|services|prix)\b|catalogue|grille\s+tarifaire",
     re.I,
@@ -94,32 +70,21 @@ _AFFIRM_RE = re.compile(
     re.I,
 )
 
-# Signaux de PRISE de RDV non ambigus. Le petit modèle d'intention (qwen-class)
-# classe souvent mal ces tournures FR (« réserver une coupe demain » → greeting
-# 0.96 !), donc on force « appointment » par règle haute précision, quelle que soit
-# la confiance ML. La gestion (annuler/déplacer) reste prioritaire et bascule
-# ensuite vers manage_appointment (cf. detect_appointment_mgmt).
+# signaux de prise de rdv
 _STRONG_APPOINTMENT_RE = re.compile(
     r"\b(rendez[\s-]?vous|rdv|r[ée]serv\w+|prendre\s+(?:un\s+)?(?:rendez|rdv|cr[ée]neau)|"
     r"booker|je\s+veux\s+(?:un\s+)?(?:rdv|rendez))\b",
     re.I,
 )
 
-# Signal de DEVIS explicite : force « quote » → un VRAI devis persisté/envoyé,
-# même si le petit modèle classe le message en « faq/pricing ».
+# signal de devis
 _STRONG_QUOTE_RE = re.compile(r"\b(devis|estimation|chiffrage|chiffrer)\b", re.I)
-# Signal de question de PRIX (« c'est combien », « quel prix », « ça coûte »…).
-# Couplé à une prestation du catalogue, il déclenche un devis (message + PDF).
+# signal de question de prix
 _PRICE_SIGNAL_RE = re.compile(
     r"\b(combien|prix|tarif|tarifs|co[uû]te|co[uû]tent|co[uû]t|ça fait)\b", re.I
 )
 
-# Vrais signaux de RÉCLAMATION (mécontentement). Sert à NE PAS écraser un
-# « complaint » légitime par l'override RDV : « je veux réserver mais votre
-# dernière coupe était ratée » reste une réclamation. En leur absence, un
-# « complaint » sur une demande de RDV est une ERREUR du petit modèle (fréquente)
-# → l'override RDV doit primer (sinon la réservation n'est jamais exécutée et
-# Jenny « confirme » un rendez-vous inexistant).
+# signaux de réclamation
 _COMPLAINT_SIGNAL_RE = re.compile(
     r"\b(d[ée]çu\w*|décevant|nul\w*|rat[ée]\w*|catastroph\w*|scandal\w*|honteu\w*|"
     r"inadmissible|inacceptable|rembours\w*|me\s+plain\w*|r[ée]clamation|mécontent\w*|"
@@ -128,13 +93,12 @@ _COMPLAINT_SIGNAL_RE = re.compile(
 )
 
 
-# Capture du nom : un message qui ressemble à un nom propre (pas une commande,
-# pas une question, pas un numéro) quand Jenny vient de demander « c'est à quel nom ? ».
+# capture du nom
 _NAME_RE = re.compile(r"^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’\- ]{1,40}$")  # noqa: RUF001
 
 
 def looks_like_name(text: str) -> bool:
-    """Vrai si le message ressemble à un nom (1-3 mots, lettres, sans « ? » ni chiffre)."""
+    """Ressemble à un nom ?"""
     t = (text or "").strip()
     if not t or "?" in t or any(ch.isdigit() for ch in t):
         return False
@@ -145,7 +109,7 @@ def looks_like_name(text: str) -> bool:
 
 
 def _norm_txt(s: str) -> str:
-    """Minuscule sans accents (pour matcher une prestation dans un message)."""
+    """Minuscule sans accents."""
     import unicodedata
 
     t = unicodedata.normalize("NFKD", (s or "").lower())
@@ -153,12 +117,7 @@ def _norm_txt(s: str) -> str:
 
 
 def match_catalog_services(message: str, services: list[str]) -> str | None:
-    """Repère les prestations du catalogue citées dans le message (NER-indépendant).
-
-    « je veux une coupe et une couleur » + [Coupe, Couleur] → « Coupe et Couleur »
-    (l'action de réservation re-découpe sur « et » pour gérer le multi-prestations).
-    Renvoie None si rien trouvé.
-    """
+    """Repère les prestations citées."""
     if not message or not services:
         return None
     m = _norm_txt(message)
@@ -167,7 +126,7 @@ def match_catalog_services(message: str, services: list[str]) -> str | None:
 
 
 def detect_appointment_mgmt(message: str, awaiting_confirmation: bool) -> str | None:
-    """Le client veut-il gérer SON rdv ? → cancel | reschedule | confirm | None."""
+    """Le client gère son rdv ?"""
     m = message or ""
     if _MGMT_CANCEL_RE.search(m):
         return "cancel"
@@ -190,12 +149,10 @@ _SLOT_ASK_FR: dict[str, str] = {
     "order_number": "Demande au client son NUMÉRO DE COMMANDE pour pouvoir l'aider.",
 }
 
-# Au-dessus de ce seuil, l'intention trouvée APRÈS avoir retiré la salutation
-# prime sur la salutation elle-même.
+# seuil d'override salutation
 GREETING_OVERRIDE_FLOOR = 0.5
 
-# Salutations retirées en tête de message avant reclassement. Bornées par \b
-# pour éviter les faux positifs ("rebonjour", "himalaya"...).
+# salutations en tête de message
 _GREETING_WORDS = (
     r"bonjour|bonsoir|bonne\s+journ[ée]e|bonne\s+soir[ée]e|salut|coucou|"
     r"hello|hey|hi|bjr|slt|yo|wesh|cc"
@@ -205,9 +162,7 @@ _GREETING_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Politesse de fin masquant une question (« super merci. vous êtes ouverts
-# jusqu'à quelle heure ? » → closing, la question est écrasée). Même principe
-# que le démasquage de salutation, côté remerciements.
+# remerciements en tête
 _THANKS_WORDS = (
     r"merci(?:\s+beaucoup|\s+bien)?|super|parfait|top|g[ée]nial|nickel|"
     r"c['’]est\s+not[ée]|d['’]accord|ok(?:ay)?"  # noqa: RUF001
@@ -220,7 +175,7 @@ _THANKS_PREFIX_RE = re.compile(
 
 @dataclass
 class EngineRequest:
-    """Requête entrante vers le moteur conversationnel."""
+    """Requête entrante vers le moteur."""
 
     conversation_id: UUID
     business_id: UUID
@@ -228,21 +183,20 @@ class EngineRequest:
     channel: str = ""
     customer_id: UUID | None = None
     language: str | None = None
-    # Cerveau de Jenny : persona configurable (ton, règles, vocabulaire) + nom du business.
+    # persona du business
     persona: dict | None = None
     business_name: str | None = None
-    # Faits durables déjà connus sur le client (chargés depuis la DB par la route).
+    # faits connus sur le client
     customer_facts: list[str] | None = None
-    # Catalogue de prestations formaté (prix/durée réels) — pour des réponses fondées.
+    # catalogue formaté
     catalog: str | None = None
-    # Noms des prestations (liste) — pour capter la prestation dans le message même
-    # si le modèle NER est indisponible (réservation robuste, sans dépendre du ML).
+    # noms des prestations
     catalog_services: list[str] | None = None
 
 
 @dataclass
 class EngineResponse:
-    """Réponse produite par le moteur conversationnel."""
+    """Réponse du moteur conversationnel."""
 
     response_text: str
     intent: str | None = None
@@ -256,7 +210,7 @@ class EngineResponse:
     action_result: dict | None = None
     conversation_phase: str = ""
     requires_human: bool = False
-    # ── Signaux de la couche d'intelligence (consommés par la route) ──
+    # signaux d'intelligence
     detected_language: str | None = None
     knowledge_gap: bool = False
     gap_question: str | None = None
@@ -264,13 +218,7 @@ class EngineResponse:
 
 
 class ConversationEngine:
-    """Moteur conversationnel central de Jenny.
-
-    Orchestre le flux complet de traitement d'un message :
-    contexte → intention → entités → agent → LLM → réponse.
-
-    TOUTES les réponses passent par le LLM si disponible.
-    """
+    """Moteur conversationnel de Jenny."""
 
     def __init__(
         self,
@@ -286,29 +234,20 @@ class ConversationEngine:
         self.ner_predictor = ner_predictor
         self.agent_router = agent_router
         self.response_generator = response_generator
-        # Retriever RAG transverse : permet de chercher dans la base de connaissances
-        # pour TOUTE question informative, même quand l'agent retenu n'est pas FAQ.
+        # retriever RAG transverse
         self.retriever = retriever
 
     async def process(
         self, request: EngineRequest, on_token: TokenCallback | None = None
     ) -> EngineResponse:
-        """Traite un message et produit une réponse.
-
-        Flux complet :
-        1. Contexte → 2. Intent → 3. NER → 4. Agent (action) → 5. LLM (réponse)
-
-        ``on_token`` (optionnel) reçoit chaque token de la réponse LLM au fil de
-        l'eau (chat en streaming). ``EngineResponse.response_text`` reste la
-        version finale nettoyée.
-        """
+        """Traite un message."""
         logger.info(
             "engine.process.start",
             conversation_id=str(request.conversation_id),
             channel=request.channel,
         )
 
-        # ── 1. Récupérer le contexte ──
+        # 1. contexte
         state = self.state_manager.get_or_create(
             conversation_id=request.conversation_id,
             business_id=request.business_id,
@@ -318,31 +257,25 @@ class ConversationEngine:
         state.language = request.language
         if request.customer_id is not None:
             state.customer_id = request.customer_id
-        # Cerveau de Jenny : persona du business → adapte ton/règles/vocabulaire.
+        # persona du business
         if request.persona is not None:
             state.business_persona = request.persona
         if request.business_name is not None:
             state.business_name = request.business_name
 
-        # Langue : détectée si non fournie, pour répondre dans la langue du client.
+        # langue du client
         state.detected_language = request.language or detect_language(request.message_text)
-        # Faits durables déjà connus sur ce client → personnalisation du contexte.
+        # faits connus sur le client
         if request.customer_facts:
             state.customer_facts = list(request.customer_facts)
-        # Catalogue de prestations → prix/durée exacts pour les réponses de Jenny.
+        # catalogue de prestations
         if request.catalog:
             state.business_catalog = request.catalog
 
-        # ── 2. Détecter l'intention (multi-label) ──
+        # 2. intention
         intent_result = await self._detect_intent(request.message_text, state)
 
-        # Override haute précision : un signal de RDV explicite (« rendez-vous »,
-        # « réserver », « rdv ») force « appointment » même si le petit modèle est
-        # (sur)confiant sur autre chose. Indispensable pour un app coiffeur : la
-        # prise de RDV est le cœur du métier et le modèle s'y trompe souvent.
-        # On écrase aussi un « complaint » MAL classé (le modèle prend souvent une
-        # prise de RDV pour une réclamation) — sauf si le message porte un VRAI
-        # signal de mécontentement, auquel cas la réclamation est légitime.
+        # override rdv haute précision
         _msg_txt = request.message_text or ""
         _model_intent = intent_result["intent"]
         _blocks_appt_override = _model_intent in (
@@ -350,12 +283,7 @@ class ConversationEngine:
             "manage_appointment",
             "escalation",
         ) or (_model_intent == "complaint" and _COMPLAINT_SIGNAL_RE.search(_msg_txt))
-        # Second signal, SANS mot-clé : « [prestation du catalogue] + [jour/heure] »
-        # est une prise de RDV évidente (« coupe femme demain 14h », « un balayage
-        # samedi à 10h ») que le petit modèle classe souvent en faq/pricing/greeting.
-        # On force alors « appointment » — c'est le cœur du métier, mieux vaut
-        # réserver que rater la demande. (Une opération de gestion — annuler/déplacer —
-        # est traitée plus bas et reste prioritaire.)
+        # rdv sans mot-clé
         _has_when = False
         if not _blocks_appt_override:
             from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
@@ -378,8 +306,7 @@ class ConversationEngine:
                 "needs_clarification": False,
             }
 
-        # Override : « devis »/« estimation »/« chiffrage » → quote (devis réel),
-        # sauf si c'est déjà une prise de RDV / réclamation / escalade.
+        # override devis
         if _STRONG_QUOTE_RE.search(request.message_text or "") and intent_result["intent"] not in (
             "appointment",
             "manage_appointment",
@@ -394,11 +321,7 @@ class ConversationEngine:
                 "needs_clarification": False,
             }
 
-        # Override : question de PRIX sur une prestation du catalogue → devis réel
-        # (message + PDF téléchargeable) plutôt qu'une simple réponse chiffrée.
-        # Garde-fou : uniquement si le business a un catalogue ET qu'une prestation
-        # précise est citée. Sans catalogue (ex. banc d'essai), on garde la réponse
-        # FAQ fondée sur la base de connaissances — comportement inchangé.
+        # prix + prestation → devis
         _price_signal = _PRICE_SIGNAL_RE.search(request.message_text or "")
         _cited_prestation = (
             match_catalog_services(request.message_text or "", request.catalog_services)
@@ -429,10 +352,7 @@ class ConversationEngine:
         is_multi_intent = intent_result.get("is_multi_intent", False)
         needs_clarification = intent_result.get("needs_clarification", False)
 
-        # ── Continuité de dialogue (slot-filling multi-tours) ──
-        # Si une action attendait des infos, on garde SON intention tant que le
-        # client ne change pas franchement de sujet : « mardi », « à 14h »…
-        # complètent la prise de RDV même si le modèle les lit « closing »/« general ».
+        # continuité de dialogue
         _resume_appointment_after_info = False
         if state.pending_intent and state.pending_intent != intent:
             from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
@@ -440,26 +360,18 @@ class ConversationEngine:
             msg_l = request.message_text or ""
             real_closing = intent == "closing" and bool(_CLOSING_RE.search(msg_l))
             hard_interrupt = intent in _INTERRUPTING_INTENTS or real_closing
-            # Le message complète-t-il une prise de RDV (donne un jour/une heure) ?
+            # complète une prise de rdv ?
             provides_appt_info = state.pending_intent == "appointment" and bool(
                 parse_fr_date(msg_l) or parse_fr_time(msg_l)
             )
-            # Une question d'INFO (prix, devis, paiement) au milieu d'une prise de RDV
-            # mérite une vraie réponse : on ne la « happe » pas dans le slot-filling
-            # (sauf si elle apporte aussi un jour/une heure). La prise de RDV reste
-            # en attente (pending_intent) et pourra reprendre au message suivant.
+            # question d'info pendant un rdv
             info_interrupt = intent in _INFO_REQUEST_INTENTS and not provides_appt_info
             real_complaint = intent == "complaint" and bool(_COMPLAINT_SIGNAL_RE.search(msg_l))
-            # Mémorise qu'on interrompt une RÉSERVATION en cours pour répondre à une
-            # question : il faudra RESTAURER le pending_intent en fin de tour (sinon
-            # le « 11h » suivant repart de zéro au lieu de finir la réservation).
+            # mémorise l'interruption
             if info_interrupt and state.pending_intent == "appointment":
                 _resume_appointment_after_info = True
             if provides_appt_info and not real_closing and not real_complaint:
-                # Un jour/une heure fourni PENDANT une prise de RDV la COMPLÈTE —
-                # même après une interruption (question de prix) et même si le petit
-                # modèle lit « complaint »/« closing » à tort. Sauf vrai signal de
-                # mécontentement ou d'adieu. Répare la « reprise après interruption ».
+                # jour/heure complète le rdv
                 logger.info("engine.dialogue.resume_booking", read=intent)
                 intent = state.pending_intent
                 intent_confidence = max(intent_confidence, 0.7)
@@ -472,11 +384,7 @@ class ConversationEngine:
                 intent = state.pending_intent
                 intent_confidence = max(intent_confidence, 0.6)
 
-        # ── Liste d'attente : Jenny a proposé l'inscription (salon complet) ──
-        # Offre à usage unique, consommée au tour suivant : un « oui » INSCRIT le
-        # client ; toute autre réponse la laisse expirer (et peut relancer un RDV,
-        # ex. si le client propose un autre jour). On la ré-arme plus bas si le salon
-        # est encore complet à ce tour.
+        # liste d'attente
         joining_waitlist = getattr(state, "awaiting_waitlist", False) and bool(
             _AFFIRM_RE.search(request.message_text or "")
         )
@@ -486,9 +394,7 @@ class ConversationEngine:
             intent_confidence = 0.95
             state.pending_intent = None
 
-        # ── Gestion du RDV par le client (annuler / déplacer / confirmer) ──
-        # Prioritaire sur la classification du modèle : un « annuler mon rdv » ne
-        # doit pas être lu comme une nouvelle prise de RDV.
+        # gestion du rdv client
         mgmt_op = (
             None
             if joining_waitlist
@@ -497,11 +403,7 @@ class ConversationEngine:
             )
         )
 
-        # Report NATUREL sans mot-clé : une fois un RDV pris DANS ce fil, un nouveau
-        # créneau seul (« jeudi 14h », « plutôt vendredi même heure ») déplace CE
-        # rdv — sinon le message retombe en general/planning et Jenny « confirme »
-        # un déplacement fictif. On exige un jour/heure ET l'absence d'une NOUVELLE
-        # prestation (sinon c'est un second RDV, pas un report) et d'un nom.
+        # report implicite sans mot-clé
         if mgmt_op is None and not joining_waitlist:
             _appt_slot = state.slots.get("appointment_id")
             if _appt_slot is not None and _appt_slot.filled:
@@ -517,8 +419,7 @@ class ConversationEngine:
                     logger.info("engine.reschedule.implicit", appt="known")
                     mgmt_op = "reschedule"
 
-        # ── Capture du nom : Jenny vient de demander « c'est à quel nom ? » ──
-        # Le prochain message est alors le nom du client (sauf commande explicite).
+        # capture du nom
         naming = (
             getattr(state, "awaiting_name", False)
             and not joining_waitlist
@@ -527,7 +428,7 @@ class ConversationEngine:
         )
         state.awaiting_name = False
 
-        # ── Capture du téléphone : Jenny vient de demander un numéro de rappel ──
+        # capture du téléphone
         from jenny.actions.handlers.set_customer_phone import extract_phone
 
         _phone_in_msg = extract_phone(request.message_text)
@@ -559,14 +460,12 @@ class ConversationEngine:
             state.set_slot("operation", mgmt_op)
             state.pending_intent = None
 
-        # ── 3. Extraire les entités ──
+        # 3. entités
         entities = await self._extract_entities(request.message_text, state)
         for entity_name, entity_value in entities.items():
             state.set_slot(entity_name, entity_value)
 
-        # Renfort RDV : capter dates/heures en français (« mardi », « à 14h »).
-        # On stocke le MESSAGE entier dès qu'il contient une date/heure analysable
-        # (plus fiable qu'un fragment NER que combine_fr pourrait mal relire).
+        # capte dates/heures FR
         if intent in ("appointment", "manage_appointment"):
             from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
 
@@ -575,16 +474,12 @@ class ConversationEngine:
                 state.set_slot("date", msg, entity_type="DATE")
             if parse_fr_time(msg):
                 state.set_slot("time", msg, entity_type="TIME")
-            # Fallback prestation : si le NER n'a pas rempli « service », on cherche
-            # la prestation dans le catalogue du salon. La réservation ne dépend
-            # alors PLUS du modèle ML (robuste même si le NER est indisponible).
+            # fallback prestation via catalogue
             svc_slot = state.slots.get("service")
             if not (svc_slot and svc_slot.filled) and request.catalog_services:
                 matched_svc = match_catalog_services(msg, request.catalog_services)
                 if not matched_svc:
-                    # La prestation a pu être citée à un tour précédent (« combien le
-                    # balayage ? » → « je réserve ») : on la retrouve dans les derniers
-                    # messages du client pour ne pas la redemander bêtement.
+                    # prestation citée avant
                     recent_user = " ".join(
                         m.get("content", "")
                         for m in state.message_history[-6:]
@@ -594,21 +489,14 @@ class ConversationEngine:
                 if matched_svc:
                     state.set_slot("service", matched_svc, entity_type="SERVICE")
 
-        # ── 4. Router vers l'agent (exécute l'action métier) ──
+        # 4. agent
         state.phase = ConversationPhase.PROCESSING
         agent_result = await self._route_to_agent(state)
         state.agent_used = agent_result.get("agent", "fallback")
         state.action_result = agent_result.get("action_result")
         state.retrieved_documents = agent_result.get("documents", [])
 
-        # ── Grounding RAG transverse ──
-        # Seul l'agent FAQ interroge la base de connaissances. Or une question
-        # informative est parfois mal classée (« vous avez un parking ? » → general,
-        # « accessible en fauteuil ? » → planning) et court-circuite le RAG. Si aucun
-        # document n'a été récupéré, que l'intention n'est pas purement sociale et
-        # qu'aucune action n'a abouti, on cherche dans la base : les passages assez
-        # pertinents (score ≥ seuil) sont injectés au générateur quel que soit l'agent
-        # → Jenny se base sur sa connaissance même quand l'intention est mal classée.
+        # grounding RAG transverse
         if (
             not state.retrieved_documents
             and self.retriever is not None
@@ -616,9 +504,7 @@ class ConversationEngine:
             and not (state.action_result or {}).get("success")
         ):
             try:
-                # Seuil sur l'échelle blendée du retriever (cf. GAP_SCORE_FLOOR) :
-                # légèrement sous le floor pour injecter les passages limites au
-                # générateur tout en laissant le floor décider de la lacune.
+                # seuil sous le floor
                 _hits = await self.retriever.search(
                     request.message_text,
                     business_id=state.business_id,
@@ -635,31 +521,26 @@ class ConversationEngine:
                         results=len(_hits),
                         top_score=round(_hits[0].score, 3),
                     )
-            except Exception as _e:  # pragma: no cover - dépend de l'embedder/IO
+            except Exception as _e:  # pragma: no cover
                 logger.warning("engine.rag_ground_failed", error=str(_e))
 
-        # Suivi de confirmation : un RDV qui vient d'être réservé attend un « oui »
-        # du client pour passer en confirmé ; une fois confirmé/annulé, on solde.
+        # suivi de confirmation
         _ar = state.action_result or {}
         if _ar.get("success") and _ar.get("appointment_id") and not _ar.get("operation"):
             state.awaiting_confirmation = True
         elif _ar.get("operation") in {"confirm", "cancel"}:
             state.awaiting_confirmation = False
 
-        # Salon complet → on arme l'offre « liste d'attente » pour le tour suivant
-        # (un « oui » inscrira le client). On garde la prestation/le jour en slots.
+        # salon complet: liste d'attente
         if _ar.get("no_slots"):
             state.awaiting_waitlist = True
-        # RDV pris pour un client sans nom → le prochain message sera son nom.
+        # client sans nom
         if _ar.get("ask_name"):
             state.awaiting_name = True
-        # RDV pris dans CETTE conversation → on retient son id : le client anonyme
-        # du chat peut alors confirmer/annuler/déplacer SON rendez-vous, et le nom
-        # donné ensuite s'y rattache (fiche client créée à la volée).
+        # retient l'id du rdv
         if _ar.get("appointment_id"):
             state.set_slot("appointment_id", str(_ar["appointment_id"]))
-        # Fiche client créée/complétée par set_customer_name : on adopte son id
-        # pour la suite de la conversation, et on demande le numéro si absent.
+        # adopte l'id client
         if _ar.get("named") and _ar.get("customer_id"):
             try:
                 from uuid import UUID as _UUID
@@ -670,9 +551,7 @@ class ConversationEngine:
         if _ar.get("ask_phone"):
             state.awaiting_phone = True
 
-        # ── Slot-filling prioritaire : une action attend une info manquante ──
-        # (ex. RDV coiffeur sans la prestation/le jour/l'heure). Jenny la demande,
-        # une à la fois, au lieu de deviner ou de répondre à côté.
+        # slot-filling prioritaire
         clarification_reason = ""
         if state.has_missing_required_slots():
             missing = state.get_missing_slots()
@@ -682,30 +561,25 @@ class ConversationEngine:
             )
             needs_clarification = True
             clarification_reason = "slot_filling"
-            # On garde l'action en cours pour les prochains tours (continuité).
+            # garde l'action en cours
             state.pending_intent = intent
         elif intent == "appointment" and not (state.action_result or {}).get("success"):
-            # RDV en cours : l'action propose des créneaux / signale un conflit /
-            # attend l'heure → on GARDE la main jusqu'à la réservation effective,
-            # et l'action a déjà la bonne consigne (pas de clarification générique).
+            # rdv en cours
             state.pending_intent = "appointment"
             needs_clarification = True
             clarification_reason = "booking_in_progress"
         elif intent == "manage_appointment" and not (state.action_result or {}).get("success"):
-            # Déplacement/annulation en cours (« vers quand ? », jour fermé, conflit…) :
-            # le prochain message (« lundi 14h ») complète CETTE opération au lieu de
-            # partir en fallback qui « confirmerait » verbalement sans rien faire.
+            # gestion rdv en cours
             state.pending_intent = "manage_appointment"
             needs_clarification = True
             clarification_reason = "booking_in_progress"
         elif _resume_appointment_after_info:
-            # On vient de répondre à une question (prix…) au milieu d'une réservation :
-            # on GARDE la réservation en attente pour que le « 11h » suivant la finisse.
+            # garde la réservation en attente
             state.pending_intent = "appointment"
         else:
-            # Action complète (ou pas d'action) → on libère le dialogue.
+            # action finie, on libère
             state.pending_intent = None
-            # ── Clarification générale (ambiguïté, vague, info clé manquante) ──
+            # clarification générale
             decision = decide_clarification(
                 message_text=request.message_text,
                 intent=intent,
@@ -722,26 +596,18 @@ class ConversationEngine:
                     "précision avant de répondre, sans deviner."
                 )
 
-        # Priorité absolue de la RÉSERVATION en attente : si on a interrompu une prise
-        # de RDV pour répondre à une question (prix/devis), la réservation reste le
-        # contexte à reprendre — même si l'intention d'info a elle-même des slots
-        # manquants (sinon son slot-filling écrase le pending et le « 15h » suivant ne
-        # finalise jamais la réservation). Répare la reprise après interruption.
+        # réservation en attente prioritaire
         if _resume_appointment_after_info:
             state.pending_intent = "appointment"
 
-        # ── Lacune de connaissance : aucune réponse fiable disponible ? ──
+        # lacune de connaissance
         gap = is_knowledge_gap(
             intent=intent,
             documents=state.retrieved_documents,
             action_result=state.action_result,
             message=request.message_text,
         )
-        # Le catalogue de prestations EST dans le prompt : une question de prix/devis
-        # — ou toute question qui PARLE des prestations/tarifs (« infos sur vos
-        # prestations » classé faq) — n'est donc PAS une lacune (Jenny doit citer le
-        # catalogue, pas dire « je vérifie », et le gérant ne doit pas voir de fausse
-        # « question sans réponse » dans sa page Apprentissage).
+        # catalogue = pas une lacune
         if (
             gap
             and state.business_catalog
@@ -752,23 +618,19 @@ class ConversationEngine:
         ):
             gap = False
         gap_question: str | None = None
-        # On n'enregistre pas de lacune si on va déjà demander une clarification :
-        # ce n'est pas « je ne sais pas », c'est « je n'ai pas compris ».
+        # pas de lacune si clarification
         if gap and not needs_clarification:
             state.knowledge_gap = True
             gap_question = clean_question(request.message_text)
 
-        # Faits durables à mémoriser sur le client (persistés par la route).
+        # faits à mémoriser
         extracted_facts = extract_customer_facts(request.message_text)
 
-        # ── 5. Générer la réponse via LLM (TOUJOURS) ──
+        # 5. réponse LLM
         state.phase = ConversationPhase.RESPONDING
         response_text = await self._generate_response(state, on_token=on_token)
 
-        # ── Affinage de la lacune après génération ──
-        # Une déflexion (« je vérifie et je reviens ») ne trahit une absence de
-        # réponse que si la récupération n'a rien fondé — sinon c'est de la paresse
-        # de formulation sur du contenu POURTANT en base (pas une lacune).
+        # affine la lacune après génération
         from jenny.engine.intelligence import _retrieval_has_answer
 
         grounded = _retrieval_has_answer(state.retrieved_documents, request.message_text)
@@ -783,7 +645,7 @@ class ConversationEngine:
         state.knowledge_gap = final_gap
         gap_question = clean_question(request.message_text) if final_gap else None
 
-        # ── 6. Mettre à jour l'état ──
+        # 6. maj de l'état
         state.suggested_response = response_text
         state.add_assistant_message(response_text)
         self.state_manager.save(state)
@@ -816,19 +678,10 @@ class ConversationEngine:
         )
 
     async def _detect_intent(self, text: str, state: ConversationState) -> dict:
-        """Détecte l'intention, en démasquant les demandes cachées par une politesse.
-
-        Le modèle sur-classe en salutation dès qu'un message s'ouvre par une
-        politesse ("Bonjour, je veux un devis" → greeting ~1.0, le devis est
-        écrasé). On reclasse donc le message une fois la salutation retirée :
-        si une vraie intention actionnable ressort franchement, c'est elle qui
-        pilote le routage — la salutation reste juste un signal secondaire.
-        """
+        """Détecte l'intention, politesse démasquée."""
         result = await self._classify_text(text)
 
-        # Même démasquage pour « merci/super » suivi d'une vraie question
-        # (« super merci. vous êtes ouverts jusqu'à quelle heure ? » → closing,
-        # et la question serait traitée sans grounding → réponse inventée).
+        # démasque aussi les remerciements
         masked_intents = GREETING_INTENTS | {"closing"} if "?" in text else GREETING_INTENTS
         if result["intent"] in masked_intents:
             remainder = self._strip_leading_greeting(text) or self._strip_leading_thanks(text)
@@ -844,7 +697,7 @@ class ConversationEngine:
                         real_intent=sub["intent"],
                         confidence=round(sub["confidence"], 3),
                     )
-                    # On conserve la salutation comme intention secondaire.
+                    # salutation en intention secondaire
                     sub["detected_intents"] = [
                         *sub["detected_intents"],
                         {"intent": result["intent"], "confidence": result["confidence"]},
@@ -856,14 +709,7 @@ class ConversationEngine:
         return result
 
     async def _classify_text(self, text: str) -> dict:
-        """Classifie un texte en intention (modèle ML si dispo, sinon règles).
-
-        Le modèle ML prime quand il est confiant. En dessous du seuil
-        `ML_CONFIDENCE_FLOOR`, on consulte les règles mots-clés : un match
-        franc (ex. « devis », « rendez-vous ») est plus fiable qu'une
-        prédiction ML floue, ce qui évite que du bruit ML (~0.2-0.4) écrase
-        une intention évidente.
-        """
+        """Classifie un texte en intention."""
         if self.intent_predictor is not None:
             try:
                 from ml.models.intent.predict import IntentPredictor
@@ -896,7 +742,7 @@ class ConversationEngine:
             except (ImportError, Exception) as e:
                 logger.warning("engine.intent.model_error", error=str(e))
 
-        # Fallback : règles simples basées sur des mots-clés
+        # fallback: règles mots-clés
         intent, confidence = self._rule_based_intent(text)
         return {
             "intent": intent,
@@ -907,14 +753,7 @@ class ConversationEngine:
         }
 
     def _strip_leading_greeting(self, text: str) -> str:
-        """Retire une salutation en tête et renvoie le reste du message.
-
-        "Bonjour, je veux un devis" → "je veux un devis".
-        Renvoie "" si rien n'a été retiré, ou si le reste fait moins de deux
-        mots : un fragment trop court ("Bonjour Jenny !" → "Jenny !") est une
-        adresse polie, pas une demande, et ne doit pas déclencher de
-        reclassement (sinon un prénom serait pris pour une intention).
-        """
+        """Retire la salutation en tête."""
         remainder = _GREETING_PREFIX_RE.sub("", text, count=1).strip()
         if not remainder or remainder == text.strip():
             return ""
@@ -923,11 +762,7 @@ class ConversationEngine:
         return remainder
 
     def _strip_leading_thanks(self, text: str) -> str:
-        """Retire un remerciement en tête (« super merci. ») et renvoie le reste.
-
-        Mêmes garde-fous que ``_strip_leading_greeting`` : on ne reclasse que si
-        un vrai reste de message subsiste (deux mots minimum).
-        """
+        """Retire le remerciement en tête."""
         remainder = _THANKS_PREFIX_RE.sub("", text, count=1).strip()
         if not remainder or remainder == text.strip():
             return ""
@@ -936,7 +771,7 @@ class ConversationEngine:
         return remainder
 
     def _rule_based_intent(self, text: str) -> tuple[str, float]:
-        """Détection d'intention par règles (fallback)."""
+        """Intention par règles (fallback)."""
         text_lower = text.lower()
 
         rules: list[tuple[list[str], str]] = [
@@ -1001,7 +836,7 @@ class ConversationEngine:
         return entities
 
     async def _route_to_agent(self, state: ConversationState) -> dict:
-        """Route vers l'agent approprié selon l'intention."""
+        """Route vers le bon agent."""
         if self.agent_router is not None:
             try:
                 from jenny.agents.router import AgentRouter
@@ -1016,13 +851,7 @@ class ConversationEngine:
     async def _generate_response(
         self, state: ConversationState, on_token: TokenCallback | None = None
     ) -> str:
-        """Génère la réponse via le LLM (TOUJOURS prioritaire).
-
-        Le LLM reçoit tout le contexte : intention, entités, résultat d'action,
-        historique, documents RAG. C'est lui qui formule la réponse naturelle.
-        Fallback sur templates uniquement si le LLM est indisponible.
-        ``on_token`` diffuse la réponse au fil de l'eau si fourni.
-        """
+        """Génère la réponse LLM."""
         if self.response_generator is not None:
             try:
                 from jenny.engine.response_generator import ResponseGenerator
@@ -1032,7 +861,7 @@ class ConversationEngine:
             except (ImportError, Exception) as e:
                 logger.warning("engine.generator.error", error=str(e))
 
-        # Fallback UNIQUEMENT si pas de LLM
+        # fallback si pas de LLM
         return self._template_response(state)
 
     def _template_response(self, state: ConversationState) -> str:

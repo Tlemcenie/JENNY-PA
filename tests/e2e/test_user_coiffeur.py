@@ -1,29 +1,4 @@
-"""Tests utilisateur réalistes — Salon de coiffure "Chez Léa".
-
-Simule un vrai salon de coiffure qui utilise Jenny pour gérer
-ses messages clients sur Instagram, WhatsApp, email et formulaire web.
-
-Business : "Chez Léa — Coiffure & Beauté"
-    📍 12 rue des Lilas, Lyon 69003
-    📞 04 72 00 00 00
-    🕐 Mar-Sam 9h-19h
-    Services : Coupe, Coloration, Balayage, Mèches, Lissage brésilien,
-               Coiffure mariage, Soins capillaires, Barbier
-
-Scénarios couverts :
-    1. Prise de RDV (multi-tours, slot filling)
-    2. Demande de tarifs / prix
-    3. Demande de devis (mariage)
-    4. Suivi de commande produit
-    5. Réclamation / problème
-    6. Questions FAQ (horaires, adresse, parking)
-    7. Escalade vers Léa (la gérante)
-    8. Salutations / au revoir
-    9. Multi-canal (Instagram DM, WhatsApp, email, form)
-   10. Conversations multi-tours complexes
-   11. Paiement
-   12. Annulation / modification de RDV
-"""
+"""Tests réalistes — salon de coiffure."""
 
 from __future__ import annotations
 
@@ -41,15 +16,15 @@ from jenny.engine.conversation_engine import ConversationEngine, EngineRequest
 from jenny.engine.state_manager import StateManager
 
 # ═══════════════════════════════════════════════════════════
-#  FIXTURES
+#  fixtures
 # ═══════════════════════════════════════════════════════════
 
 
-BUSINESS_ID = str(uuid4())  # ID du salon "Chez Léa"
+BUSINESS_ID = str(uuid4())  # id du salon
 
 
 def _build_engine() -> ConversationEngine:
-    """Construit le moteur conversationnel complet avec tous les composants."""
+    """Construit le moteur."""
     from jenny.actions.handlers.book_appointment import BookAppointmentAction
     from jenny.actions.handlers.check_planning import CheckPlanningAction
     from jenny.actions.handlers.create_ticket import CreateTicketAction
@@ -102,7 +77,7 @@ def _build_engine() -> ConversationEngine:
 
 
 async def _send(engine, conv_id, message, channel="instagram"):
-    """Envoie un message via le moteur et retourne la réponse."""
+    """Envoie un message."""
     return await engine.process(
         EngineRequest(
             conversation_id=conv_id,
@@ -114,48 +89,33 @@ async def _send(engine, conv_id, message, channel="instagram"):
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 1 — Prise de rendez-vous via Instagram DM
-#  💇 Claire veut prendre RDV pour une coupe + balayage
+#  scénario 1 — rdv instagram
+#  claire veut un rdv
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioPriseDeRDV:
-    """Claire écrit sur Instagram pour prendre rendez-vous."""
+    """Claire prend rdv sur insta."""
 
     @pytest.mark.asyncio
     async def test_claire_rdv_instagram(self) -> None:
-        """
-        Claire 🧑‍🦰 → Instagram DM
-
-        Tour 1: "Coucou ! Je voudrais prendre rendez-vous pour
-                 une coupe et un balayage svp"
-        → Jenny détecte: intent=appointment, entities=service
-        → Jenny propose les créneaux disponibles
-
-        Tour 2: "Jeudi prochain à 14h ce serait possible ?"
-        → Jenny détecte: intent=appointment, entities=date+time
-        → Jenny confirme le RDV
-
-        Tour 3: "Super merci !"
-        → Jenny détecte: intent=closing
-        → Jenny dit au revoir
-        """
+        """Claire → rdv via Instagram."""
         engine = _build_engine()
         conv_id = uuid4()
 
-        # Tour 1 — Demande de RDV
+        # tour 1 — demande rdv
         r1 = await _send(
             engine,
             conv_id,
             "Coucou ! Je voudrais prendre rendez-vous pour une coupe et un balayage svp",
             channel="instagram",
         )
-        # Multi-label : greeting (Coucou) + appointment (rdv) — le modèle 5K prend le top
+        # multi-label, top intent
         assert r1.intent in ("appointment", "greeting", "planning")
         assert r1.response_text is not None
         assert len(r1.response_text) > 10
 
-        # Tour 2 — Précision date/heure
+        # tour 2 — date/heure
         r2 = await _send(
             engine,
             conv_id,
@@ -164,7 +124,7 @@ class TestScenarioPriseDeRDV:
         )
         assert r2.response_text is not None
 
-        # Tour 3 — Remerciement
+        # tour 3 — merci
         r3 = await _send(
             engine,
             conv_id,
@@ -173,29 +133,23 @@ class TestScenarioPriseDeRDV:
         )
         assert r3.intent == "closing"
 
-        # Vérifier la persistance du contexte
+        # vérifie le contexte
         state = engine.state_manager.get_or_create(conv_id, uuid4())
         assert state.turn_count >= 3
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 2 — Demande de tarifs via WhatsApp
-#  💰 Mehdi demande les prix des prestations
+#  scénario 2 — tarifs whatsapp
+#  mehdi demande les prix
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioTarifs:
-    """Mehdi écrit sur WhatsApp pour connaître les tarifs."""
+    """Mehdi demande les tarifs."""
 
     @pytest.mark.asyncio
     async def test_mehdi_tarifs_whatsapp(self) -> None:
-        """
-        Mehdi 👨 → WhatsApp
-
-        "C'est combien une coupe homme chez vous ?"
-        → Jenny détecte: intent=pricing
-        → Jenny fournit les tarifs
-        """
+        """Mehdi → prix coupe homme."""
         engine = _build_engine()
         conv_id = uuid4()
 
@@ -205,19 +159,14 @@ class TestScenarioTarifs:
             "C'est combien une coupe homme chez vous ?",
             channel="whatsapp",
         )
-        # Le modèle 5K peut classer comme pricing, faq ou appointment
+        # peut varier selon le modèle
         assert r.intent in ("pricing", "appointment", "faq")
         assert r.response_text is not None
         assert r.requires_human is False
 
     @pytest.mark.asyncio
     async def test_mehdi_tarifs_multiples(self) -> None:
-        """
-        Mehdi pose plusieurs questions sur les prix.
-
-        Tour 1: "Quel est le prix d'une coupe homme ?"
-        Tour 2: "Et combien coûte un lissage brésilien ?"
-        """
+        """Mehdi pose plusieurs questions prix."""
         engine = _build_engine()
         conv_id = uuid4()
 
@@ -240,35 +189,21 @@ class TestScenarioTarifs:
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 3 — Devis coiffure mariage via formulaire web
-#  💐 Sophie veut un devis pour son mariage
+#  scénario 3 — devis mariage
+#  sophie veut un devis
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioDevisMariage:
-    """Sophie remplit le formulaire web pour un devis mariage."""
+    """Sophie demande un devis mariage."""
 
     @pytest.mark.asyncio
     async def test_sophie_devis_mariage(self) -> None:
-        """
-        Sophie 👰 → Formulaire web
-
-        Tour 1: "Bonjour, je me marie le 14 juin 2026 et je
-                 cherche une coiffeuse pour moi et mes 4 demoiselles
-                 d'honneur. Pouvez-vous me faire un devis ?"
-        → Jenny détecte: intent=quote
-        → Jenny demande les détails
-
-        Tour 2: "Je voudrais un chignon pour moi et des coiffures
-                 mi-attachées pour les demoiselles d'honneur.
-                 Mon email est sophie.martin@gmail.com"
-        → Jenny détecte: intent=quote, entities=email
-        → Jenny confirme la demande de devis
-        """
+        """Sophie → devis mariage."""
         engine = _build_engine()
         conv_id = uuid4()
 
-        # Tour 1 — Demande initiale
+        # tour 1 — demande
         r1 = await _send(
             engine,
             conv_id,
@@ -276,12 +211,12 @@ class TestScenarioDevisMariage:
             "pour moi et mes 4 demoiselles d'honneur. Pouvez-vous me faire un devis ?",
             channel="form",
         )
-        # Doit être un devis, estimation ou greeting (message commence par "Bonjour")
+        # devis ou greeting
         assert r1.intent in ("quote", "pricing", "appointment", "greeting")
         assert r1.response_text is not None
         assert "devis" in r1.response_text.lower() or len(r1.response_text) > 20
 
-        # Tour 2 — Détails + email
+        # tour 2 — détails + email
         r2 = await _send(
             engine,
             conv_id,
@@ -290,29 +225,23 @@ class TestScenarioDevisMariage:
             channel="form",
         )
         assert r2.response_text is not None
-        # L'email doit être extrait comme entité
+        # email extrait en entité
         if r2.entities:
             assert "email" in r2.entities or len(r2.entities) > 0
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 4 — Suivi de commande produit via email
-#  📦 Nadia a commandé un shampoing et attend sa livraison
+#  scénario 4 — suivi commande
+#  nadia attend sa livraison
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioSuiviCommande:
-    """Nadia suit sa commande de produits capillaires."""
+    """Nadia suit sa commande."""
 
     @pytest.mark.asyncio
     async def test_nadia_suivi_commande_email(self) -> None:
-        """
-        Nadia 👩 → Email
-
-        "Où en est ma commande CMD-2026-789 ?"
-        → Jenny détecte: intent=order_status
-        → Jenny vérifie le statut
-        """
+        """Nadia → suivi commande."""
         engine = _build_engine()
         conv_id = uuid4()
 
@@ -328,12 +257,7 @@ class TestScenarioSuiviCommande:
 
     @pytest.mark.asyncio
     async def test_nadia_commande_avec_suivi(self) -> None:
-        """
-        Nadia demande le suivi de livraison de son colis.
-
-        "Où est mon colis commande CMD-456 ?"
-        → Jenny détecte: intent=order_status
-        """
+        """Nadia → suivi colis."""
         engine = _build_engine()
         conv_id = uuid4()
 
@@ -349,25 +273,17 @@ class TestScenarioSuiviCommande:
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 5 — Réclamation client mécontent via Instagram
-#  😡 Kevin n'est pas content de sa coupe
+#  scénario 5 — réclamation
+#  kevin mécontent de sa coupe
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioReclamation:
-    """Kevin fait une réclamation sur Instagram."""
+    """Kevin fait une réclamation."""
 
     @pytest.mark.asyncio
     async def test_kevin_reclamation(self) -> None:
-        """
-        Kevin 😤 → Instagram DM
-
-        "J'ai eu ma coupe hier et franchement c'est pas du tout
-         ce que j'avais demandé. J'avais montré une photo et le
-         résultat ressemble à rien. Je suis vraiment pas content."
-        → Jenny détecte: intent=complaint ou escalation (cas négatif)
-        → Jenny s'excuse et propose de résoudre
-        """
+        """Kevin → réclamation coupe."""
         engine = _build_engine()
         conv_id = uuid4()
 
@@ -377,25 +293,18 @@ class TestScenarioReclamation:
             "J'ai un gros problème avec ma coupe, c'est un défaut de prestation",
             channel="instagram",
         )
-        # Le modèle peut classer en complaint, escalation, ou autre
+        # classement variable
         assert r.intent in ("complaint", "escalation", "appointment")
         assert r.response_text is not None
         assert len(r.response_text) > 20
 
     @pytest.mark.asyncio
     async def test_kevin_veut_parler_gerante(self) -> None:
-        """
-        Kevin 😤 → Instagram DM (suite)
-
-        Tour 1: Réclamation
-        Tour 2: "Je veux parler à la gérante directement"
-        → Jenny détecte: intent=escalation
-        → Jenny transfère à Léa (requires_human=True)
-        """
+        """Kevin veut la gérante."""
         engine = _build_engine()
         conv_id = uuid4()
 
-        # Réclamation
+        # réclamation
         await _send(
             engine,
             conv_id,
@@ -403,7 +312,7 @@ class TestScenarioReclamation:
             channel="instagram",
         )
 
-        # Escalade
+        # escalade
         r2 = await _send(
             engine,
             conv_id,
@@ -415,23 +324,17 @@ class TestScenarioReclamation:
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 6 — Questions FAQ via WhatsApp
-#  ❓ Amina pose des questions pratiques
+#  scénario 6 — faq whatsapp
+#  amina pose des questions
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioFAQ:
-    """Amina pose des questions sur le salon."""
+    """Amina questionne le salon."""
 
     @pytest.mark.asyncio
     async def test_amina_horaires(self) -> None:
-        """
-        Amina 👩 → WhatsApp
-
-        "Vous êtes ouverts le lundi ?"
-        → Jenny détecte: intent=planning, faq ou appointment (mot "ouverts"≈horaire)
-        → Jenny donne les horaires
-        """
+        """Amina → horaires."""
         engine = _build_engine()
         conv_id = uuid4()
 
@@ -441,18 +344,13 @@ class TestScenarioFAQ:
             "Vous êtes ouverts le lundi ?",
             channel="whatsapp",
         )
-        # Le modèle peut interpréter comme planning, faq, ou appointment (horaires)
+        # interprétation variable
         assert r.intent in ("planning", "faq", "appointment")
         assert r.response_text is not None
 
     @pytest.mark.asyncio
     async def test_amina_adresse(self) -> None:
-        """
-        Amina → WhatsApp
-
-        "Quelle est votre adresse ?"
-        → Jenny détecte: intent=faq ou autre
-        """
+        """Amina → adresse."""
         engine = _build_engine()
         conv_id = uuid4()
 
@@ -463,15 +361,12 @@ class TestScenarioFAQ:
             channel="whatsapp",
         )
         assert r.response_text is not None
-        # Le modèle peut ne pas être sûr, on accepte toute réponse valide
+        # on accepte toute réponse
         assert len(r.response_text) > 5
 
     @pytest.mark.asyncio
     async def test_amina_produits(self) -> None:
-        """
-        "Vous utilisez quoi comme produits de coloration ?"
-        → Jenny détecte: intent=faq
-        """
+        """Amina → produits."""
         engine = _build_engine()
         conv_id = uuid4()
 
@@ -485,23 +380,17 @@ class TestScenarioFAQ:
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 7 — Paiement via WhatsApp
-#  💳 Thomas veut payer sa prestation
+#  scénario 7 — paiement
+#  thomas veut payer
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioPaiement:
-    """Thomas veut régler sa prestation."""
+    """Thomas veut régler."""
 
     @pytest.mark.asyncio
     async def test_thomas_paiement(self) -> None:
-        """
-        Thomas 👨 → WhatsApp
-
-        "Bonjour, est-ce que je peux payer par carte sans contact ?"
-        → Jenny détecte: intent=payment
-        → Jenny liste les moyens de paiement
-        """
+        """Thomas → paiement carte."""
         engine = _build_engine()
         conv_id = uuid4()
 
@@ -513,17 +402,12 @@ class TestScenarioPaiement:
         )
         assert r.intent == "payment"
         assert r.response_text is not None
-        # Doit mentionner les moyens de paiement
+        # doit mentionner le paiement
         assert "carte" in r.response_text.lower() or "paiement" in r.response_text.lower()
 
     @pytest.mark.asyncio
     async def test_thomas_paiement_facture(self) -> None:
-        """
-        Thomas → WhatsApp
-
-        "Je voudrais régler ma facture de 85€ pour la coupe + coloration"
-        → Jenny détecte: intent=payment, entities={amount}
-        """
+        """Thomas → règlement facture."""
         engine = _build_engine()
         conv_id = uuid4()
 
@@ -535,23 +419,23 @@ class TestScenarioPaiement:
         )
         assert r.intent == "payment"
         assert r.response_text is not None
-        # L'entité montant doit être extraite
+        # montant extrait
         if r.entities:
             assert "amount" in r.entities
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 8 — Salutations & Au revoir
-#  👋 Messages simples de politesse
+#  scénario 8 — salutations
+#  messages de politesse
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioSalutations:
-    """Messages de politesse basiques."""
+    """Messages de politesse."""
 
     @pytest.mark.asyncio
     async def test_bonjour_instagram(self) -> None:
-        """Un simple "Bonjour" sur Instagram."""
+        """Bonjour sur Instagram."""
         engine = _build_engine()
         r = await _send(engine, uuid4(), "Bonjour !", channel="instagram")
         assert r.intent == "greeting"
@@ -560,15 +444,15 @@ class TestScenarioSalutations:
 
     @pytest.mark.asyncio
     async def test_salut_whatsapp(self) -> None:
-        """Un "Salut ça va ?" décontracté sur WhatsApp."""
+        """Salut sur WhatsApp."""
         engine = _build_engine()
         r = await _send(engine, uuid4(), "Salut ça va ?", channel="whatsapp")
-        # Le modèle 5K classifie correctement comme small_talk ou greeting
+        # small_talk ou greeting
         assert r.intent in ("greeting", "small_talk", "general")
 
     @pytest.mark.asyncio
     async def test_au_revoir(self) -> None:
-        """Un au revoir poli."""
+        """Au revoir poli."""
         engine = _build_engine()
         r = await _send(engine, uuid4(), "Merci beaucoup, au revoir !")
         assert r.intent == "closing"
@@ -584,33 +468,25 @@ class TestScenarioSalutations:
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 9 — Conversation complète multi-tours via Instagram
-#  🔄 Emma : salutation → RDV → prix → paiement → au revoir
+#  scénario 9 — conversation complète
+#  emma : parcours complet
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioConversationComplete:
-    """Emma fait une conversation complète de bout en bout."""
+    """Emma → parcours complet."""
 
     @pytest.mark.asyncio
     async def test_emma_parcours_complet(self) -> None:
-        """
-        Emma 👩 → Instagram DM — Parcours complet
-
-        Tour 1: "Hello !" → greeting
-        Tour 2: "Je voudrais prendre rdv pour une coloration" → appointment
-        Tour 3: "C'est combien pour une colo + mèches ?" → pricing
-        Tour 4: "Ok, je peux payer en plusieurs fois ?" → payment
-        Tour 5: "Parfait merci ! À bientôt" → closing
-        """
+        """Parcours complet d'Emma."""
         engine = _build_engine()
         conv_id = uuid4()
 
-        # Tour 1 — Salutation
+        # tour 1 — salut
         r1 = await _send(engine, conv_id, "Hello !", channel="instagram")
         assert r1.intent == "greeting"
 
-        # Tour 2 — Prise de RDV
+        # tour 2 — rdv
         r2 = await _send(
             engine,
             conv_id,
@@ -620,7 +496,7 @@ class TestScenarioConversationComplete:
         assert r2.intent in ("appointment", "planning")
         assert r2.response_text is not None
 
-        # Tour 3 — Demande de prix
+        # tour 3 — prix
         r3 = await _send(
             engine,
             conv_id,
@@ -629,7 +505,7 @@ class TestScenarioConversationComplete:
         )
         assert r3.intent in ("pricing", "faq", "planning")
 
-        # Tour 4 — Paiement
+        # tour 4 — paiement
         r4 = await _send(
             engine,
             conv_id,
@@ -639,7 +515,7 @@ class TestScenarioConversationComplete:
         assert r4.intent == "payment"
         assert "paiement" in r4.response_text.lower() or len(r4.response_text) > 10
 
-        # Tour 5 — Au revoir
+        # tour 5 — au revoir
         r5 = await _send(
             engine,
             conv_id,
@@ -648,24 +524,24 @@ class TestScenarioConversationComplete:
         )
         assert r5.intent == "closing"
 
-        # Vérifier que le contexte contient tout le parcours
+        # vérifie le contexte complet
         state = engine.state_manager.get_or_create(conv_id, uuid4())
         assert state.turn_count == 5
         assert len(state.message_history) == 10  # 5 user + 5 assistant
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 10 — LangGraph : tous les canaux d'un coiffeur
-#  🌐 Test du graphe complet sur les messages typiques
+#  scénario 10 — langgraph
+#  test du graphe complet
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioLangGraphCoiffeur:
-    """Test via le graphe LangGraph — messages typiques d'un salon."""
+    """Via le graphe LangGraph."""
 
     @pytest.mark.asyncio
     async def test_graph_rdv_coupe(self) -> None:
-        """RDV coupe via le graphe LangGraph."""
+        """RDV coupe via le graphe."""
         result = await process_message_with_graph(
             message="Je voudrais réserver un rendez-vous pour une coupe",
             channel="instagram",
@@ -676,7 +552,7 @@ class TestScenarioLangGraphCoiffeur:
 
     @pytest.mark.asyncio
     async def test_graph_prix_coloration(self) -> None:
-        """Demande de prix via le graphe."""
+        """Prix via le graphe."""
         result = await process_message_with_graph(
             message="C'est combien une coloration complète ?",
             channel="whatsapp",
@@ -693,13 +569,13 @@ class TestScenarioLangGraphCoiffeur:
             channel="instagram",
             sender="client_mecontent",
         )
-        # Le modèle peut classer comme complaint ou escalation (les deux sont ok pour un message négatif)
+        # complaint ou escalation
         assert result["intent"] in ("complaint", "escalation")
-        assert result["priority"] >= 5  # Priorité haute
+        assert result["priority"] >= 5  # priorité haute
 
     @pytest.mark.asyncio
     async def test_graph_escalade_humain(self) -> None:
-        """Demande de parler à un humain → escalade."""
+        """Demande un humain → escalade."""
         result = await process_message_with_graph(
             message="Je veux parler à quelqu'un, pas un robot",
             channel="instagram",
@@ -718,13 +594,13 @@ class TestScenarioLangGraphCoiffeur:
             channel="form",
             sender="future_mariee",
         )
-        # Peut être détecté comme quote, pricing, appointment ou greeting (msg commence par "Bonjour")
+        # détection variable
         assert result["intent"] in ("quote", "pricing", "appointment", "greeting")
         assert result["response"] is not None
 
     @pytest.mark.asyncio
     async def test_graph_commande_produit(self) -> None:
-        """Suivi de commande produit capillaire."""
+        """Suivi de commande."""
         result = await process_message_with_graph(
             message="Où en est ma commande CMD-567 ?",
             channel="email",
@@ -735,7 +611,7 @@ class TestScenarioLangGraphCoiffeur:
 
     @pytest.mark.asyncio
     async def test_graph_planning_samedi(self) -> None:
-        """Consultation du planning pour le samedi."""
+        """Planning du samedi."""
         result = await process_message_with_graph(
             message="Quelles sont vos disponibilités samedi ?",
             channel="whatsapp",
@@ -752,53 +628,53 @@ class TestScenarioLangGraphCoiffeur:
             channel="whatsapp",
             sender="+33611223344",
         )
-        # Le modèle 5K détecte correctement payment_question
+        # détecte payment_question
         assert result["intent"] in ("payment", "payment_question", "planning")
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 11 — Messages réalistes variés (smoke tests)
-#  💬 Vrais messages comme un coiffeur les recevrait
+#  scénario 11 — messages réalistes
+#  vrais messages du salon
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioMessagesRealistesSalon:
-    """Messages réalistes qu'un salon de coiffure reçoit au quotidien."""
+    """Messages réalistes du salon."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "message,expected_intents,channel",
         [
-            # ── Salutations ──
+            # salutations
             ("Bonjour !", ["greeting"], "instagram"),
             ("Salut !", ["greeting", "general"], "instagram"),
             ("Hello !", ["greeting"], "whatsapp"),
-            # ── Rendez-vous ──
+            # rendez-vous
             ("Je voudrais prendre rendez-vous", ["appointment"], "instagram"),
             ("Je voudrais réserver un rdv pour mardi", ["appointment"], "whatsapp"),
-            # ── Tarifs ──
+            # tarifs
             ("Combien ça coûte une coupe femme ?", ["pricing"], "whatsapp"),
             ("C'est quel prix le lissage ?", ["pricing"], "whatsapp"),
-            # ── Commandes ──
+            # commandes
             ("Où en est ma commande CMD-2026-001 ?", ["order_status"], "email"),
             ("J'attends mon colis de shampoing", ["order_status"], "email"),
-            # ── Réclamations ──
+            # réclamations
             (
                 "J'ai un problème avec ma coupe, c'est un défaut",
                 ["complaint", "escalation"],
                 "instagram",
             ),
-            # ── Paiement ──
+            # paiement
             ("Je peux payer en 3 fois ?", ["payment"], "instagram"),
             ("Comment régler ma facture ?", ["payment"], "email"),
-            # ── Au revoir ──
+            # au revoir
             ("Merci beaucoup, au revoir !", ["closing"], "instagram"),
         ],
     )
     async def test_message_realiste(
         self, message: str, expected_intents: list[str], channel: str
     ) -> None:
-        """Chaque message réaliste doit être correctement classifié."""
+        """Chaque message bien classé."""
         engine = _build_engine()
         r = await _send(engine, uuid4(), message, channel=channel)
         assert r.intent in expected_intents, (
@@ -810,32 +686,32 @@ class TestScenarioMessagesRealistesSalon:
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 12 — Robustesse : messages ambigus & edge cases
-#  🧪 Messages difficiles à interpréter
+#  scénario 12 — robustesse
+#  messages difficiles
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioRobustesse:
-    """Messages ambigus et edge cases pour tester la robustesse."""
+    """Messages ambigus, robustesse."""
 
     @pytest.mark.asyncio
     async def test_message_vague(self) -> None:
-        """Un message très vague ne doit pas crasher."""
+        """Message vague, pas de crash."""
         engine = _build_engine()
         r = await _send(engine, uuid4(), "ok")
         assert r.response_text is not None
-        assert r.requires_human is False or r.requires_human is True  # just no crash
+        assert r.requires_human is False or r.requires_human is True  # juste pas de crash
 
     @pytest.mark.asyncio
     async def test_message_emoji_seul(self) -> None:
-        """Un emoji seul ne doit pas crasher."""
+        """Emoji seul, pas de crash."""
         engine = _build_engine()
         r = await _send(engine, uuid4(), "👍")
         assert r.response_text is not None
 
     @pytest.mark.asyncio
     async def test_message_long(self) -> None:
-        """Un long message détaillé doit être traité sans crasher."""
+        """Long message, pas de crash."""
         engine = _build_engine()
         long_msg = (
             "Bonjour, je suis cliente chez vous depuis 3 ans et j'ai toujours "
@@ -848,12 +724,12 @@ class TestScenarioRobustesse:
         r = await _send(engine, uuid4(), long_msg, channel="email")
         assert r.response_text is not None
         assert len(r.response_text) > 10
-        # L'intent peut varier selon le modèle, l'important c'est que ça ne crashe pas
+        # l'important, pas de crash
         assert r.intent is not None
 
     @pytest.mark.asyncio
     async def test_message_multilingue(self) -> None:
-        """Un message avec du français informel / verlan."""
+        """Français informel."""
         engine = _build_engine()
         r = await _send(
             engine,
@@ -862,12 +738,12 @@ class TestScenarioRobustesse:
             channel="instagram",
         )
         assert r.response_text is not None
-        # Le modèle peut classer de différentes manières, l'important c'est qu'il réponde
+        # l'important, qu'il réponde
         assert r.intent is not None
 
     @pytest.mark.asyncio
     async def test_pas_de_crash_accent(self) -> None:
-        """Les accents et caractères spéciaux ne posent pas de problème."""
+        """Accents sans problème."""
         engine = _build_engine()
         r = await _send(
             engine,
@@ -879,20 +755,17 @@ class TestScenarioRobustesse:
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 13 — Modification / Annulation de RDV
-#  🔄 Léa veut modifier puis annuler son RDV
+#  scénario 13 — modif/annul rdv
+#  léa modifie puis annule
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioModificationRDV:
-    """Modification et annulation de rendez-vous."""
+    """Modif et annulation rdv."""
 
     @pytest.mark.asyncio
     async def test_modifier_rdv(self) -> None:
-        """
-        "Je voudrais décaler mon rendez-vous de mardi à jeudi"
-        → Jenny traite la demande (peut escalader si pas sûr)
-        """
+        """Décaler un rdv."""
         engine = _build_engine()
         r = await _send(
             engine,
@@ -901,15 +774,12 @@ class TestScenarioModificationRDV:
             channel="whatsapp",
         )
         assert r.response_text is not None
-        # Le modèle peut classer comme appointment, escalation, ou autre
+        # classement variable
         assert r.intent is not None
 
     @pytest.mark.asyncio
     async def test_annuler_rdv(self) -> None:
-        """
-        "Je dois annuler mon rendez-vous"
-        → Jenny traite la demande
-        """
+        """Annuler un rdv."""
         engine = _build_engine()
         r = await _send(
             engine,
@@ -918,25 +788,22 @@ class TestScenarioModificationRDV:
             channel="instagram",
         )
         assert r.response_text is not None
-        # Le modèle peut classer comme appointment, escalation, ou autre
+        # classement variable
         assert r.intent is not None
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 14 — Multi-canal : même client, canaux différents
-#  📱 Lucas contacte le salon par WhatsApp puis Instagram
+#  scénario 14 — multi-canal
+#  lucas : whatsapp puis insta
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioMultiCanal:
-    """Test de cohérence entre les canaux."""
+    """Cohérence entre canaux."""
 
     @pytest.mark.asyncio
     async def test_meme_question_differents_canaux(self) -> None:
-        """
-        La même question doit produire une réponse cohérente
-        quel que soit le canal.
-        """
+        """Même question, tous canaux."""
         engine = _build_engine()
 
         r_insta = await _send(
@@ -958,20 +825,20 @@ class TestScenarioMultiCanal:
             channel="email",
         )
 
-        # L'intent doit être le même quel que soit le canal
+        # même intent partout
         assert r_insta.intent == r_whatsapp.intent == r_email.intent == "pricing"
-        # Les 3 doivent avoir une réponse
+        # les 3 ont une réponse
         assert all(r.response_text for r in [r_insta, r_whatsapp, r_email])
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 15 — API HTTP : simulation d'un client web
-#  🌐 Test via l'API REST comme un front-end le ferait
+#  scénario 15 — api http
+#  test via l'api rest
 # ═══════════════════════════════════════════════════════════
 
 
 class TestScenarioAPICoiffeur:
-    """Test via l'API HTTP — comme le front-end du salon le ferait."""
+    """Test via l'API HTTP."""
 
     @pytest.fixture
     async def client(self):
@@ -988,7 +855,7 @@ class TestScenarioAPICoiffeur:
 
     @pytest.mark.asyncio
     async def test_api_rdv_coiffure(self, client) -> None:
-        """Le widget web du salon envoie une demande de RDV."""
+        """Widget web → demande rdv."""
         response = await client.post(
             "/api/v1/conversation/chat",
             json={
@@ -1006,7 +873,7 @@ class TestScenarioAPICoiffeur:
 
     @pytest.mark.asyncio
     async def test_api_tarifs(self, client) -> None:
-        """Un visiteur du site demande les tarifs."""
+        """Visiteur demande les tarifs."""
         response = await client.post(
             "/api/v1/conversation/chat",
             json={
@@ -1022,16 +889,11 @@ class TestScenarioAPICoiffeur:
 
     @pytest.mark.asyncio
     async def test_api_conversation_complete_salon(self, client) -> None:
-        """
-        Conversation complète via l'API :
-        Bonjour → RDV → Merci
-
-        Simule un utilisateur sur le widget chat du site web du salon.
-        """
+        """Conversation complète via l'API."""
         conv_id = str(uuid4())
         biz_id = BUSINESS_ID
 
-        # Bonjour
+        # bonjour
         r1 = await client.post(
             "/api/v1/conversation/chat",
             json={"conversation_id": conv_id, "business_id": biz_id, "message": "Bonjour !"},
@@ -1039,7 +901,7 @@ class TestScenarioAPICoiffeur:
         assert r1.status_code == 200
         assert r1.json()["intent"] == "greeting"
 
-        # RDV
+        # rdv
         r2 = await client.post(
             "/api/v1/conversation/chat",
             json={
@@ -1051,7 +913,7 @@ class TestScenarioAPICoiffeur:
         assert r2.status_code == 200
         assert r2.json()["intent"] == "appointment"
 
-        # Merci
+        # merci
         r3 = await client.post(
             "/api/v1/conversation/chat",
             json={
@@ -1065,26 +927,16 @@ class TestScenarioAPICoiffeur:
 
 
 # ═══════════════════════════════════════════════════════════
-#  TEST SPÉCIAL : RDV URGENT + DEVIS (Google Calendar)
+#  rdv urgent + devis
 # ═══════════════════════════════════════════════════════════
 
 
 class TestRDVUrgentAvecDevis:
-    """Test combiné : demande de RDV urgent + devis en une seule phrase.
-
-    Message : "Bonjour, j'aimerai le rendez vous le plus rapide dispo
-    c'est urgent et envoyé moi un devis"
-
-    Attendu :
-        1. Le graphe LangGraph détecte l'intention
-        2. Les entités sont extraites
-        3. L'agent approprié répond
-        4. Le PlanningAgent détecte l'urgence et interroge le calendrier
-    """
+    """RDV urgent + devis combinés."""
 
     @pytest.mark.asyncio
     async def test_rdv_urgent_devis_via_graph(self):
-        """Test via le graphe LangGraph complet."""
+        """Via le graphe LangGraph."""
         message = (
             "Bonjour, j'aimerai le rendez vous le plus rapide dispo "
             "c'est urgent et envoyé moi un devis"
@@ -1097,7 +949,7 @@ class TestRDVUrgentAvecDevis:
             business_id=BUSINESS_ID,
         )
 
-        # Le graphe doit retourner un résultat complet
+        # résultat complet attendu
         assert result is not None
         assert result.get("intent") is not None
         assert result.get("response") is not None
@@ -1116,11 +968,11 @@ class TestRDVUrgentAvecDevis:
 
     @pytest.mark.asyncio
     async def test_rdv_urgent_devis_via_engine(self):
-        """Test via le ConversationEngine complet."""
+        """Via le ConversationEngine."""
         engine = _build_engine()
         conv_id = str(uuid4())
 
-        # Message combiné urgent + devis
+        # message urgent + devis
         response = await engine.process(
             EngineRequest(
                 conversation_id=conv_id,
@@ -1149,16 +1001,16 @@ class TestRDVUrgentAvecDevis:
 
     @pytest.mark.asyncio
     async def test_planning_agent_urgence_direct(self):
-        """Test direct du PlanningAgent avec détection d'urgence + calendrier."""
+        """PlanningAgent urgence + calendrier."""
         from jenny.agents.planning_agent import PlanningAgent
         from jenny.engine.state_manager import ConversationState
         from jenny.integrations.google_calendar import GoogleCalendarService
 
-        # Créer un service calendar simulé
+        # service calendar simulé
         calendar = GoogleCalendarService()
         agent = PlanningAgent(calendar_service=calendar)
 
-        # Simuler un état de conversation urgent
+        # état urgent simulé
         state = ConversationState()
         state.set_intent("planning", 0.85)
         state.add_user_message(
@@ -1172,14 +1024,14 @@ class TestRDVUrgentAvecDevis:
         assert result["response"] is not None
         assert len(result["response"]) > 0
 
-        # Vérifier que l'urgence a été détectée
+        # vérifie l'urgence détectée
         action = result.get("action_result", {})
         assert action.get("type") == "urgent_slot", (
             f"L'urgence n'a pas été détectée. Type: {action.get('type')}"
         )
         assert action.get("success") is True
 
-        # Vérifier qu'un créneau urgent a été proposé
+        # vérifie le créneau urgent
         slot = action.get("slot", {})
         assert "date" in slot
         assert "time" in slot
@@ -1194,24 +1046,24 @@ class TestRDVUrgentAvecDevis:
 
     @pytest.mark.asyncio
     async def test_google_calendar_service_simulated(self):
-        """Test du service Google Calendar en mode simulé."""
+        """Google Calendar en simulé."""
         from jenny.integrations.google_calendar import GoogleCalendarService
 
         calendar = GoogleCalendarService()
 
-        # Vérifier qu'on est en mode simulé (pas de credentials)
+        # mode simulé, sans credentials
         assert not calendar.is_configured
 
-        # Récupérer les créneaux
+        # récupère les créneaux
         slots = await calendar.get_available_slots(days=3)
         assert len(slots) > 0
 
-        # Trouver le prochain créneau
+        # prochain créneau
         next_slot = await calendar.get_next_available_slot()
         assert next_slot is not None
         assert next_slot.available is True
 
-        # Créer un RDV
+        # crée un rdv
         result = await calendar.create_event(
             title="Coupe + Brushing — Test",
             start_datetime=f"{next_slot.date}T{next_slot.time}:00",
@@ -1233,12 +1085,12 @@ class TestRDVUrgentAvecDevis:
 
     @pytest.mark.asyncio
     async def test_calendar_crud_operations(self):
-        """Test CRUD complet sur le calendrier (simulé)."""
+        """CRUD calendrier simulé."""
         from jenny.integrations.google_calendar import GoogleCalendarService
 
         calendar = GoogleCalendarService()
 
-        # CREATE
+        # create
         create_result = await calendar.create_event(
             title="Coloration — Marie",
             start_datetime="2026-03-20T10:00:00",
@@ -1251,7 +1103,7 @@ class TestRDVUrgentAvecDevis:
         assert create_result.success
         event_id = create_result.event.id
 
-        # UPDATE (modifier l'heure)
+        # update — modifie l'heure
         update_result = await calendar.update_event(
             event_id=event_id,
             new_start="2026-03-20T14:00:00",
@@ -1260,11 +1112,11 @@ class TestRDVUrgentAvecDevis:
         )
         assert update_result.success
 
-        # READ (planning du jour)
+        # read — planning du jour
         schedule = await calendar.get_day_schedule("2026-03-20")
         assert len(schedule) >= 1
 
-        # CANCEL
+        # cancel
         cancel_result = await calendar.cancel_event(event_id=event_id)
         assert cancel_result.success
 
@@ -1278,24 +1130,24 @@ class TestRDVUrgentAvecDevis:
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 14 — Multi-label : 1 message → N intentions
-#  🎯 Teste le pipeline quand un client demande plusieurs choses
+#  scénario 14 — multi-label
+#  plusieurs demandes à la fois
 # ═══════════════════════════════════════════════════════════
 
 
 class TestMultiLabelIntents:
-    """Tests de détection multi-intention."""
+    """Détection multi-intention."""
 
     @pytest.mark.asyncio
     async def test_rdv_plus_devis_via_graph(self) -> None:
-        """Un message avec RDV + devis doit détecter les deux intentions."""
+        """RDV + devis → deux intents."""
         result = await process_message_with_graph(
             message="Bonjour, je voudrais prendre rendez-vous et avoir un devis pour un lissage",
             channel="whatsapp",
             sender="+33612345678",
         )
 
-        # Vérifier qu'on a détecté multi-intent
+        # vérifie le multi-intent
         detected = result.get("detected_intents", [])
         detected_names = [d["intent"] for d in detected]
         print(f"\n{'=' * 60}")
@@ -1311,16 +1163,16 @@ class TestMultiLabelIntents:
 
     @pytest.mark.asyncio
     async def test_multi_label_predictor_direct(self) -> None:
-        """Le predict_multi retourne plusieurs intentions pour un message multi-intent."""
+        """predict_multi → plusieurs intents."""
         from ml.models.intent.predict import IntentPredictor
 
         predictor = IntentPredictor.from_checkpoint("checkpoints/intent/best_model.pt")
         result = predictor.predict_multi("Bonjour, je voudrais prendre rdv et avoir un devis")
 
-        # Le modèle 5K peut détecter un ou plusieurs intents
+        # un ou plusieurs intents
         assert len(result["intents"]) >= 1
         detected_names = [d["intent"] for d in result["intents"]]
-        # Au moins un intent pertinent doit être détecté
+        # au moins un intent pertinent
         assert any(i in detected_names for i in ("appointment", "quote", "greeting", "planning"))
 
         print(f"\n{'=' * 60}")
@@ -1331,7 +1183,7 @@ class TestMultiLabelIntents:
 
     @pytest.mark.asyncio
     async def test_multi_label_via_engine(self) -> None:
-        """Le ConversationEngine détecte et signale les multi-intents."""
+        """Engine signale les multi-intents."""
         engine = _build_engine()
 
         r = await _send(
@@ -1354,7 +1206,7 @@ class TestMultiLabelIntents:
 
     @pytest.mark.asyncio
     async def test_single_intent_still_works(self) -> None:
-        """Un message simple ne déclenche qu'une seule intention."""
+        """Message simple → un seul intent."""
         from ml.models.intent.predict import IntentPredictor
 
         predictor = IntentPredictor.from_checkpoint("checkpoints/intent/best_model.pt")
@@ -1372,7 +1224,7 @@ class TestMultiLabelIntents:
 
     @pytest.mark.asyncio
     async def test_multi_agent_execution(self) -> None:
-        """Quand multi-intent, les agents correspondants sont exécutés."""
+        """Multi-intent → agents exécutés."""
         result = await process_message_with_graph(
             message="Je veux prendre rdv et connaître vos tarifs",
             channel="instagram",
@@ -1391,16 +1243,16 @@ class TestMultiLabelIntents:
 
 
 # ═══════════════════════════════════════════════════════════
-#  SCÉNARIO 15 — Clarification : Jenny n'est pas sûre
-#  🤔 Teste que Jenny pose des questions quand confiance basse
+#  scénario 15 — clarification
+#  questions si confiance basse
 # ═══════════════════════════════════════════════════════════
 
 
 class TestClarification:
-    """Tests de la mécanique de clarification."""
+    """Mécanique de clarification."""
 
     def test_clarification_agent_very_low_confidence(self) -> None:
-        """Confiance < 30% → Jenny propose un menu d'options."""
+        """Confiance < 30% → menu."""
         from jenny.agents.clarification_agent import ClarificationAgent
 
         agent = ClarificationAgent()
@@ -1419,7 +1271,7 @@ class TestClarification:
         print(f"{'=' * 60}\n")
 
     def test_clarification_agent_low_confidence(self) -> None:
-        """Confiance 30-50% → Jenny propose ce qu'elle a compris."""
+        """Confiance 30-50% → propose."""
         from jenny.agents.clarification_agent import ClarificationAgent
 
         agent = ClarificationAgent()
@@ -1437,7 +1289,7 @@ class TestClarification:
         print(f"{'=' * 60}\n")
 
     def test_clarification_agent_ambiguous_multi(self) -> None:
-        """Plusieurs intents forts → Jenny confirme les deux."""
+        """Deux intents forts → confirme."""
         from jenny.agents.clarification_agent import ClarificationAgent
 
         agent = ClarificationAgent()
@@ -1459,7 +1311,7 @@ class TestClarification:
 
     @pytest.mark.asyncio
     async def test_clarification_in_graph(self) -> None:
-        """Un message à faible confiance déclenche la clarification dans le graphe."""
+        """Faible confiance → clarification."""
         result = await process_message_with_graph(
             message="Salut !",
             channel="instagram",
@@ -1473,16 +1325,16 @@ class TestClarification:
         print(f"📝 Réponse :\n   {result.get('response', '')[:200]}")
         print(f"{'=' * 60}\n")
 
-        # Si la confiance est basse, on attend un agent clarification ou fallback
+        # confiance basse → clarification
         if result.get("needs_clarification"):
             assert result.get("agent") == "clarification"
-            assert "?" in result.get("response", "")  # Doit être une question
+            assert "?" in result.get("response", "")  # doit être une question
         else:
             assert result.get("response") is not None
 
     @pytest.mark.asyncio
     async def test_clarification_via_engine(self) -> None:
-        """Le ConversationEngine utilise le ClarificationAgent quand nécessaire."""
+        """Engine → ClarificationAgent."""
         engine = _build_engine()
 
         r = await _send(engine, uuid4(), "Salut !", channel="instagram")
@@ -1501,14 +1353,7 @@ class TestClarification:
 
     @pytest.mark.asyncio
     async def test_high_confidence_no_clarification(self) -> None:
-        """Un message complet (prestation + jour + heure) n'a rien à clarifier.
-
-        NB : depuis le slot-filling coiffeur, une demande de RDV INCOMPLÈTE
-        déclenche une question ciblée (« quelle prestation ? ») — c'est voulu.
-        On vérifie donc qu'un message COMPLET ne déclenche pas de clarification,
-        et que toute clarification éventuelle est bien du slot-filling (utile),
-        jamais une confusion.
-        """
+        """Message complet → rien à clarifier."""
         engine = _build_engine()
 
         r = await _send(
@@ -1519,7 +1364,7 @@ class TestClarification:
         )
 
         assert r.response_text is not None
-        # Une clarification éventuelle ne peut être que du slot-filling ciblé.
+        # clarification = slot-filling
         if r.needs_clarification:
             assert r.clarification_reason == "slot_filling"
 
@@ -1530,7 +1375,7 @@ class TestClarification:
 
     @pytest.mark.asyncio
     async def test_clarification_handle_method(self) -> None:
-        """Le ClarificationAgent fonctionne via l'interface standard handle()."""
+        """ClarificationAgent via handle()."""
         from jenny.agents.clarification_agent import ClarificationAgent
         from jenny.engine.state_manager import ConversationState
 

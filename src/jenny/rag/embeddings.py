@@ -1,13 +1,4 @@
-"""Service d'embeddings pour le RAG.
-
-Gère la génération de vecteurs d'embedding à partir de texte
-pour l'indexation et la recherche sémantique.
-
-Supporte plusieurs backends :
-- Ollama (nomic-embed-text, 768-dim) — local, gratuit, par défaut
-- Sentence Transformers (all-MiniLM-L6-v2, 384-dim) — local
-- OpenAI (text-embedding-3-small, 1536-dim)
-"""
+"""Embeddings pour le RAG."""
 
 from __future__ import annotations
 
