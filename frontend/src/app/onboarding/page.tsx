@@ -26,11 +26,7 @@ import {
   type ChannelStatus,
 } from "@/lib/api";
 
-// Onboarding en 3 étapes (DA « Jenny Front ») — recrée fidèlement l'écran
-// `ScreenOnboarding` du handoff, adapté à Next + au stack existant : stepper à
-// gauche, contenu éditorial à droite, titres en Instrument Serif, accents mono.
-// Le flux est réel : `step` local, navigation Continuer/Retour, et persistance
-// via getBusiness / updateBusiness ; l'étape 2 lit les canaux réels.
+// onboarding en 3 étapes
 
 const TOTAL_STEPS = 3;
 
@@ -40,9 +36,7 @@ const STEPS = [
   { n: 3, label: "Le ton de Jenny" },
 ] as const;
 
-// ── Canaux : mapping slug back-end → présentation (icône + couleur de marque).
-// Couleurs de marque issues du design : WhatsApp #25D366, Instagram #E4405F,
-// Email #3B82F6. `lucide-react` n'exporte pas `Instagram` ici → on utilise AtSign.
+// mapping canal → icône + couleur
 type ChannelBrand = {
   label: string;
   icon: ComponentType<{ className?: string; style?: React.CSSProperties }>;
@@ -66,7 +60,7 @@ function brandFor(channel: string, fallbackLabel?: string): ChannelBrand {
   );
 }
 
-// Repli statique fidèle au design quand l'API échoue ou ne renvoie rien.
+// repli statique si erreur
 const FALLBACK_CHANNELS: ChannelStatus[] = [
   { channel: "whatsapp", label: "WhatsApp Business", connected: true, builtin: false, account: "+33 6 12 34 56 78" },
   { channel: "instagram", label: "Instagram", connected: true, builtin: false, account: "@maisonlila — 12.4k followers" },
@@ -74,7 +68,7 @@ const FALLBACK_CHANNELS: ChannelStatus[] = [
   { channel: "tiktok", label: "TikTok", connected: false, builtin: false, account: "Bientôt disponible" },
 ];
 
-// ── Tons : les 4 cartes du « cerveau » de Jenny (persona.tone).
+// les 4 tons
 type Tone = {
   id: string;
   title: string;
@@ -111,7 +105,7 @@ const TONES: Tone[] = [
 
 const PAGE_BG = "var(--color-jenny-bg)";
 
-// Transition d'entrée du contenu à chaque changement d'étape.
+// transition entre étapes
 const stepVariants = {
   enter: { opacity: 0, y: 14 },
   center: { opacity: 1, y: 0 },
@@ -124,28 +118,28 @@ export default function OnboardingPage() {
 
   const [step, setStep] = useState(1);
 
-  // Étape 1 — business (prérempli depuis getBusiness).
+  // étape 1 : business
   const [name, setName] = useState("");
   const [sector, setSector] = useState("");
   const [description, setDescription] = useState("");
 
-  // Étape 2 — canaux réels.
+  // étape 2 : canaux
   const [channels, setChannels] = useState<ChannelStatus[]>([]);
   const [channelsLoading, setChannelsLoading] = useState(true);
 
-  // Étape 3 — ton.
+  // étape 3 : ton
   const [tone, setTone] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
 
-  // Garde d'authentification (même pattern que le layout dashboard).
+  // garde d'authentification
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
       router.replace("/login");
     }
   }, [isAuthenticated, isLoading, router]);
 
-  // Préremplissage du business (name / description / persona.tone).
+  // préremplissage du business
   useEffect(() => {
     if (!isAuthenticated) return;
     let active = true;
@@ -157,14 +151,14 @@ export default function OnboardingPage() {
         if (b.persona?.tone) setTone(b.persona.tone);
       })
       .catch(() => {
-        // Pas de business encore configuré : on laisse les champs vides.
+        // pas encore de business
       });
     return () => {
       active = false;
     };
   }, [isAuthenticated]);
 
-  // Chargement des canaux réels (repli statique si vide / erreur).
+  // chargement des canaux
   useEffect(() => {
     if (!isAuthenticated) return;
     let active = true;
@@ -187,7 +181,7 @@ export default function OnboardingPage() {
 
   const goBack = () => setStep((s) => Math.max(1, s - 1));
 
-  // Étape 1 → sauvegarde name + description, puis avance.
+  // sauvegarde étape 1
   async function handleStep1() {
     setSaving(true);
     try {
@@ -196,21 +190,21 @@ export default function OnboardingPage() {
         description: description.trim() || null,
       });
     } catch {
-      // Best-effort : on n'empêche pas l'utilisateur d'avancer dans l'onboarding.
+      // best-effort
     } finally {
       setSaving(false);
       setStep(2);
     }
   }
 
-  // Étape 3 → sauvegarde persona.tone, puis ouvre le tableau de bord.
+  // sauvegarde étape 3
   async function handleStep3() {
     if (!tone) return;
     setSaving(true);
     try {
       await updateBusiness({ persona: { tone } });
     } catch {
-      // Best-effort.
+      // best-effort
     } finally {
       setSaving(false);
       router.push("/chat");
@@ -241,7 +235,7 @@ export default function OnboardingPage() {
     []
   );
 
-  // Évite tout flash de contenu avant la résolution de l'auth.
+  // évite le flash avant auth
   if (isLoading || !isAuthenticated) {
     return (
       <div
@@ -260,7 +254,7 @@ export default function OnboardingPage() {
       className="h-full flex flex-col bg-jenny-bg text-jenny-text"
       style={{ fontFamily: "var(--font-sans)" }}
     >
-      {/* ── Header : logo mascotte + compteur d'étape ── */}
+      {/* header */}
       <header className="flex items-center px-6 md:px-12 py-5 border-b border-jenny-divider">
         <div className="flex items-center gap-2.5">
           <span className="w-[30px] h-[30px] rounded-lg overflow-hidden bg-jenny-coral block">
@@ -273,7 +267,7 @@ export default function OnboardingPage() {
         </div>
       </header>
 
-      {/* ── Corps : stepper (gauche) + contenu (droite) ── */}
+      {/* stepper + contenu */}
       <div className="flex-1 overflow-y-auto">
         <div className="px-6 md:px-12 py-10 md:py-14 grid grid-cols-1 md:grid-cols-[280px_1fr] gap-10 md:gap-16 max-w-[1100px] mx-auto w-full">
           {/* Stepper */}
@@ -345,7 +339,7 @@ export default function OnboardingPage() {
                 </h1>
                 <p className="text-[15px] text-jenny-text-secondary mb-9 leading-[1.55]">{meta.intro}</p>
 
-                {/* ── Étape 1 : business ── */}
+                {/* étape 1 : business */}
                 {step === 1 && (
                   <div className="flex flex-col gap-4">
                     <Field label="Nom du business">
@@ -378,7 +372,7 @@ export default function OnboardingPage() {
                   </div>
                 )}
 
-                {/* ── Étape 2 : canaux ── */}
+                {/* étape 2 : canaux */}
                 {step === 2 && (
                   <div className="flex flex-col gap-2.5">
                     {channelsLoading ? (
@@ -426,7 +420,7 @@ export default function OnboardingPage() {
                   </div>
                 )}
 
-                {/* ── Étape 3 : ton ── */}
+                {/* étape 3 : ton */}
                 {step === 3 && (
                   <div className="grid sm:grid-cols-2 gap-3">
                     {TONES.map((t) => {
@@ -465,7 +459,7 @@ export default function OnboardingPage() {
                   </div>
                 )}
 
-                {/* ── Navigation ── */}
+                {/* navigation */}
                 <div className="mt-9 flex flex-wrap gap-3 items-center">
                   {step > 1 && (
                     <button
@@ -518,7 +512,7 @@ export default function OnboardingPage() {
   );
 }
 
-// ── Sous-composants ────────────────────────────────────────────────────────
+// sous-composants
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (

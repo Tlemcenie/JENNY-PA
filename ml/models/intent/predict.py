@@ -1,13 +1,4 @@
-"""Inférence du classifieur d'intention — Multi-Label.
-
-Charge le modèle entraîné et prédit UNE ou PLUSIEURS intentions
-d'un message texte.
-
-Ex: "RDV urgent et devis" → [
-    {"intent": "appointment", "confidence": 0.85},
-    {"intent": "quote", "confidence": 0.72},
-]
-"""
+"""inférence intent multi-label."""
 
 from __future__ import annotations
 
@@ -23,11 +14,7 @@ logger = get_logger(__name__)
 
 
 class IntentPredictor:
-    """Prédicteur d'intention multi-label à partir d'un checkpoint.
-
-    Charge le modèle LSTM entraîné et fournit une interface
-    pour prédire UNE ou PLUSIEURS intentions d'un message.
-    """
+    """prédicteur d'intention."""
 
     def __init__(
         self,
@@ -42,7 +29,7 @@ class IntentPredictor:
 
     @classmethod
     def from_checkpoint(cls, checkpoint_path: str | Path) -> IntentPredictor:
-        """Charge un prédicteur depuis un checkpoint."""
+        """charge depuis un checkpoint."""
         path = Path(checkpoint_path)
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint non trouvé : {path}")
@@ -51,8 +38,7 @@ class IntentPredictor:
         config = checkpoint["config"]
         vocab = checkpoint["vocab"]
 
-        # Le device est figé dans le checkpoint (souvent 'mps' — entraînement sur Mac).
-        # En prod (Linux/CPU) ou sur GPU, on le re-résout, sinon .to('mps') plante.
+        # re-résout le device
         if torch.cuda.is_available():
             config.device = "cuda"
         elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
@@ -69,7 +55,7 @@ class IntentPredictor:
         return cls(model, vocab, config)
 
     def _encode(self, text: str) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encode un texte en tenseurs pour le modèle."""
+        """encode le texte."""
         tokens = text.lower().strip().split()
         ids = [self.vocab.get(t, 1) for t in tokens]  # 1 = <UNK>
 
@@ -87,13 +73,7 @@ class IntentPredictor:
 
     @torch.no_grad()
     def predict(self, text: str) -> dict[str, object]:
-        """Prédit l'intention principale (rétro-compatible).
-
-        Retourne la même structure qu'avant pour ne rien casser.
-
-        Returns:
-            {"intent": str, "confidence": float, "all_scores": dict}
-        """
+        """prédit l'intention principale."""
         result = self.predict_multi(text)
         top = (
             result["intents"][0] if result["intents"] else {"intent": "general", "confidence": 0.0}
@@ -107,44 +87,24 @@ class IntentPredictor:
 
     @torch.no_grad()
     def predict_multi(self, text: str) -> dict:
-        """Prédit TOUTES les intentions détectées (multi-label).
-
-        Utilise sigmoid : chaque intention a un score indépendant.
-        Seules celles au-dessus du seuil sont retournées.
-
-        Args:
-            text: Message texte à classifier.
-
-        Returns:
-            {
-                "intents": [
-                    {"intent": "appointment", "confidence": 0.85},
-                    {"intent": "quote", "confidence": 0.72},
-                ],
-                "primary_intent": "appointment",
-                "primary_confidence": 0.85,
-                "is_multi_intent": True,
-                "all_scores": {"appointment": 0.85, "quote": 0.72, ...},
-                "needs_clarification": False,
-            }
-        """
+        """prédit toutes les intentions."""
         input_ids, attention_mask = self._encode(text)
         input_ids = input_ids.to(self.config.device)
         attention_mask = attention_mask.to(self.config.device)
 
-        # Sigmoid pour scores indépendants
+        # sigmoid pour scores indépendants
         probs = self.model.predict_proba(input_ids, attention_mask)
-        probs = probs[0]  # Premier (seul) élément du batch
+        probs = probs[0]  # premier du batch
 
         threshold = getattr(self.config, "multi_label_threshold", 0.35)
         max_intents = getattr(self.config, "max_intents", 3)
 
-        # Tous les scores
+        # tous les scores
         all_scores = {
             ID_TO_LABEL.get(i, f"unknown_{i}"): round(p.item(), 4) for i, p in enumerate(probs)
         }
 
-        # Filtrer par seuil + trier par confiance
+        # filtre par seuil
         detected = []
         for i, p in enumerate(probs):
             score = p.item()
@@ -156,11 +116,11 @@ class IntentPredictor:
                     }
                 )
 
-        # Trier par confiance décroissante et limiter
+        # trie et limite
         detected.sort(key=lambda x: x["confidence"], reverse=True)
         detected = detected[:max_intents]
 
-        # Si rien n'est au-dessus du seuil, prendre le top-1
+        # fallback sur le top-1
         if not detected:
             top_idx = probs.argmax().item()
             detected = [
@@ -173,13 +133,13 @@ class IntentPredictor:
         primary = detected[0]
         is_multi = len(detected) > 1
 
-        # Déterminer si Jenny devrait demander une clarification
+        # clarification nécessaire ?
         needs_clarification = False
         if primary["confidence"] < 0.5:
             needs_clarification = True
         elif is_multi and detected[1]["confidence"] > 0.6:
-            # Deux intentions fortes → peut-être clarifier la priorité
-            needs_clarification = False  # On traite les deux
+            # deux intentions fortes
+            needs_clarification = False  # on traite les deux
 
         return {
             "intents": detected,
@@ -192,10 +152,10 @@ class IntentPredictor:
 
     @torch.no_grad()
     def predict_batch(self, texts: list[str]) -> list[dict[str, object]]:
-        """Prédit les intentions pour un batch de messages."""
+        """prédit un batch."""
         return [self.predict(text) for text in texts]
 
     @torch.no_grad()
     def predict_batch_multi(self, texts: list[str]) -> list[dict]:
-        """Prédit les intentions multi-label pour un batch de messages."""
+        """batch multi-label."""
         return [self.predict_multi(text) for text in texts]

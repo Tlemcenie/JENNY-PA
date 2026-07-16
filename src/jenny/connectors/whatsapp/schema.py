@@ -1,40 +1,34 @@
-"""Schémas pour le connecteur WhatsApp Business API (Meta Cloud API).
-
-Définit les structures de données pour :
-- Les webhooks entrants (messages reçus)
-- Les messages sortants (réponses)
-"""
+"""schémas connecteur whatsapp."""
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-# ── Webhook entrant (message reçu) ──
+# webhook entrant
 
 
 class WhatsAppProfile(BaseModel):
-    """Profil de l'expéditeur."""
+    """profil expéditeur."""
 
-    # Meta ne fournit pas toujours le nom : on le rend optionnel pour ne pas
-    # rejeter un webhook par ailleurs valide.
+    # nom pas toujours fourni
     name: str | None = None
 
 
 class WhatsAppContact(BaseModel):
-    """Contact dans le webhook."""
+    """contact du webhook."""
 
     profile: WhatsAppProfile | None = None
     wa_id: str
 
 
 class WhatsAppText(BaseModel):
-    """Contenu texte d'un message."""
+    """texte du message."""
 
     body: str
 
 
 class WhatsAppMessage(BaseModel):
-    """Message individuel dans le webhook."""
+    """message du webhook."""
 
     from_: str = Field(..., alias="from")
     id: str
@@ -46,48 +40,40 @@ class WhatsAppMessage(BaseModel):
 
 
 class WhatsAppMetadata(BaseModel):
-    """Métadonnées du numéro de téléphone."""
+    """métadonnées du numéro."""
 
     display_phone_number: str
     phone_number_id: str
 
 
 class WhatsAppValue(BaseModel):
-    """Valeur d'un changement dans le webhook.
-
-    Une même structure véhicule les messages entrants ET les accusés de statut
-    (envoyé/délivré/lu). ``metadata`` et ``contacts`` peuvent être absents selon
-    le type d'événement : tout est donc optionnel pour ne jamais rejeter un
-    webhook Meta légitime (sinon Meta le renvoie en boucle).
-    """
+    """valeur d'un changement, tout optionnel."""
 
     messaging_product: str = "whatsapp"
     metadata: WhatsAppMetadata | None = None
     contacts: list[WhatsAppContact] = Field(default_factory=list)
     messages: list[WhatsAppMessage] = Field(default_factory=list)
-    # Accusés de statut (delivered/read/sent). Non typés finement : on les
-    # accepte pour répondre 200, sans les traiter pour l'instant.
+    # accusés de statut, non traités
     statuses: list[dict] = Field(default_factory=list)
 
 
 class WhatsAppChange(BaseModel):
-    """Changement dans l'entrée du webhook."""
+    """changement du webhook."""
 
     value: WhatsAppValue
     field: str = "messages"
 
 
 class WhatsAppEntry(BaseModel):
-    """Entrée du webhook WhatsApp."""
+    """entrée du webhook."""
 
     id: str
     changes: list[WhatsAppChange]
 
 
 class WhatsAppWebhookPayload(BaseModel):
-    """Payload complet du webhook WhatsApp.
+    """payload complet du webhook.
 
-    Reçu sur POST /webhooks/whatsapp quand un message arrive.
     Ref: https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks
     """
 
@@ -95,18 +81,18 @@ class WhatsAppWebhookPayload(BaseModel):
     entry: list[WhatsAppEntry]
 
 
-# ── Message sortant (réponse) ──
+# message sortant
 
 
 class WhatsAppOutboundText(BaseModel):
-    """Texte d'un message sortant."""
+    """texte sortant."""
 
     preview_url: bool = False
     body: str
 
 
 class WhatsAppOutboundMessage(BaseModel):
-    """Message sortant vers WhatsApp Cloud API.
+    """message sortant.
 
     Ref: https://developers.facebook.com/docs/whatsapp/cloud-api/messages
     """

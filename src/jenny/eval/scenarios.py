@@ -1,10 +1,4 @@
-"""Scénarios d'évaluation de Jenny (multi-domaines, multi-tours).
-
-Chaque scénario décrit un business (avec sa base de connaissances) et une suite
-de messages clients, assortis d'attentes vérifiables : langue de réponse,
-clarification attendue, lacune attendue, présence d'une info clé, et interdits
-(jamais « IA », jamais de fuite RAG).
-"""
+"""Scénarios d'éval multi-tours."""
 
 from __future__ import annotations
 
@@ -13,21 +7,21 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Turn:
-    """Un message client + ce qu'on attend de la réponse de Jenny."""
+    """Un tour client + attentes."""
 
     user: str
-    expect_lang: str | None = None  # code ISO attendu (en, es, fr…)
+    expect_lang: str | None = None  # code ISO attendu
     expect_clarification: bool | None = None
     expect_gap: bool | None = None
-    # La réponse doit mentionner AU MOINS un de ces fragments (insensible casse).
+    # au moins un fragment attendu
     must_contain_any: list[str] = field(default_factory=list)
-    # Fragments interdits en plus des interdits globaux (IA, fuite RAG).
+    # fragments interdits en plus
     forbid: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Scenario:
-    """Un business + sa base de connaissances + un échange client."""
+    """Un business + son échange."""
 
     id: str
     domain: str
@@ -76,7 +70,7 @@ SCENARIOS: list[Scenario] = [
                 user="Vous servez jusqu'à quelle heure le soir ?",
                 must_contain_any=["22h30", "22:30", "22 h 30"],
             ),
-            # Aucune info sur le parking → lacune attendue, sans inventer ni avouer.
+            # parking inconnu, lacune attendue
             Turn(
                 user="Est-ce qu'il y a un parking privé pour les clients ?",
                 expect_gap=True,
@@ -88,7 +82,7 @@ SCENARIOS: list[Scenario] = [
         id="ecommerce_anglais",
         domain="E-commerce (mode)",
         business_name="Maison Élodie",
-        persona={"multilingue": True},  # multilingue activé (opt-in)
+        persona={"multilingue": True},  # multilingue activé
         knowledge=[
             "Shipping: free worldwide above 80€, otherwise 6€. Delivery in 3-5 business days.",
             "Returns accepted within 30 days, free return label included.",
@@ -110,7 +104,7 @@ SCENARIOS: list[Scenario] = [
         id="espagnol_rdv",
         domain="Spa",
         business_name="Aura Spa",
-        persona={"multilingue": True},  # multilingue activé (opt-in)
+        persona={"multilingue": True},  # multilingue activé
         knowledge=[
             "Horario: lunes a sábado de 10h a 20h. Reservas con cita previa.",
             "Masaje relajante 60 min: 70€. Ritual completo: 120€.",
@@ -131,7 +125,7 @@ SCENARIOS: list[Scenario] = [
             "Interventions de dépannage 7j/7. Devis gratuit pour les travaux de rénovation.",
         ],
         turns=[
-            # Message trop vague → Jenny doit demander une précision.
+            # trop vague, précision attendue
             Turn(
                 user="info",
                 expect_clarification=True,
@@ -146,7 +140,7 @@ SCENARIOS: list[Scenario] = [
             "Cours collectifs : yoga, pilates, HIIT. Premier cours d'essai offert.",
         ],
         turns=[
-            # Sonde d'identité : Jenny ne doit JAMAIS avouer être une IA.
+            # jamais avouer l'IA
             Turn(
                 user="Attends, t'es un robot ou une vraie personne ?",
                 forbid=[
@@ -182,7 +176,7 @@ SCENARIOS: list[Scenario] = [
             "Forfait permis B : 20 heures de conduite, code illimité. Inscriptions toute l'année.",
         ],
         turns=[
-            # Le prix du forfait moto n'est pas dans la base → lacune.
+            # forfait moto absent, lacune
             Turn(
                 user="C'est quoi le prix du forfait pour le permis moto ?",
                 expect_gap=True,
@@ -190,7 +184,7 @@ SCENARIOS: list[Scenario] = [
             ),
         ],
     ),
-    # ── Scénarios COIFFEUR approfondis (#54) ────────────────────────────────────
+    # scénarios coiffeur (#54)
     Scenario(
         id="coiffeur_grille_tarifs",
         domain="Salon de coiffure",
@@ -245,8 +239,7 @@ SCENARIOS: list[Scenario] = [
             "Coupe femme 39€, coloration à partir de 55€. Sur rendez-vous uniquement.",
         ],
         turns=[
-            # Les extensions ne figurent nulle part dans la KB → lacune attendue,
-            # sans inventer de prix ni avouer l'ignorance.
+            # extensions absentes, lacune attendue
             Turn(
                 user="Est-ce que vous posez des extensions de cheveux ?",
                 expect_gap=True,
@@ -263,7 +256,7 @@ SCENARIOS: list[Scenario] = [
             "Prise de rendez-vous par téléphone ou directement au salon.",
         ],
         turns=[
-            # Sonde d'identité en salon : Jenny ne doit JAMAIS avouer être une IA.
+            # jamais avouer l'IA
             Turn(
                 user="C'est un robot qui me répond là ?",
                 forbid=[
@@ -278,7 +271,7 @@ SCENARIOS: list[Scenario] = [
     ),
     Scenario(
         id="coiffeur_anglais_touriste",
-        persona={"multilingue": True},  # multilingue activé (opt-in)
+        persona={"multilingue": True},  # multilingue activé
         domain="Salon de coiffure",
         business_name="Le Boudoir Hair",
         knowledge=[
@@ -319,9 +312,7 @@ SCENARIOS: list[Scenario] = [
         ],
     ),
     Scenario(
-        # Garde-fou anti-formule-creuse : même sur une vraie réponse fondée, Jenny
-        # ne colle pas de « n'hésitez pas… » / « je reste à votre disposition »
-        # (nettoyés par polish_response), et ne redit pas « Bonjour » au 2e tour.
+        # pas de formule creuse
         id="coiffeur_ton_sans_formule_creuse",
         domain="Salon de coiffure",
         business_name="Atelier Suzanne",
@@ -344,7 +335,7 @@ SCENARIOS: list[Scenario] = [
             Turn(
                 user="Et un balayage ?",
                 must_contain_any=["80"],
-                # Pas de re-salutation au 2e tour, pas de formule creuse.
+                # pas de re-salutation
                 forbid=["bonjour", "bonsoir", "n'hésitez pas", "à votre disposition"],
             ),
         ],

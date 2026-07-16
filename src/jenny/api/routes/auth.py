@@ -1,4 +1,4 @@
-"""OAuth Google + signup/login email + émission JWT."""
+"""auth Google + email + JWT."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from jenny.api.auth.email_verification import (
 )
 from jenny.api.auth.jwt_utils import create_access_token, decode_token
 from jenny.api.auth.password_utils import hash_password, verify_password
-from jenny.api.dependencies import CurrentUser, DbSession  # noqa: TC001 — runtime FastAPI
+from jenny.api.dependencies import CurrentUser, DbSession  # noqa: TC001
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
 from jenny.domain.models.business import Business
@@ -39,17 +39,13 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 def _slugify(value: str) -> str:
-    """Transforme un texte en slug URL-friendly."""
+    """texte vers slug."""
     slug = _re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or "business"
 
 
 async def _ensure_business_for_user(db, user: User, display_name: str | None) -> UUID:
-    """Garantit qu'un user possède au moins un business ; le crée sinon.
-
-    Renvoie l'id du business principal. Tout nouvel utilisateur obtient
-    automatiquement son espace de travail (rôle owner).
-    """
+    """crée un business si besoin."""
     r = await db.execute(
         select(BusinessMember.business_id).where(BusinessMember.user_id == user.id).limit(1)
     )
@@ -73,7 +69,7 @@ async def _ensure_business_for_user(db, user: User, display_name: str | None) ->
 
 
 async def _issue_token_for_user(db, user: User) -> str:
-    """Émet un JWT pour un utilisateur (garantit un business au passage)."""
+    """émet un JWT."""
     r = await db.execute(
         select(BusinessMember.business_id).where(BusinessMember.user_id == user.id)
     )
@@ -85,7 +81,7 @@ async def _issue_token_for_user(db, user: User) -> str:
 
 
 async def _send_verification_email(user: User, code: str) -> None:
-    """Construit et envoie l'email de confirmation (best-effort, ne lève pas)."""
+    """envoie l'email de confirmation."""
     try:
         msg = build_verification_email(
             to=user.email,
@@ -99,7 +95,7 @@ async def _send_verification_email(user: User, code: str) -> None:
 
 
 async def _send_reset_email(user: User, code: str) -> None:
-    """Construit et envoie l'email de réinitialisation (best-effort, ne lève pas)."""
+    """envoie l'email de reset."""
     try:
         msg = build_reset_email(
             to=user.email,
@@ -112,10 +108,10 @@ async def _send_reset_email(user: User, code: str) -> None:
         logger.error("auth.reset_email_failed", error=str(e), to=user.email)
 
 
-# ── Schemas ──────────────────────────────────────────────────────
+# schemas
 
 
-import re as _re  # noqa: E402 — regroupé avec les helpers de validation ci-dessous
+import re as _re  # noqa: E402
 
 
 def _check_password_strength(password: str) -> str | None:
@@ -141,7 +137,7 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1)
 
 
-# ── Email signup / login ─────────────────────────────────────────
+# signup / login email
 
 
 @router.post("/register")
@@ -207,17 +203,13 @@ class ResendCodeRequest(BaseModel):
 
 @router.post("/verify-email")
 async def verify_email(body: VerifyEmailRequest, db: DbSession) -> JSONResponse:
-    """Valide le code de confirmation et connecte l'utilisateur.
-
-    Renvoie un JWT en cas de succès (compte activé). Limite les tentatives et
-    expire le code pour contrer le brute-force.
-    """
+    """valide le code et connecte."""
     r = await db.execute(select(User).where(User.email == body.email))
     user = r.scalar_one_or_none()
     if user is None:
         raise HTTPException(400, "Code invalide ou expiré")
 
-    # Déjà vérifié : idempotent, on réémet simplement un token.
+    # déjà vérifié : re-token
     if user.email_verified:
         token = await _issue_token_for_user(db, user)
         return JSONResponse({"access_token": token, "token_type": "bearer"})
@@ -230,7 +222,7 @@ async def verify_email(body: VerifyEmailRequest, db: DbSession) -> JSONResponse:
 
     if not verify_code(body.code.strip(), user.email_verification_code_hash):
         user.email_verification_attempts += 1
-        # La session est rollback-ée si l'on lève : on persiste le compteur d'abord.
+        # persiste le compteur avant
         await db.commit()
         raise HTTPException(400, "Code invalide")
 
@@ -247,11 +239,7 @@ async def verify_email(body: VerifyEmailRequest, db: DbSession) -> JSONResponse:
 
 @router.post("/resend-code")
 async def resend_code(body: ResendCodeRequest, db: DbSession) -> JSONResponse:
-    """Renvoie un nouveau code de confirmation (avec cooldown anti-spam).
-
-    Réponse générique (« sent ») même si le compte n'existe pas ou est déjà
-    vérifié, pour ne pas divulguer l'existence d'un compte.
-    """
+    """renvoie un code (cooldown)."""
     r = await db.execute(select(User).where(User.email == body.email))
     user = r.scalar_one_or_none()
     if user is None or user.email_verified:
@@ -282,7 +270,7 @@ async def resend_code(body: ResendCodeRequest, db: DbSession) -> JSONResponse:
     return JSONResponse(payload)
 
 
-# ── Mot de passe oublié ──────────────────────────────────────────
+# mot de passe oublié
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -297,11 +285,7 @@ class ResetPasswordRequest(BaseModel):
 
 @router.post("/forgot-password")
 async def forgot_password(body: ForgotPasswordRequest, db: DbSession) -> JSONResponse:
-    """Envoie un code de réinitialisation de mot de passe.
-
-    Réponse générique (« sent ») même si le compte n'existe pas, pour ne pas
-    divulguer l'existence d'un compte.
-    """
+    """envoie un code de reset."""
     r = await db.execute(select(User).where(User.email == body.email))
     user = r.scalar_one_or_none()
     if user is None or not user.password_hash:
@@ -324,7 +308,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: DbSession) -> JSONRes
 
 @router.post("/reset-password")
 async def reset_password(body: ResetPasswordRequest, db: DbSession) -> JSONResponse:
-    """Réinitialise le mot de passe via le code reçu par email."""
+    """reset via code email."""
     r = await db.execute(select(User).where(User.email == body.email))
     user = r.scalar_one_or_none()
     if user is None or not user.password_reset_code_hash:
@@ -340,14 +324,14 @@ async def reset_password(body: ResetPasswordRequest, db: DbSession) -> JSONRespo
     user.password_hash = hash_password(body.new_password)
     user.password_reset_code_hash = None
     user.password_reset_expires_at = None
-    user.email_verified = True  # reset réussi via email → adresse contrôlée
+    user.email_verified = True  # adresse prouvée par email
     await db.commit()
     logger.info("auth.reset_password.done", user_id=str(user.id))
     return JSONResponse({"status": "reset"})
 
 
 class UpdateMeRequest(BaseModel):
-    """Mise à jour du profil utilisateur (champs optionnels)."""
+    """maj profil utilisateur."""
 
     full_name: str | None = Field(None, min_length=1, max_length=255)
     current_password: str | None = Field(None, min_length=1, max_length=128)
@@ -355,13 +339,13 @@ class UpdateMeRequest(BaseModel):
 
 
 async def _me_payload(db, user: User) -> dict:
-    """Construit la charge utile du profil (membership + business)."""
+    """payload du profil."""
     r_m = await db.execute(
         select(BusinessMember).where(BusinessMember.user_id == user.id).limit(1)
     )
     member = r_m.scalar_one_or_none()
     if member is None:
-        # Utilisateur historique sans business : on lui en crée un.
+        # user sans business : on crée
         business_id = await _ensure_business_for_user(db, user, user.full_name)
         await db.commit()
         role = "owner"
@@ -391,7 +375,7 @@ async def auth_me(
     db: DbSession,
     authorization: str | None = Header(None, alias="Authorization"),
 ) -> dict:
-    """Profil utilisateur à partir du JWT (dashboard / client Flutter)."""
+    """profil depuis le JWT."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Authorization Bearer requis")
     raw = authorization[7:].strip()
@@ -414,11 +398,7 @@ async def auth_me(
 
 @router.patch("/me")
 async def update_me(body: UpdateMeRequest, db: DbSession, principal: CurrentUser) -> dict:
-    """Met à jour le profil : nom complet et/ou mot de passe.
-
-    Le changement de mot de passe exige le mot de passe actuel (vérifié) et
-    applique la même politique de robustesse qu'à l'inscription.
-    """
+    """maj nom et/ou mot de passe."""
     r = await db.execute(select(User).where(User.id == principal.user_id))
     user = r.scalar_one_or_none()
     if user is None:
@@ -514,7 +494,7 @@ async def google_callback(
         user = r2.scalar_one_or_none()
         if user:
             user.google_sub = sub
-            user.email_verified = True  # Google a déjà vérifié l'adresse.
+            user.email_verified = True  # déjà vérifié par Google
             if name:
                 user.full_name = name
         else:
@@ -522,7 +502,7 @@ async def google_callback(
                 email=email,
                 full_name=name,
                 google_sub=sub,
-                email_verified=True,  # Google a déjà vérifié l'adresse.
+                email_verified=True,  # déjà vérifié par Google
             )
             db.add(user)
         await db.flush()

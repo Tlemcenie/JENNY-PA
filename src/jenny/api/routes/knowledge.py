@@ -1,24 +1,14 @@
-"""Routes API pour la base de connaissances métier.
-
-Permet au propriétaire du business de :
-- Ajouter du texte (horaires, tarifs, FAQ, politique, etc.)
-- Uploader un PDF (carte de prestations, règlement, etc.)
-- Lister / supprimer les entrées de sa base de connaissances
-- Voir les statistiques
-
-Tout est persisté en base (document_embeddings) et vectorisé : Jenny s'y
-réfère via le RAG pour répondre aux clients.
-"""
+"""routes base de connaissances."""
 
 from __future__ import annotations
 
 from typing import Annotated
-from uuid import UUID  # noqa: TC003 — utilisé dans les annotations de route (FastAPI runtime)
+from uuid import UUID  # noqa: TC003
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from jenny.api.dependencies import DbSession  # noqa: TC001 — résolu au runtime par FastAPI
+from jenny.api.dependencies import DbSession  # noqa: TC001
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
 from jenny.rag.knowledge_base import KnowledgeBase, KnowledgeEntry
@@ -28,11 +18,11 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/knowledge", tags=["Knowledge Base"])
 
 
-# ── Schémas ──
+# schémas
 
 
 class AddTextRequest(BaseModel):
-    """Requête pour ajouter du texte à la base de connaissances."""
+    """requête ajout de texte."""
 
     business_id: UUID = Field(..., description="ID du business")
     title: str = Field("", description="Titre du document")
@@ -44,7 +34,7 @@ class AddTextRequest(BaseModel):
 
 
 class KnowledgeEntryResponse(BaseModel):
-    """Réponse avec les détails d'une entrée."""
+    """détails d'une entrée."""
 
     id: str
     business_id: str
@@ -57,7 +47,7 @@ class KnowledgeEntryResponse(BaseModel):
 
 
 class KnowledgeStatsResponse(BaseModel):
-    """Statistiques de la base de connaissances."""
+    """stats de la base."""
 
     business_id: str
     total_entries: int
@@ -66,11 +56,11 @@ class KnowledgeStatsResponse(BaseModel):
     by_source: dict[str, int]
 
 
-# ── Helpers ──
+# helpers
 
 
 def _enforce_tenant(request: Request, business_id: UUID) -> None:
-    """Si l'auth est requise, le business ciblé doit correspondre au contexte JWT."""
+    """vérifie le tenant."""
     settings = get_settings()
     if not settings.require_auth:
         return
@@ -93,7 +83,7 @@ def _to_response(entry: KnowledgeEntry) -> KnowledgeEntryResponse:
     )
 
 
-# ── Routes ──
+# routes
 
 
 @router.post("/text", response_model=KnowledgeEntryResponse, status_code=201)
@@ -102,7 +92,7 @@ async def add_text(
     body: AddTextRequest,
     db: DbSession,
 ) -> KnowledgeEntryResponse:
-    """Ajoute du texte libre à la base de connaissances (horaires, tarifs, FAQ...)."""
+    """ajoute du texte."""
     _enforce_tenant(request, body.business_id)
     kb = KnowledgeBase(business_id=body.business_id, session=db)
     try:
@@ -126,7 +116,7 @@ async def add_pdf(
     title: Annotated[str, Form(description="Titre du document")] = "",
     category: Annotated[str, Form(description="Catégorie")] = "general",
 ) -> KnowledgeEntryResponse:
-    """Upload un PDF (carte des prestations, règlement, catalogue...) dans la base."""
+    """upload un pdf."""
     _enforce_tenant(request, business_id)
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Le fichier doit être un PDF")
@@ -156,7 +146,7 @@ async def list_entries(
     db: DbSession,
     business_id: UUID,
 ) -> list[KnowledgeEntryResponse]:
-    """Liste toutes les entrées de la base de connaissances d'un business."""
+    """liste les entrées."""
     _enforce_tenant(request, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     entries = await kb.list_entries()
@@ -170,7 +160,7 @@ async def delete_entry(
     business_id: UUID,
     entry_id: str,
 ) -> dict:
-    """Supprime une entrée de la base de connaissances."""
+    """supprime une entrée."""
     _enforce_tenant(request, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     if not await kb.delete_entry(entry_id):
@@ -179,7 +169,7 @@ async def delete_entry(
 
 
 class UpdateEntryRequest(BaseModel):
-    """Mise à jour d'une entrée texte (remplace son contenu)."""
+    """maj d'une entrée texte."""
 
     title: str = Field("", description="Titre du document")
     content: str = Field(..., min_length=1, max_length=50000, description="Nouveau texte")
@@ -194,10 +184,7 @@ async def update_entry(
     entry_id: str,
     body: UpdateEntryRequest,
 ) -> KnowledgeEntryResponse:
-    """Modifie une entrée existante de la base de connaissances (#12).
-
-    Re-découpe et re-vectorise le nouveau contenu sous le même identifiant.
-    """
+    """modifie une entrée."""
     _enforce_tenant(request, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     try:
@@ -227,7 +214,7 @@ async def search_knowledge(
     q: Annotated[str, Query(min_length=2, max_length=500)],
     top_k: Annotated[int, Query(ge=1, le=20)] = 5,
 ) -> list[KnowledgeSearchHit]:
-    """Recherche sémantique dans la base de connaissances du business (#12)."""
+    """recherche sémantique."""
     _enforce_tenant(request, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     try:
@@ -247,7 +234,7 @@ async def search_knowledge(
 
 
 class MultiImportResult(BaseModel):
-    """Résultat d'un import multi-fichiers (#13)."""
+    """résultat import multi-fichiers."""
 
     imported: list[KnowledgeEntryResponse]
     errors: list[dict]
@@ -261,11 +248,7 @@ async def add_files(
     business_id: Annotated[UUID, Form(..., description="ID du business")],
     category: Annotated[str, Form(description="Catégorie")] = "general",
 ) -> MultiImportResult:
-    """Importe plusieurs fichiers d'un coup (PDF/texte) dans la base (#13).
-
-    Chaque fichier est traité indépendamment : un échec n'interrompt pas les
-    autres ; les erreurs sont renvoyées fichier par fichier.
-    """
+    """importe plusieurs fichiers."""
     _enforce_tenant(request, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     imported: list[KnowledgeEntryResponse] = []
@@ -295,7 +278,7 @@ async def add_files(
                 continue
             imported.append(_to_response(entry))
         except Exception as e:
-            # On isole l'échec par fichier : un fichier KO n'arrête pas les autres.
+            # un échec n'arrête pas tout
             logger.error("knowledge.add_files.error", file=name, error=str(e))
             errors.append({"file": name, "error": str(e)})
     return MultiImportResult(imported=imported, errors=errors)
@@ -307,7 +290,7 @@ async def get_stats(
     db: DbSession,
     business_id: UUID,
 ) -> KnowledgeStatsResponse:
-    """Statistiques de la base de connaissances d'un business."""
+    """stats du business."""
     _enforce_tenant(request, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     stats = await kb.stats()

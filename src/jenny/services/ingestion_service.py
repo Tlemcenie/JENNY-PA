@@ -1,16 +1,4 @@
-"""Service d'ingestion des messages.
-
-Orchestre le flux canonique d'entrée :
-1. Déduplication (external_message_id + channel + business_id)
-2. Résolution / création du CustomerProfile
-3. Résolution / création de la Conversation
-4. Persistance du Message
-5. Log de l'événement d'ingestion
-6. Publication du job ARQ de normalisation
-
-C'est le point d'entrée unique pour TOUS les connecteurs.
-Aucun connecteur n'écrit directement en DB.
-"""
+"""ingestion des messages."""
 
 from datetime import UTC, datetime
 
@@ -33,7 +21,7 @@ logger = get_logger(__name__)
 
 
 class IngestionResult:
-    """Résultat d'une ingestion réussie."""
+    """résultat d'ingestion."""
 
     def __init__(
         self,
@@ -51,12 +39,7 @@ class IngestionResult:
 
 
 class MessageIngestionService:
-    """Service central d'ingestion des messages.
-
-    Tous les connecteurs passent par ce service pour insérer
-    des messages dans Jenny. Il garantit la déduplication,
-    la résolution client et la création de conversations.
-    """
+    """service central d'ingestion."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -66,18 +49,8 @@ class MessageIngestionService:
         self.event_repo = MessageEventRepository(session)
 
     async def ingest(self, message_in: MessageIn) -> IngestionResult:
-        """Ingère un message canonique dans Jenny.
-
-        Args:
-            message_in: Payload canonique produit par un connecteur.
-
-        Returns:
-            IngestionResult avec le message, la conversation et le client.
-
-        Raises:
-            ValidationError: Si le message est un doublon.
-        """
-        # ── 1. Déduplication ──
+        """ingère un message."""
+        # dédup
         is_duplicate = await self.message_repo.exists_by_external_id(
             business_id=message_in.business_id,
             channel=message_in.channel,
@@ -91,18 +64,18 @@ class MessageIngestionService:
             )
             raise ValidationError(f"Message déjà ingéré : {message_in.external_message_id}")
 
-        # ── 2. Résolution / création du client ──
+        # résout le client
         customer, is_new_customer = await self._resolve_or_create_customer(message_in)
 
-        # ── 3. Résolution / création de la conversation ──
+        # résout la conversation
         conversation, is_new_conversation = await self._resolve_or_create_conversation(
             message_in, customer
         )
 
-        # ── 4. Persistance du message ──
+        # persiste le message
         message = await self._persist_message(message_in, conversation, customer)
 
-        # ── 5. Mise à jour de la conversation ──
+        # maj conversation
         if not is_new_conversation:
             await self.conversation_repo.update_on_new_message(
                 conversation_id=conversation.id,
@@ -110,7 +83,7 @@ class MessageIngestionService:
                 timestamp=message_in.received_at,
             )
 
-        # ── 5bis. Sentiment du message client (flag « mécontent » + auto-escalade) ──
+        # sentiment + auto-escalade
         if message_in.direction == "inbound":
             sentiment = analyze_sentiment(message_in.content_text)
             conversation.sentiment = sentiment
@@ -119,9 +92,7 @@ class MessageIngestionService:
                 if "mécontent" not in tags:
                     tags.append("mécontent")
                     conversation.tags = tags
-                # Auto-escalade (#5) : à la 1re bascule en négatif d'une
-                # conversation non escaladée, on lève le drapeau, on remonte la
-                # priorité et on notifie l'équipe pour une prise en charge rapide.
+                # escalade au premier négatif
                 if not conversation.is_escalated:
                     conversation.is_escalated = True
                     if conversation.priority_level in (None, "low", "medium"):
@@ -129,7 +100,7 @@ class MessageIngestionService:
                     self.session.add(
                         Notification(
                             business_id=conversation.business_id,
-                            recipient=None,  # diffusion à toute l'équipe
+                            recipient=None,  # toute l'équipe
                             kind="escalated",
                             title="Client mécontent à prendre en charge",
                             body=(message_in.content_text or "")[:160],
@@ -139,7 +110,7 @@ class MessageIngestionService:
                     )
             await self.session.flush()
 
-        # ── 6. Log événement d'ingestion ──
+        # log ingestion
         await self.event_repo.log_event(
             message_id=message.id,
             event_type="ingested",
@@ -167,12 +138,8 @@ class MessageIngestionService:
     async def _resolve_or_create_customer(
         self, message_in: MessageIn
     ) -> tuple[Customer | None, bool]:
-        """Résout un client existant ou en crée un nouveau.
-
-        Priorité de résolution : email > phone > handle.
-        Si aucun identifiant n'est fourni, retourne None.
-        """
-        # Rien à résoudre si pas d'identifiant
+        """résout ou crée le client."""
+        # pas d'identifiant
         if not any(
             [
                 message_in.sender_email,
@@ -182,7 +149,7 @@ class MessageIngestionService:
         ):
             return None, False
 
-        # Tenter de trouver un client existant
+        # cherche client existant
         customer = await self.customer_repo.resolve_customer(
             business_id=message_in.business_id,
             email=message_in.sender_email,
@@ -191,12 +158,12 @@ class MessageIngestionService:
         )
 
         if customer:
-            # Mettre à jour last_seen_at
+            # maj last_seen_at
             customer.last_seen_at = datetime.now(UTC)
             await self.session.flush()
             return customer, False
 
-        # Créer un nouveau client
+        # nouveau client
         now = datetime.now(UTC)
         customer = await self.customer_repo.create(
             business_id=message_in.business_id,
@@ -219,16 +186,10 @@ class MessageIngestionService:
         message_in: MessageIn,
         customer: Customer | None,
     ) -> tuple[Conversation, bool]:
-        """Résout une conversation existante ou en crée une nouvelle.
-
-        Stratégie :
-        1. Si external_conversation_id fourni → chercher par ID externe.
-        2. Si client résolu → chercher une conversation ouverte sur ce canal.
-        3. Sinon → créer une nouvelle conversation.
-        """
+        """résout ou crée la conversation."""
         conversation: Conversation | None = None
 
-        # 1. Par ID externe
+        # par id externe
         if message_in.external_conversation_id:
             conversation = await self.conversation_repo.find_by_external_id(
                 business_id=message_in.business_id,
@@ -236,7 +197,7 @@ class MessageIngestionService:
                 external_conversation_id=message_in.external_conversation_id,
             )
 
-        # 2. Par client + canal (conversation ouverte)
+        # par client + canal
         if not conversation and customer:
             conversation = await self.conversation_repo.find_open_for_customer(
                 business_id=message_in.business_id,
@@ -247,7 +208,7 @@ class MessageIngestionService:
         if conversation:
             return conversation, False
 
-        # 3. Créer une nouvelle conversation
+        # nouvelle conversation
         preview = message_in.content_text[:200]
         conversation = await self.conversation_repo.create(
             business_id=message_in.business_id,
@@ -273,7 +234,7 @@ class MessageIngestionService:
         conversation: Conversation,
         customer: Customer | None,
     ) -> Message:
-        """Persiste le message en DB."""
+        """persiste en db."""
         return await self.message_repo.create(
             conversation_id=conversation.id,
             business_id=message_in.business_id,

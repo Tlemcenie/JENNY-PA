@@ -9,7 +9,7 @@ import { useAuth } from "@/lib/auth-context";
 import { OnboardingBanner } from "@/components/dashboard/onboarding-banner";
 import { SatisfactionCard } from "@/components/dashboard/satisfaction-card";
 
-// Charts recharts (lib lourde) chargés à la demande → bundle initial allégé.
+// charts chargés à la demande
 const MessageVolumeChart = dynamic(
   () => import("@/components/dashboard/message-volume-chart").then((m) => m.MessageVolumeChart),
   { ssr: false, loading: () => <div className="h-[180px] rounded-xl bg-jenny-divider/30 animate-pulse" /> }
@@ -18,7 +18,7 @@ const ChannelDonut = dynamic(
   () => import("@/components/dashboard/channel-donut").then((m) => m.ChannelDonut),
   { ssr: false, loading: () => <div className="h-32 rounded-xl bg-jenny-divider/30 animate-pulse" /> }
 );
-// Widget « Prochains rendez-vous » — chargé à la demande (cohérent avec les charts).
+// pareil pour les rdv
 const UpcomingAppointments = dynamic(
   () => import("@/components/dashboard/upcoming-appointments"),
   { ssr: false, loading: () => <div className="h-64 rounded-2xl bg-jenny-divider/30 animate-pulse" /> }
@@ -30,21 +30,20 @@ import { MiniSpark, ChannelChip, StatusBadge } from "@/components/jenny/jenny-ui
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { intentLabel } from "@/lib/utils";
 
-// Prénom à partir du nom complet du compte connecté (sinon repli neutre).
+// prénom du compte
 function firstNameOf(fullName?: string | null): string {
   const n = (fullName || "").trim().split(/\s+/)[0];
   return n || "vous";
 }
 
-// Étiquette date façon « Mardi 28 avril · 14:32 » (locale FR, mise à jour à l'affichage).
+// date format fr
 function frDateLabel(d: Date): string {
   const day = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
   const time = d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
   return `${day.charAt(0).toUpperCase()}${day.slice(1)} · ${time}`;
 }
 
-// Série douce et MONTANTE dérivée d'une valeur réelle (jamais aléatoire) pour
-// alimenter une sparkline quand aucune série temporelle n'est fournie.
+// série douce pour sparkline
 function gentleSeries(target: number, points = 12, invert = false): number[] {
   const t = Math.max(0, target);
   const start = t * 0.55;
@@ -159,12 +158,12 @@ export default function DashboardPage() {
     }
   }, [chartDays]);
 
-  // Rafraîchissement silencieux (sans skeleton) déclenché par les événements SSE.
+  // refresh silencieux via sse
   const silentRefreshInsights = useCallback(async () => {
     try {
       setInsights(await getInsights(chartDays));
     } catch {
-      // silencieux : un échec ne doit pas perturber l'écran
+      // on ignore l'échec
     }
   }, [chartDays]);
 
@@ -172,15 +171,14 @@ export default function DashboardPage() {
     fetchInsights();
   }, [fetchInsights]);
 
-  // Horloge de l'en-tête (rendue côté client uniquement → pas de désync SSR).
+  // horloge côté client
   useEffect(() => {
     setNow(new Date());
     const id = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(id);
   }, []);
 
-  // Temps réel : les KPIs se mettent à jour en direct à chaque événement
-  // (message entrant, réponse, statut), via le même flux SSE que l'inbox.
+  // kpis live via sse
   useEffect(() => {
     const unsubscribe = subscribeToConversationEvents(
       () => {
@@ -220,9 +218,7 @@ export default function DashboardPage() {
   const firstName = firstNameOf(user?.full_name);
   const hasActivity = insights.conversations_total > 0 || insights.messages_total > 0;
 
-  // ── Mapping données réelles → emplacements du design ──────────────────────
-  // Taux de résolution « Jenny » = part NON escaladée (les conversations gérées
-  // jusqu'au bout sans intervention humaine).
+  // taux résolution = part non escaladée
   const resolutionRate = Math.max(0, Math.min(1, 1 - insights.escalation_rate));
   const messagesSpark = insights.messages_last_7_days.map((d) => d.count);
 
@@ -233,7 +229,7 @@ export default function DashboardPage() {
         ? `${(insights.avg_first_response_minutes / 60).toFixed(1)} h`
         : `${Math.round(insights.avg_first_response_minutes)} min`;
 
-  // Sparklines dérivées (douces, montantes, déterministes — pas d'aléatoire).
+  // sparklines dérivées
   const resolutionSpark = gentleSeries(resolutionRate * 100);
   const conversationsSpark = gentleSeries(insights.conversations_total);
   const responseSpark = gentleSeries(insights.avg_first_response_minutes ?? 0, 12, true);
@@ -280,9 +276,7 @@ export default function DashboardPage() {
     },
   ];
 
-  // « Activité en direct » : pas de flux nominatif dans Insights → on rend les
-  // VRAIES données de répartition par canal (chaque canal = une ligne), avec un
-  // statut honnête (escaladé → vous, sinon Jenny). Aucun nom/chiffre inventé.
+  // vraies données par canal
   const totalIntents = Math.max(1, insights.top_intents.reduce((s, i) => s + i.count, 0));
   const topIntentLabel = insights.top_intents[0] ? intentLabel(insights.top_intents[0].intent) : null;
   const topChannel = insights.by_channel[0]?.channel ?? null;
@@ -291,7 +285,7 @@ export default function DashboardPage() {
     <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
       <OnboardingBanner />
 
-      {/* Greeting */}
+      {/* accueil */}
       <div style={{ display: "flex", alignItems: "flex-end", marginBottom: 28, gap: 16, flexWrap: "wrap" }}>
         <div style={{ minWidth: 0 }}>
           <div
@@ -379,7 +373,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Stat row */}
+      {/* ligne de stats */}
       <div
         style={{
           display: "grid",
@@ -401,9 +395,9 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Two-column: live activity + insights */}
+      {/* deux colonnes */}
       <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 18, alignItems: "start" }}>
-        {/* Live activity (répartition réelle par canal) */}
+        {/* activité en direct */}
         <div className="jcard" style={{ padding: 20 }}>
           <div style={{ display: "flex", alignItems: "center", marginBottom: 16, gap: 10, flexWrap: "wrap" }}>
             <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--text)" }}>
@@ -499,7 +493,7 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Graphe volume de messages — conservé, données réelles. */}
+          {/* volume de messages */}
           <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--divider-soft)" }}>
             <div
               style={{
@@ -541,11 +535,11 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Insights column */}
+        {/* colonne insights */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          {/* Satisfaction des réponses de Jenny (feedback 👍/👎) */}
+          {/* carte satisfaction */}
           <SatisfactionCard />
-          {/* Insight de Jenny (dérivé des vraies intentions/canaux) */}
+          {/* insight de jenny */}
           <div
             className="jcard"
             style={{
@@ -639,7 +633,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Top intentions cette semaine (données réelles) */}
+          {/* top intentions */}
           <div className="jcard" style={{ padding: 20 }}>
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, color: "var(--text)" }}>
               Top intentions cette semaine
@@ -688,7 +682,7 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Conversations par canal (donut) — donnée réelle conservée. */}
+          {/* donut par canal */}
           {insights.by_channel.length > 0 && (
             <div className="jcard" style={{ padding: 20 }}>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, color: "var(--text)" }}>
@@ -700,7 +694,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Prochains rendez-vous */}
+      {/* prochains rdv */}
       <div style={{ marginTop: 18 }}>
         <UpcomingAppointments />
       </div>

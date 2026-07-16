@@ -1,13 +1,4 @@
-"""Action : réserver un VRAI rendez-vous en base (cas coiffeur).
-
-S'appuie sur le catalogue de prestations (durée + prix réels), comprend les
-dates/heures en français (« mardi à 14h »), vérifie qu'il n'y a pas de conflit,
-et crée un ``Appointment`` réel rattaché au business. Le résultat alimente la
-réponse de Jenny pour une confirmation fondée (jamais inventée).
-
-Robuste par construction : toute incertitude (date incomprise, info manquante)
-renvoie un résultat « non abouti » exploité par le slot-filling, sans planter.
-"""
+"""réserve un vrai rdv."""
 
 from __future__ import annotations
 
@@ -24,7 +15,7 @@ _WEEKDAYS_FR = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "di
 
 
 class BookAppointmentDBAction(BaseAction):
-    """Réserve un rendez-vous réel en base à partir du catalogue de prestations."""
+    """réserve un rdv en base."""
 
     name = "book_appointment"
     description = "Réserve un rendez-vous réel (catalogue + agenda du business)"
@@ -34,7 +25,7 @@ class BookAppointmentDBAction(BaseAction):
         missing = [p for p in self.required_params if not params.get(p)]
         business_id = params.get("business_id")
         if not business_id:
-            # Pas de contexte business : on laisse Jenny gérer en conversation.
+            # pas de contexte business
             return {"success": False, "message": "Contexte business absent.", "missing": list(missing)}
         if missing:
             return {
@@ -45,7 +36,7 @@ class BookAppointmentDBAction(BaseAction):
 
         try:
             return await self._book(UUID(str(business_id)), params)
-        except Exception as exc:  # pragma: no cover - dépend de l'environnement DB
+        except Exception as exc:  # pragma: no cover
             logger.error("action.book_db.error", error=str(exc))
             return {
                 "success": False,
@@ -78,7 +69,7 @@ class BookAppointmentDBAction(BaseAction):
             tz = business_tz(business)
 
             prestations = await load_active_prestations(db, bid)
-            # Multi-prestations : « coupe et couleur » → durée + prix cumulés.
+            # multi-prestations : cumul durée/prix
             matched = match_prestations(prestations, params["service"])
             if matched:
                 service_name = " + ".join(p.name for p in matched)
@@ -94,13 +85,11 @@ class BookAppointmentDBAction(BaseAction):
             if day is None:
                 return {"success": False, "message": "Date non comprise.", "missing": ["date"]}
 
-            # Fermeture (congé/férié OU jour de fermeture hebdo) → prochain jour ouvert.
+            # fermé → prochain jour ouvert
             if await is_day_closed(db, bid, day, business=business):
                 alts = await next_free_slots(db, bid, duration, from_day=day)
                 if not alts:
-                    # Fermé ET rien à proposer ensuite (longue fermeture, agenda
-                    # saturé…) : même traitement que « salon complet » → Jenny
-                    # proposera la liste d'attente.
+                    # rien à proposer → liste d'attente
                     return {
                         "success": False,
                         "no_slots": True,
@@ -118,7 +107,7 @@ class BookAppointmentDBAction(BaseAction):
             time_text = params.get("time")
             has_time = bool(time_text) and parse_fr_time(str(time_text)) is not None
 
-            # ── Sans heure → Jenny PROPOSE des créneaux libres réels ──
+            # sans heure : propose des créneaux
             if not has_time:
                 slots = await free_slots_for_day(db, bid, day, duration, business=business)
                 same_day = bool(slots)
@@ -138,15 +127,14 @@ class BookAppointmentDBAction(BaseAction):
                     "slots_text": format_slots_fr(slots[:4], tz, with_day=not same_day),
                 }
 
-            # ── Avec heure → on vérifie la dispo puis on réserve ──
+            # avec heure : vérifie puis réserve
             local_naive = combine_fr(params["date"], str(time_text))
             if local_naive is None:
                 return {"success": False, "message": "Heure non comprise.", "missing": ["time"]}
             start = local_naive.replace(tzinfo=tz).astimezone(UTC)
             end = start + timedelta(minutes=duration)
 
-            # Créneau déjà passé (ex. « samedi 10h » demandé le samedi soir) : on ne
-            # réserve JAMAIS dans le passé — on propose la suite réelle du planning.
+            # jamais réserver dans le passé
             if start <= datetime.now(UTC):
                 alts = await next_free_slots(db, bid, duration, from_day=datetime.now(tz).date())
                 return {
@@ -176,11 +164,7 @@ class BookAppointmentDBAction(BaseAction):
                     "message": "Ce créneau est déjà pris.",
                 }
 
-            # Résolution SÛRE du client : un customer_id qui ne correspond à aucun
-            # client réel (id éphémère du chat, etc.) ne doit JAMAIS faire échouer la
-            # réservation sur une violation de clé étrangère (Postgres l'applique,
-            # SQLite non — d'où le bug invisible en test). Si le client n'existe pas,
-            # on réserve sans le rattacher plutôt que de planter.
+            # client inconnu → pas de rattachement
             raw_customer_id = params.get("customer_id")
             customer_id: UUID | None = None
             if raw_customer_id:
@@ -193,7 +177,7 @@ class BookAppointmentDBAction(BaseAction):
                 except (ValueError, TypeError):
                     pass
 
-            # ── Anti-double-réservation : le client a-t-il déjà un RDV à venir ? ──
+            # anti double réservation
             also_has = None
             if customer_id and not params.get("allow_double"):
                 existing = (
@@ -218,7 +202,7 @@ class BookAppointmentDBAction(BaseAction):
                     same_day = ex_local.date() == start.astimezone(tz).date()
                     same_service = _norm(existing.title or "") == _norm(service_name)
                     if same_day and same_service:
-                        # Quasi-doublon → on ne crée rien, on demande confirmation.
+                        # doublon : on demande confirmation
                         return {
                             "success": False,
                             "already_booked": True,
@@ -232,8 +216,7 @@ class BookAppointmentDBAction(BaseAction):
                 business_id=bid,
                 customer_id=customer_id,
                 title=f"{service_name}",
-                # On formate depuis le datetime réellement réservé : les slots date/time
-                # contiennent le message brut (souvent identique), ce qui dupliquait le texte.
+                # formaté depuis le datetime réservé
                 description=f"Réservé via Jenny — {start.astimezone(tz).strftime('%d/%m/%Y à %Hh%M')}",
                 channel="chat",
                 start_at=start,
@@ -248,7 +231,7 @@ class BookAppointmentDBAction(BaseAction):
             day_label = f"{_WEEKDAYS_FR[local_start.weekday()]} {local_start.day:02d}/{local_start.month:02d}"
             time_label = local_start.strftime("%Hh%M")
 
-            # ── Acompte anti-no-show (si le salon l'a activé, OU si récidive de lapin) ──
+            # acompte anti no-show
             from jenny.services.deposit_service import create_deposit_for_appointment
 
             force_deposit = False
@@ -273,7 +256,7 @@ class BookAppointmentDBAction(BaseAction):
                 force=force_deposit,
             )
 
-            # Notifie le coiffeur de la nouvelle réservation prise par Jenny.
+            # notifie le coiffeur
             from jenny.domain.models.notification import Notification
 
             notif_body = f"{service_name} — {day_label} à {time_label}."
@@ -292,9 +275,7 @@ class BookAppointmentDBAction(BaseAction):
             await db.commit()
             await db.refresh(appt)
 
-            # ── Nom manquant → on le demandera au tour suivant ──
-            # Deux cas : client existant sans nom (WhatsApp sans profil), ou chat
-            # anonyme (aucun client rattaché) — le salon doit pouvoir rappeler.
+            # nom manquant → demandé après
             ask_name = customer_id is None
             if customer_id:
                 cust = await db.get(Customer, customer_id)

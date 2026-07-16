@@ -1,9 +1,4 @@
-"""Tests e2e du 2e lot back : priorité, bulk, fusion, recherche, notifications,
-audit, clés API, SLA fins (#1, #4, #5, #7, #8, #10, #14, #15, #16, #17).
-
-Réutilise le schéma SQLite de test (fixture ``db_tables``) et l'auth réelle.
-Les conversations sont semées via l'ingestion formulaire (chemin DB complet).
-"""
+"""tests e2e du 2e lot."""
 
 from __future__ import annotations
 
@@ -12,7 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.compiler import compiles
 
-import jenny.domain.models  # noqa: F401 — enregistre les modèles dans Base.metadata
+import jenny.domain.models  # noqa: F401
 from jenny.api.main import create_app
 from jenny.api.routes.conversations import resolve_sla_minutes
 from jenny.db.base import Base
@@ -21,8 +16,7 @@ from jenny.domain.models.business import Business
 
 _PASSWORD = "Strong#1234"
 
-# Compteur pour rendre chaque soumission de formulaire unique (la dédup
-# d'ingestion se base sur form_id + submitted_at).
+# compteur pour soumissions uniques
 _SEQ = {"n": 0}
 
 
@@ -50,7 +44,7 @@ async def db_tables() -> None:
 
 
 async def _auth(client: AsyncClient, email: str) -> tuple[dict, str]:
-    """Inscrit + vérifie un compte, renvoie (headers, business_id)."""
+    """inscrit et connecte un compte."""
     r = await client.post(
         "/api/v1/auth/register",
         json={"full_name": "Owner", "email": email, "password": _PASSWORD},
@@ -70,7 +64,7 @@ async def _auth(client: AsyncClient, email: str) -> tuple[dict, str]:
 async def _seed_conversation(
     client: AsyncClient, bid: str, *, email: str, message: str, name: str = "Client"
 ) -> str:
-    """Crée une conversation via l'ingestion formulaire, renvoie son id."""
+    """crée une conversation via formulaire."""
     _SEQ["n"] += 1
     submitted_at = f"2026-06-14T10:{_SEQ['n'] // 60:02d}:{_SEQ['n'] % 60:02d}Z"
     r = await client.post(
@@ -88,7 +82,7 @@ async def _seed_conversation(
     return r.json()["conversation_id"]
 
 
-# ── #4 Priorité ──────────────────────────────────────────────────────────────
+# priorité (#4)
 
 
 class TestPriority:
@@ -101,7 +95,7 @@ class TestPriority:
             client, bid, email="c1@x.com", message="Bonjour, une question."
         )
 
-        # PATCH priorité.
+        # patch priorité
         r = await client.patch(
             f"/api/v1/conversations/{cid}/priority",
             json={"priority_level": "critical"},
@@ -110,33 +104,33 @@ class TestPriority:
         assert r.status_code == 200, r.text
         assert r.json()["priority_level"] == "critical"
 
-        # Le détail et la liste exposent la priorité.
+        # le détail l'expose
         detail = (
             await client.get(f"/api/v1/conversations/{cid}", headers=headers)
         ).json()
         assert detail["priority_level"] == "critical"
 
-        # Filtre par priorité.
+        # filtre par priorité
         filtered = (
             await client.get(
                 "/api/v1/conversations?priority=critical", headers=headers
             )
         ).json()
         assert filtered["total"] == 1
-        # Filtre qui ne matche pas.
+        # filtre sans résultat
         none = (
             await client.get("/api/v1/conversations?priority=low", headers=headers)
         ).json()
         assert none["total"] == 0
 
-        # Tri par priorité accepté.
+        # tri par priorité ok
         sorted_resp = await client.get(
             "/api/v1/conversations?sort_by=priority", headers=headers
         )
         assert sorted_resp.status_code == 200
 
 
-# ── #1 Actions groupées ──────────────────────────────────────────────────────
+# actions groupées (#1)
 
 
 class TestBulk:
@@ -183,7 +177,7 @@ class TestBulk:
         assert r.status_code == 400
 
 
-# ── #10 Fusion ───────────────────────────────────────────────────────────────
+# fusion (#10)
 
 
 class TestMerge:
@@ -209,13 +203,13 @@ class TestMerge:
         assert body["merged_messages"] == 1
         assert body["message_count"] == 2
 
-        # La cible porte les 2 messages.
+        # cible : 2 messages
         detail = (
             await client.get(f"/api/v1/conversations/{target}", headers=headers)
         ).json()
         assert len(detail["messages"]) == 2
 
-        # La source est archivée (absente de la vue active par défaut).
+        # source archivée
         active = (await client.get("/api/v1/conversations", headers=headers)).json()
         ids = {c["id"] for c in active["conversations"]}
         assert source not in ids
@@ -235,7 +229,7 @@ class TestMerge:
         assert r.status_code == 400
 
 
-# ── #8 Recherche plein-texte ─────────────────────────────────────────────────
+# recherche plein-texte (#8)
 
 
 class TestMessageSearch:
@@ -271,7 +265,7 @@ class TestMessageSearch:
         assert r.json()["total"] == 0
 
 
-# ── #5/#14 Auto-escalade + notifications ─────────────────────────────────────
+# escalade + notifs (#5/#14)
 
 
 class TestEscalationAndNotifications:
@@ -287,7 +281,7 @@ class TestEscalationAndNotifications:
             message="C'est inadmissible et scandaleux, remboursez-moi immédiatement !",
         )
 
-        # La conversation est escaladée et sa priorité remontée.
+        # escaladée + priorité haute
         detail = (
             await client.get(f"/api/v1/conversations/{cid}", headers=headers)
         ).json()
@@ -299,12 +293,12 @@ class TestEscalationAndNotifications:
         assert conv["is_escalated"] is True
         assert "mécontent" in conv["tags"]
 
-        # Une notification de diffusion (escalade) est créée et listée.
+        # notif escalade créée
         notifs = (await client.get("/api/v1/notifications", headers=headers)).json()
         assert notifs["unread"] >= 1
         assert any(n["kind"] == "escalated" for n in notifs["notifications"])
 
-        # Compteur non lues, puis tout marquer lu.
+        # compteur puis tout lu
         cnt = (
             await client.get("/api/v1/notifications/unread-count", headers=headers)
         ).json()
@@ -315,7 +309,7 @@ class TestEscalationAndNotifications:
         assert read.json()["unread"] == 0
 
 
-# ── #15 Notification à l'agent assigné ───────────────────────────────────────
+# notif agent assigné (#15)
 
 
 class TestAssigneeNotification:
@@ -327,7 +321,7 @@ class TestAssigneeNotification:
         cid = await _seed_conversation(
             client, bid, email="c@x.com", message="Bonjour"
         )
-        # Crée un coéquipier (compte + rattachement).
+        # crée un coéquipier
         member_email = "agent@x.com"
         rm = await client.post(
             "/api/v1/business/members",
@@ -341,7 +335,7 @@ class TestAssigneeNotification:
         )
         assert rm.status_code == 201, rm.text
 
-        # L'owner attribue la conversation au coéquipier.
+        # l'owner lui attribue
         ra = await client.post(
             f"/api/v1/conversations/{cid}/assign",
             json={"assignee": member_email},
@@ -349,7 +343,7 @@ class TestAssigneeNotification:
         )
         assert ra.status_code == 200, ra.text
 
-        # Le coéquipier se connecte et voit la notification d'attribution.
+        # le coéquipier voit la notif
         login = await client.post(
             "/api/v1/auth/login",
             json={"email": member_email, "password": _PASSWORD},
@@ -363,7 +357,7 @@ class TestAssigneeNotification:
         assert any(n["kind"] == "assigned" for n in notifs["notifications"])
 
 
-# ── #16 Journal d'audit ──────────────────────────────────────────────────────
+# journal d'audit (#16)
 
 
 class TestAudit:
@@ -384,7 +378,7 @@ class TestAudit:
         assert "conversation.status_changed" in actions
 
 
-# ── #17 Clés API ─────────────────────────────────────────────────────────────
+# clés API (#17)
 
 
 class TestApiKeys:
@@ -407,7 +401,7 @@ class TestApiKeys:
 
         listed = (await client.get("/api/v1/api-keys", headers=headers)).json()
         assert len(listed) == 1
-        assert "secret" not in listed[0]  # le secret n'est jamais re-listé
+        assert "secret" not in listed[0]  # secret jamais re-listé
         assert listed[0]["scopes"] == ["read"]
 
         revoked = await client.delete(
@@ -418,7 +412,7 @@ class TestApiKeys:
         assert again == []
 
 
-# ── #7 SLA par priorité/canal ────────────────────────────────────────────────
+# SLA priorité/canal (#7)
 
 
 class TestSlaRules:
@@ -443,11 +437,11 @@ class TestSlaRules:
             sla_minutes=30,
             sla_rules={"priority": {"high": 5}, "channel": {"whatsapp": 10}},
         )
-        # Priorité haute → 5 (plus strict que 30).
+        # priorité haute → 5
         assert resolve_sla_minutes(biz, priority="high", channel="email") == 5
-        # Canal whatsapp seul → 10.
+        # whatsapp seul → 10
         assert resolve_sla_minutes(biz, priority="medium", channel="whatsapp") == 10
-        # Les deux → min(30, ... selon dispo) = 5.
+        # les deux → 5
         assert resolve_sla_minutes(biz, priority="high", channel="whatsapp") == 5
-        # Aucune règle applicable → défaut business.
+        # sinon défaut business
         assert resolve_sla_minutes(biz, priority="low", channel="email") == 30

@@ -1,12 +1,4 @@
-"""Feedback utilisateur sur les réponses de Jenny (pouce ↑ / pouce ↓).
-
-Endpoints :
-- ``POST /feedback``            → enregistre (ou met à jour) l'avis sur un message
-- ``GET  /feedback/message/{id}`` → avis courant pour un message (hydrate l'UI)
-- ``GET  /feedback/metrics``   → métriques de satisfaction agrégées du business
-
-Simple par choix produit : une évaluation binaire (+1 / -1), pas d'étoiles.
-"""
+"""feedback sur les réponses jenny."""
 
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -27,12 +19,12 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
 
-# ── Schémas ──
+# schémas
 
 
 class FeedbackPayload(BaseModel):
     message_id: UUID
-    # Contraint dans le schéma (et donc l'OpenAPI) plutôt que revalidé à la main.
+    # validé par le schéma
     rating: Literal[1, -1] = Field(..., description="+1 (pouce haut) ou -1 (pouce bas)")
     comment: str | None = Field(default=None, max_length=1000)
 
@@ -47,31 +39,21 @@ class FeedbackMetrics(BaseModel):
     total_rated: int
     positive: int
     negative: int
-    satisfaction_pct: float  # part de 👍 parmi les avis (0 a 100)
-    coverage_rated: int  # nombre de réponses évaluées (= total_rated)
-    responses_total: int  # nombre total de réponses Jenny (messages sortants)
+    satisfaction_pct: float  # % d'avis positifs
+    coverage_rated: int  # réponses évaluées
+    responses_total: int  # total réponses jenny
     last_7_days: dict  # {"positive": int, "negative": int}
-    recent_comments: list[dict]  # derniers retours négatifs (à améliorer)
-    recent_positive: list[dict]  # derniers retours positifs (ce qui marche)
+    recent_comments: list[dict]  # derniers retours négatifs
+    recent_positive: list[dict]  # derniers retours positifs
 
 
-# ── Agrégation partagée ──
+# agrégation partagée
 
 
 async def satisfaction_counts(
     db, business_id: UUID, *, days: int | None = None
 ) -> tuple[int, int, int, int, int, float]:
-    """Compteurs de satisfaction d'un business, en UN SEUL scan de la table.
-
-    Renvoie ``(total, positifs, négatifs, positifs_7j, négatifs_7j, pct)``.
-    Source de vérité UNIQUE du « % de satisfaction » : utilisée par
-    ``/feedback/metrics`` (carte Satisfaction) ET ``/jenny/metrics`` (page
-    Efficacité) pour que les deux surfaces affichent le même chiffre.
-
-    ``days`` (optionnel) restreint le total/positifs/négatifs à cette fenêtre
-    glissante ; ``None`` = tout l'historique (comportement d'origine). Le trend
-    « 7 jours » (pos_7/neg_7) reste toujours sur 7 jours, indépendamment de ``days``.
-    """
+    """compteurs satisfaction en un scan."""
     now = datetime.now(UTC)
     since_7 = now - timedelta(days=7)
     scope = MessageFeedback.business_id == business_id
@@ -97,33 +79,30 @@ async def satisfaction_counts(
     return total, positive, negative, pos_7, neg_7, pct
 
 
-# ── Routes ──
+# routes
 
 
 @router.post("", response_model=FeedbackState)
 async def submit_feedback(
     payload: FeedbackPayload, db: DbSession, principal: CurrentUser
 ) -> FeedbackState:
-    """Enregistre ou met à jour l'avis 👍/👎 d'un message (réponse de Jenny)."""
+    """enregistre ou maj l'avis."""
     msg = await db.get(Message, payload.message_id)
     if msg is None:
         raise HTTPException(status_code=404, detail="Message introuvable.")
 
-    # Sécurité multi-tenant : on n'évalue que les messages de son propre business.
-    # Un principal sans business n'a de périmètre sur aucun message.
+    # isolation multi-tenant
     if principal.business_id is None or msg.business_id != principal.business_id:
         raise HTTPException(status_code=403, detail="Message hors de votre périmètre.")
 
-    # Seules les réponses de Jenny (sortantes) sont évaluables : noter un message
-    # client fausserait la satisfaction (responses_total ne compte que l'outbound).
+    # seulement les réponses sortantes
     if msg.direction != "outbound":
         raise HTTPException(status_code=422, detail="Seules les réponses de Jenny sont évaluables.")
 
     existing = await db.scalar(
         select(MessageFeedback).where(MessageFeedback.message_id == payload.message_id)
     )
-    # Vrai si l'avis DEVIENT négatif à ce tour (nouveau 👎, ou bascule 👍→👎, ou
-    # ajout d'un commentaire sur un 👎) → on alerte le gérant (une seule fois).
+    # détecte le passage en négatif
     was_negative = existing is not None and existing.rating == -1
     if existing is None:
         existing = MessageFeedback(
@@ -136,21 +115,18 @@ async def submit_feedback(
         db.add(existing)
     else:
         existing.rating = payload.rating
-        # Un simple re-clic 👍/👎 (sans texte) ne doit pas effacer un commentaire
-        # déjà saisi — on n'écrase que si un commentaire est explicitement fourni.
+        # on garde le commentaire
         if payload.comment is not None:
             existing.comment = payload.comment
     try:
         await db.commit()
     except IntegrityError:
-        # Deux clics quasi simultanés sur le même message : les deux requêtes
-        # passent le SELECT sans trouver de ligne, la seconde viole la contrainte
-        # unique. On rejoue en UPDATE sur la ligne gagnante.
+        # course : on rejoue en update
         await db.rollback()
         existing = await db.scalar(
             select(MessageFeedback).where(MessageFeedback.message_id == payload.message_id)
         )
-        if existing is None:  # pragma: no cover - course perdue ET ligne disparue
+        if existing is None:  # pragma: no cover
             raise HTTPException(status_code=409, detail="Conflit d'écriture, réessayez.") from None
         was_negative = existing.rating == -1
         existing.rating = payload.rating
@@ -159,9 +135,7 @@ async def submit_feedback(
         await db.commit()
     logger.info("feedback.submit", message_id=str(payload.message_id), rating=payload.rating)
 
-    # Alerte gérant : une réponse jugée « à revoir » mérite son attention (surtout
-    # avec un commentaire). On ne notifie qu'à la BASCULE vers négatif, pas à
-    # chaque re-clic, pour ne pas spammer.
+    # alerte gérant sur négatif
     if payload.rating == -1 and (not was_negative or payload.comment):
         await _notify_negative_feedback(db, msg, payload.comment)
 
@@ -171,12 +145,7 @@ async def submit_feedback(
 
 
 async def _notify_negative_feedback(db, msg: Message, comment: str | None) -> None:
-    """Notifie le gérant d'un retour négatif ET pousse l'événement SSE temps réel.
-
-    On passe par ``notify_and_publish`` : le gérant voit la cloche s'incrémenter
-    en direct (pas seulement au prochain rechargement). Best-effort — un souci de
-    schéma notifications ne doit jamais casser l'enregistrement de l'avis.
-    """
+    """notifie le gérant + SSE."""
     try:
         from jenny.services.notification_service import notify_and_publish
 
@@ -193,7 +162,7 @@ async def _notify_negative_feedback(db, msg: Message, comment: str | None) -> No
             conversation_id=msg.conversation_id,
             meta={"message_id": str(msg.id), "conversation_id": str(msg.conversation_id)},
         )
-    except Exception as exc:  # pragma: no cover - dépend du schéma notifications
+    except Exception as exc:  # pragma: no cover
         logger.warning("feedback.notify_failed", error=str(exc))
 
 
@@ -201,11 +170,7 @@ async def _notify_negative_feedback(db, msg: Message, comment: str | None) -> No
 async def delete_message_feedback(
     message_id: UUID, db: DbSession, principal: CurrentUser
 ) -> FeedbackState:
-    """Annule l'avis d'un message (re-clic sur un pouce déjà actif = on l'enlève).
-
-    Idempotent : si aucun avis n'existe, on renvoie simplement ``rating=None``.
-    Scopé au business courant (même isolation multi-tenant que le GET/POST).
-    """
+    """annule l'avis d'un message."""
     if principal.business_id is None:
         raise HTTPException(status_code=403, detail="Message hors de votre périmètre.")
     fb = await db.scalar(
@@ -225,12 +190,7 @@ async def delete_message_feedback(
 async def get_message_feedback(
     message_id: UUID, db: DbSession, principal: CurrentUser
 ) -> FeedbackState:
-    """Renvoie l'avis courant pour un message (ou rating=None si aucun).
-
-    Scopé au business courant : on ne lit jamais l'avis d'un message appartenant
-    à une autre entreprise (isolation multi-tenant). Même règle que le POST :
-    un principal sans business n'a de périmètre sur aucun message.
-    """
+    """avis courant d'un message."""
     if principal.business_id is None:
         raise HTTPException(status_code=403, detail="Message hors de votre périmètre.")
     fb = await db.scalar(
@@ -245,13 +205,7 @@ async def get_message_feedback(
 
 
 async def _recent_feedback_context(db, bid: UUID, *, rating: int, limit: int) -> list[dict]:
-    """Derniers avis d'un signe donné, enrichis du contexte question/réponse.
-
-    Renvoie ``[{comment, question, answer, created_at}]`` : la réponse notée de
-    Jenny + la question du client juste avant (dernier message entrant), pour
-    que le gérant voie l'échange complet (à corriger pour les 👎, à reproduire
-    pour les 👍).
-    """
+    """derniers avis avec contexte."""
     rows = await db.execute(
         select(
             MessageFeedback.comment,
@@ -296,11 +250,7 @@ async def feedback_metrics(
     principal: CurrentUser,
     days: int | None = None,
 ) -> FeedbackMetrics:
-    """Métriques de satisfaction des réponses de Jenny pour le business courant.
-
-    ``days`` (optionnel) filtre sur une fenêtre glissante (7, 30…) ; absent = tout
-    l'historique. Le trend « 7 jours » reste toujours calculé sur 7 jours.
-    """
+    """métriques satisfaction du business."""
     bid = principal.business_id
     if bid is None:
         return FeedbackMetrics(
@@ -326,9 +276,7 @@ async def feedback_metrics(
         await db.scalar(select(func.count()).select_from(Message).where(*resp_scope)) or 0
     )
 
-    # Derniers retours, avec le contexte complet (question du client + réponse de
-    # Jenny + commentaire) : « à revoir » (👎) rend le feedback actionnable, et
-    # « ce qui marche » (👍) montre au gérant les réponses réussies à reproduire.
+    # derniers retours avec contexte
     recent_comments = await _recent_feedback_context(db, bid, rating=-1, limit=5)
     recent_positive = await _recent_feedback_context(db, bid, rating=1, limit=3)
 

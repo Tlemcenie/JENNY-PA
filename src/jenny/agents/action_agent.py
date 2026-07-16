@@ -1,14 +1,4 @@
-"""Agent d'exécution d'actions — Lancement d'actions externes.
-
-Gère les demandes qui nécessitent une action concrète :
-- Vérifier le statut d'une commande
-- Créer un rendez-vous
-- Créer un ticket support
-- Déclencher un processus métier
-
-Utilise le registre d'actions pour trouver et exécuter
-la bonne action en fonction de l'intention et des entités.
-"""
+"""agent qui exécute les actions."""
 
 from __future__ import annotations
 
@@ -23,30 +13,24 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-# Slots requis par intention pour exécuter l'action
+# slots requis par intention
 REQUIRED_SLOTS: dict[str, list[str]] = {
     "order_status": ["order_number"],
-    # RDV coiffeur : prestation + jour suffisent pour que l'action s'exécute.
-    # Sans l'heure, l'action PROPOSE des créneaux libres ; avec l'heure, elle
-    # vérifie la dispo et réserve. Jenny demande la prestation/le jour si besoin.
+    # prestation + jour suffisent
     "appointment": ["service", "date"],
-    # Gestion d'un RDV existant : l'action gère elle-même les infos manquantes.
+    # l'action gère les manques
     "manage_appointment": [],
-    # Inscription liste d'attente : aucune info bloquante (on prend ce qu'on a).
+    # rien de bloquant
     "join_waitlist": [],
-    # Enregistrement du nom : le nom est déjà dans le slot.
+    # nom déjà dans le slot
     "set_customer_name": [],
     "set_customer_phone": [],
-    "complaint": [],  # Pas de slot requis pour enregistrer
+    "complaint": [],  # rien de requis
 }
 
 
 class ActionAgent:
-    """Agent d'exécution d'actions externes.
-
-    Vérifie que toutes les informations nécessaires sont
-    disponibles, puis exécute l'action correspondante.
-    """
+    """exécute les actions externes."""
 
     name: str = "action"
 
@@ -57,26 +41,14 @@ class ActionAgent:
         self.registry = action_registry
 
     async def handle(self, state: ConversationState) -> dict:
-        """Traite une demande d'action.
-
-        1. Détermine les slots requis pour l'action
-        2. Vérifie que tous les slots sont remplis
-        3. Exécute l'action via le registre
-        4. Retourne le résultat
-
-        Args:
-            state: État de la conversation.
-
-        Returns:
-            Résultat de l'action avec message et données.
-        """
+        """traite une demande d'action."""
         intent = state.current_intent or "general"
 
-        # ── Vérifier les slots requis ──
+        # vérifie les slots requis
         required = REQUIRED_SLOTS.get(intent, [])
         for slot_name in required:
             if slot_name not in state.slots or not state.slots[slot_name].filled:
-                # Marquer les slots manquants comme requis
+                # marque le slot requis
                 from jenny.engine.state_manager import ExtractedSlot
 
                 if slot_name not in state.slots:
@@ -85,7 +57,7 @@ class ActionAgent:
                     state.slots[slot_name].required = True
                 state.phase = ConversationPhase.SLOT_FILLING
 
-        # S'il manque des infos, le moteur demandera
+        # le moteur demandera
         if state.has_missing_required_slots():
             return {
                 "response": "J'ai besoin de plus d'informations.",
@@ -94,7 +66,7 @@ class ActionAgent:
                 "needs_more_info": True,
             }
 
-        # ── Exécuter l'action ──
+        # exécute l'action
         action_result = await self._execute_action(intent, state)
 
         return {
@@ -104,8 +76,8 @@ class ActionAgent:
         }
 
     async def _execute_action(self, intent: str, state: ConversationState) -> dict:
-        """Exécute l'action correspondant à l'intention."""
-        # Collecter les valeurs des slots
+        """lance la bonne action."""
+        # valeurs des slots
         slot_values = {
             name: slot.value
             for name, slot in state.slots.items()
@@ -118,7 +90,7 @@ class ActionAgent:
         if state.conversation_id is not None:
             slot_values["conversation_id"] = str(state.conversation_id)
 
-        # Utiliser le registre d'actions si disponible
+        # registre si dispo
         if self.registry is not None:
             try:
                 action = self.registry.get_action(intent)
@@ -142,7 +114,7 @@ class ActionAgent:
                     "error": str(e),
                 }
 
-        # Fallback : simuler l'action
+        # fallback : simulation
         logger.info("action_agent.simulated", intent=intent, slots=slot_values)
         return {
             "success": True,

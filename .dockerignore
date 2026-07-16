@@ -1,15 +1,14 @@
-# Contexte de build Docker (API + worker, contexte = racine).
-# Le frontend a son propre contexte (frontend/) + frontend/.dockerignore.
-# But : un contexte mince → upload Cloud Build rapide, image légère.
+# contexte build api
+# le front a le sien
 
-# ── VCS / éditeurs ──
+# vcs / éditeurs
 .git
 .gitignore
 .idea
 .vscode
 *.swp
 
-# ── Python / venv / caches ──
+# python / caches
 .venv
 venv
 __pycache__/
@@ -21,23 +20,21 @@ __pycache__/
 .coverage
 htmlcov
 
-# ── Runtime local (NE JAMAIS embarquer) ──
+# runtime local
 var/
 dump.rdb
 *.log
 
-# ── Front (build séparé) ──
+# front (build séparé)
 frontend/
 
-# ── Secrets / env ──
+# secrets / env
 .env
 .env.*
 !.env.example
 
-# ── Gros artefacts ML ──
-# On garde checkpoints/intent + ner (intention/NER) ET checkpoints/nanogpt
-# (embarqué dans l'image API : NanoGPT sélectionnable en prod pour la démo).
-# On EXCLUT seulement les corpus d'entraînement (inutiles au service).
+# gros artefacts ml
+# checkpoints gardés, corpus exclus
 nanogpt/data/
 data/raw/
 data/interim/
@@ -46,11 +43,11 @@ data/synthetic/
 mlruns/
 mlartifacts/
 
-# ── Notebooks / images en vrac ──
+# notebooks / images
 *.ipynb
 .ipynb_checkpoints/
 Gemini_Generated_Image_*.png
 "Jenny Intro.html"
 
-# ── Tests (pas nécessaires à l'image de prod) ──
+# tests inutiles en prod
 tests/

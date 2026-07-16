@@ -1,22 +1,4 @@
-"""Vector Store — Stockage et recherche via pgvector.
-
-Persiste les chunks de documents dans la table `document_embeddings`
-(PostgreSQL + extension pgvector) et effectue la recherche de similarité
-cosinus, scopée par business.
-
-Schéma (créé via Alembic, voir migrations/versions) :
-    CREATE TABLE document_embeddings (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        business_id UUID NOT NULL REFERENCES businesses(id),
-        content TEXT NOT NULL,
-        source VARCHAR(500),
-        chunk_index INTEGER,
-        metadata_ JSON,
-        embedding vector(768),
-        created_at TIMESTAMPTZ
-    );
-    CREATE INDEX ... USING ivfflat (embedding vector_cosine_ops);
-"""
+"""vector store pgvector."""
 
 from __future__ import annotations
 
@@ -39,7 +21,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class StoredDocument:
-    """Document (chunk) retrouvé dans le vector store."""
+    """chunk retrouvé."""
 
     id: str
     content: str
@@ -50,16 +32,12 @@ class StoredDocument:
 
 
 def _vector_literal(embedding: list[float]) -> str:
-    """Sérialise un vecteur Python au format littéral pgvector ('[1,2,3]')."""
+    """format littéral pgvector."""
     return "[" + ",".join(repr(float(x)) for x in embedding) + "]"
 
 
 class PgVectorStore:
-    """Store vectoriel basé sur PostgreSQL + pgvector (table document_embeddings).
-
-    Toutes les opérations sont scopées par `business_id` (isolation multi-tenant)
-    et nécessitent une `AsyncSession` injectée par l'appelant.
-    """
+    """store pgvector scopé par business."""
 
     def __init__(self, embedding_dim: int = 768) -> None:
         self.embedding_dim = embedding_dim
@@ -70,16 +48,7 @@ class PgVectorStore:
         business_id: UUID | str,
         chunks: list[dict],
     ) -> int:
-        """Insère des chunks (content + embedding + metadata) pour un business.
-
-        Args:
-            session: Session SQLAlchemy (le commit est géré par l'appelant).
-            business_id: Business propriétaire des chunks.
-            chunks: Liste de dicts {content, embedding, source?, chunk_index?, metadata?}.
-
-        Returns:
-            Nombre de chunks insérés.
-        """
+        """insère des chunks."""
         inserted = 0
         for c in chunks:
             embedding = c.get("embedding")
@@ -117,7 +86,7 @@ class PgVectorStore:
         top_k: int = 5,
         score_threshold: float = 0.0,
     ) -> list[StoredDocument]:
-        """Recherche les chunks les plus proches (cosinus) pour un business."""
+        """chunks les plus proches."""
         embedding = _vector_literal(query_embedding)
         try:
             result = await session.execute(
@@ -169,7 +138,7 @@ class PgVectorStore:
         session: AsyncSession,
         business_id: UUID | str,
     ) -> list[dict]:
-        """Liste les entrées logiques (groupées par knowledge_id)."""
+        """entrées groupées par knowledge_id."""
         result = await session.execute(
             text(
                 """
@@ -211,7 +180,7 @@ class PgVectorStore:
         business_id: UUID | str,
         knowledge_id: str,
     ) -> int:
-        """Supprime tous les chunks d'une entrée logique."""
+        """supprime une entrée."""
         result = await session.execute(
             text(
                 """

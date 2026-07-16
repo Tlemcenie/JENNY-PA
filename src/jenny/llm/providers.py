@@ -1,20 +1,4 @@
-"""Abstraction des fournisseurs LLM.
-
-Fournit une interface unifiée pour appeler différents LLM
-(OpenAI, Groq, Mistral, Llama, NanoGPT local) sans coupler le reste
-de l'application à un provider spécifique.
-
-Toutes les clés d'API sont consommées via `get_settings()` (préfixe
-`JENNY_*`). Aucun `os.getenv()` direct ici afin de garantir la
-cohérence avec `.env.example` et `.env`.
-
-Providers supportés :
-- OpenAI (GPT-4o, GPT-4o-mini)
-- Groq (Llama 3.3 70B, Mixtral, etc.)
-- Mistral (Mistral Large, Mistral Small)
-- Llama (via Ollama ou vLLM local)
-- NanoGPT (modèle maison entraîné from scratch)
-"""
+"""abstraction des providers llm."""
 
 from __future__ import annotations
 
@@ -29,7 +13,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class LLMResponse:
-    """Réponse standardisée d'un LLM."""
+    """réponse standard d'un llm."""
 
     content: str
     model: str
@@ -38,17 +22,17 @@ class LLMResponse:
 
 
 class BaseLLMProvider(ABC):
-    """Interface abstraite pour les providers LLM."""
+    """interface commune des providers."""
 
     @property
     @abstractmethod
     def model_name(self) -> str:
-        """Nom du modèle utilisé."""
+        """nom du modèle."""
         ...
 
     @property
     def is_configured(self) -> bool:
-        """Indique si le provider possède les credentials nécessaires."""
+        """credentials présents ?"""
         return True
 
     @abstractmethod
@@ -59,12 +43,12 @@ class BaseLLMProvider(ABC):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ) -> LLMResponse:
-        """Génère une réponse à partir d'un prompt."""
+        """génère une réponse."""
         ...
 
     @abstractmethod
     async def embed(self, text: str) -> list[float]:
-        """Génère un vecteur d'embedding pour un texte."""
+        """embedding d'un texte."""
         ...
 
     async def generate_stream(
@@ -74,19 +58,14 @@ class BaseLLMProvider(ABC):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ):
-        """Diffusion token par token (async generator).
-
-        Implémentation par défaut SANS vrai streaming : on génère tout puis on
-        renvoie le bloc en une fois. Les providers qui supportent le streaming
-        natif (ex. Ollama) surchargent cette méthode pour un premier token rapide.
-        """
+        """faux streaming par défaut."""
         resp = await self.generate(prompt, system_prompt, temperature, max_tokens)
         if resp.finish_reason != "error" and resp.content:
             yield resp.content
 
 
 class OpenAIProvider(BaseLLMProvider):
-    """Provider OpenAI (GPT-4o, GPT-4o-mini)."""
+    """provider openai."""
 
     def __init__(
         self,
@@ -182,7 +161,7 @@ class OpenAIProvider(BaseLLMProvider):
 
 
 class MistralProvider(BaseLLMProvider):
-    """Provider Mistral AI (compatible OpenAI)."""
+    """provider mistral, compatible openai."""
 
     def __init__(
         self,
@@ -257,7 +236,7 @@ class MistralProvider(BaseLLMProvider):
 
 
 class LlamaProvider(BaseLLMProvider):
-    """Provider Llama via Ollama (ou autre runtime local exposant `/api/chat`)."""
+    """provider llama via ollama."""
 
     def __init__(
         self,
@@ -267,7 +246,7 @@ class LlamaProvider(BaseLLMProvider):
         self._model = model
         settings = get_settings()
         self.base_url = base_url or settings.llama_base_url
-        # Garde le modèle chargé entre les requêtes (évite le cold-start).
+        # évite le cold-start
         self._keep_alive = settings.llama_keep_alive
 
     @property
@@ -328,8 +307,7 @@ class LlamaProvider(BaseLLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 1024,
     ):
-        """Vrai streaming Ollama : on relaie chaque token dès qu'il arrive
-        (premier token rapide → le chat « répond » tout de suite)."""
+        """vrai streaming ollama."""
         import json as _json
 
         import httpx
@@ -369,7 +347,7 @@ class LlamaProvider(BaseLLMProvider):
                         break
         except Exception as e:
             logger.error("llm.llama.stream_error", error=str(e))
-            # Pas de re-raise : l'appelant retombera sur generate() non-streamé.
+            # l'appelant retombe sur generate()
 
     async def embed(self, text: str) -> list[float]:
         logger.info("llm.llama.embed", text_length=len(text))
@@ -394,7 +372,7 @@ class LlamaProvider(BaseLLMProvider):
 
 
 class GroqProvider(BaseLLMProvider):
-    """Provider Groq (Llama 3.3 70B, Mixtral...). API compatible OpenAI."""
+    """provider groq, compatible openai."""
 
     def __init__(
         self,
@@ -471,7 +449,7 @@ class GroqProvider(BaseLLMProvider):
 
 
 class NanoGPTProvider(BaseLLMProvider):
-    """Provider pour le modèle NanoGPT local (PyTorch, entraîné from scratch)."""
+    """provider nanogpt local."""
 
     def __init__(
         self,
@@ -491,8 +469,7 @@ class NanoGPTProvider(BaseLLMProvider):
     def is_configured(self) -> bool:
         from pathlib import Path
 
-        # Le modèle maison n'est utilisable qu'une fois ENTRAÎNÉ : il faut à la fois
-        # le checkpoint (poids) et le tokenizer (entraîné de zéro sur le corpus).
+        # il faut checkpoint + tokenizer
         return Path(self._checkpoint_path).exists() and Path(self._tokenizer_path).exists()
 
     def _load_model(self) -> None:
@@ -547,8 +524,7 @@ class NanoGPTProvider(BaseLLMProvider):
 
             from nanogpt.generate import generate as nano_generate
 
-            # On amorce avec le prompt (encodé par le tokenizer maison), tronqué au
-            # contexte du modèle, puis on échantillonne uniquement les NOUVEAUX tokens.
+            # prompt tronqué au contexte
             block = self._model.config.block_size
             prompt_ids = self._tokenizer.encode(prompt).ids[-(block - 1) :]
             idx = torch.tensor([prompt_ids or [0]], dtype=torch.long)
@@ -575,20 +551,11 @@ class NanoGPTProvider(BaseLLMProvider):
         return [0.0] * 256
 
 
-# ── Factory ──
+# factory
 
 
 def get_llm_provider(provider_name: str | None = None, **kwargs) -> BaseLLMProvider:
-    """Factory pour créer un provider LLM.
-
-    Args:
-        provider_name: "openai" | "groq" | "mistral" | "llama" | "nanogpt".
-            Par défaut, utilise `settings.llm_provider`.
-        **kwargs: passés au constructeur du provider (p.ex. `model=`).
-
-    Returns:
-        Instance du provider correspondant.
-    """
+    """fabrique le provider demandé."""
     settings = get_settings()
     name = (provider_name or settings.llm_provider or "groq").lower()
 
@@ -613,13 +580,7 @@ def get_llm_provider(provider_name: str | None = None, **kwargs) -> BaseLLMProvi
 
 
 class FallbackLLMProvider(BaseLLMProvider):
-    """Chaîne de repli : essaie les providers dans l'ordre et bascule sur le
-    suivant dès qu'un échoue (erreur runtime / injoignable).
-
-    Évite qu'un modèle actif indisponible (typiquement Ollama local, absent sur
-    Cloud Run) ne serve un template bidon : on bascule alors sur un provider
-    hébergé (Groq). Un repli ne se déclenche QUE sur erreur — une sortie valide
-    (même « moche », ex. NanoGPT) du provider principal est bien renvoyée."""
+    """essaie les providers dans l'ordre."""
 
     def __init__(self, providers: list[BaseLLMProvider]) -> None:
         self._providers = [p for p in providers if p is not None]
@@ -645,7 +606,7 @@ class FallbackLLMProvider(BaseLLMProvider):
                 continue
             try:
                 resp = await p.generate(prompt, system_prompt, temperature, max_tokens)
-            except Exception as e:  # provider injoignable → on tente le suivant
+            except Exception as e:  # on passe au suivant
                 logger.warning("llm.fallback.error", provider=p.model_name, error=str(e))
                 continue
             if resp.finish_reason != "error" and (resp.content or "").strip():
@@ -673,7 +634,7 @@ class FallbackLLMProvider(BaseLLMProvider):
             except Exception as e:
                 logger.warning("llm.fallback.stream_error", provider=p.model_name, error=str(e))
                 continue
-        # Aucun provider n'a streamé → l'appelant retombe sur generate() (chaîne complète).
+        # l'appelant retombera sur generate()
 
     async def embed(self, text: str) -> list[float]:
         for p in self._providers:
@@ -683,20 +644,11 @@ class FallbackLLMProvider(BaseLLMProvider):
 
 
 def get_default_llm_provider() -> BaseLLMProvider | None:
-    """Construit le provider LLM ACTIF (choix modifiable à chaud via l'UI), avec
-    une chaîne de repli vers Groq.
-
-    Le choix vit dans ``jenny.llm.runtime`` (bouton Ollama/Groq/NanoGPT), avec
-    repli sur ``JENNY_LLM_PROVIDER``. Si le modèle actif échoue au runtime (ex.
-    Ollama absent en prod), on bascule automatiquement sur Groq → JAMAIS de
-    template bidon quand Groq est configuré. Renvoie None seulement si RIEN n'est
-    utilisable → l'appelant bascule alors en templates.
-    """
+    """provider actif avec repli groq."""
     from jenny.llm.runtime import active_provider_model
 
     name, model = active_provider_model()
-    # NanoGPTProvider ne prend pas `model=` (il charge un checkpoint) → on n'injecte
-    # le modèle que pour les providers qui l'acceptent.
+    # nanogpt ne prend pas model=
     kwargs = {"model": model} if (model and name != "nanogpt") else {}
     try:
         primary = get_llm_provider(name, **kwargs)
@@ -704,7 +656,7 @@ def get_default_llm_provider() -> BaseLLMProvider | None:
         logger.warning("llm.unknown_provider", provider=name)
         primary = None
 
-    # Repli hébergé : Groq (sauf s'il est déjà le principal).
+    # repli groq
     groq: BaseLLMProvider | None = None
     if name != "groq":
         try:

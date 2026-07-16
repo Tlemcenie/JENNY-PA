@@ -42,7 +42,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 
 const categories = ["general", "horaires", "tarifs", "faq", "politique", "services", "equipe"];
 
-// Date courte façon design ("12 mars") — locale FR, dérivée de la vraie date.
+// date courte fr
 function shortDateFr(date: string): string {
   try {
     return new Date(date).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
@@ -51,7 +51,7 @@ function shortDateFr(date: string): string {
   }
 }
 
-// Type affiché dans la pastille / colonne (PDF en rouge, reste en mint).
+// type affiché
 function entryTypeLabel(source: string): string {
   if (source === "pdf") return "PDF";
   if (source === "url") return "URL";
@@ -75,7 +75,7 @@ export default function KnowledgePage() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [formMode, setFormMode] = useState<"text" | "pdf" | "files">("text");
 
-  // Form state
+  // état du formulaire
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [category, setCategory] = useState("general");
@@ -84,15 +84,15 @@ export default function KnowledgePage() {
   const [isSaving, setIsSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  // Édition d'une entrée existante (#12).
+  // édition d'une entrée
   const [editingId, setEditingId] = useState<string | null>(null);
-  // Recherche sémantique (#12).
+  // recherche sémantique
   const [searchQuery, setSearchQuery] = useState("");
   const [searchHits, setSearchHits] = useState<KnowledgeSearchHit[] | null>(null);
   const [searching, setSearching] = useState(false);
-  // Menu ⋯ par ligne.
+  // menu par ligne
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
-  // Déclencheur d'ouverture du sélecteur de fichiers depuis la drop-zone.
+  // ouvre le sélecteur de fichiers
   const filesInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -121,11 +121,7 @@ export default function KnowledgePage() {
     fetchData();
   }, [fetchData]);
 
-  // « Apprendre à Jenny » depuis un retour négatif (👎) : la carte Satisfaction
-  // envoie ici avec ?teach=<question du client>. On ouvre le formulaire d'ajout
-  // pré-rempli pour que le gérant saisisse la bonne réponse en un clic.
-  // NB : on lit window.location plutôt que useSearchParams pour éviter la
-  // contrainte de Suspense de cette version de Next.
+  // pré-remplit depuis ?teach
   useEffect(() => {
     if (typeof window === "undefined") return;
     const teach = new URLSearchParams(window.location.search).get("teach");
@@ -136,12 +132,12 @@ export default function KnowledgePage() {
     setContent(`Question du client : « ${teach} »\n\nRéponse à apprendre à Jenny :\n`);
     setCategory("faq");
     setShowAddForm(true);
-    // Nettoie l'URL pour ne pas rouvrir le formulaire au rafraîchissement.
+    // nettoie l'url
     window.history.replaceState({}, "", "/knowledge");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fermeture du menu ⋯ au clic extérieur.
+  // ferme le menu au clic
   useEffect(() => {
     if (!menuOpenId) return;
     const close = () => setMenuOpenId(null);
@@ -167,7 +163,7 @@ export default function KnowledgePage() {
     setShowAddForm(true);
   };
 
-  // Édition d'une entrée texte existante (#12).
+  // ouvre l'édition
   const openEdit = (entry: KnowledgeEntry) => {
     setEditingId(entry.id);
     setFormMode("text");
@@ -202,7 +198,7 @@ export default function KnowledgePage() {
         await uploadKnowledgePdf(businessId, file, title, category);
         toast.success("PDF importé");
       } else {
-        // Import multi-fichiers (#13).
+        // import multi-fichiers
         if (files.length === 0) {
           setFormError("Sélectionnez au moins un fichier");
           setIsSaving(false);
@@ -239,7 +235,7 @@ export default function KnowledgePage() {
     }
   };
 
-  // Recherche sémantique débouncée (#12).
+  // recherche débouncée
   useEffect(() => {
     const q = searchQuery.trim();
     if (!businessId || q.length < 2) {
@@ -279,8 +275,7 @@ export default function KnowledgePage() {
     }
   };
 
-  // ── Mapping données réelles → emplacements du design ────────────────────────
-  // Comptes réels par source (le backend renvoie by_source ; repli sur les entrées).
+  // comptes par source
   const sourceCounts = entries.reduce<Record<string, number>>((acc, e) => {
     acc[e.source] = (acc[e.source] || 0) + 1;
     return acc;
@@ -289,11 +284,11 @@ export default function KnowledgePage() {
   const pdfCount = bySource["pdf"] || 0;
   const textCount = (bySource["text"] || 0) + (bySource["manual"] || 0);
   const totalSources = stats?.total_entries ?? entries.length;
-  // Chunks indexés réels : total renvoyé sinon somme des chunks_count des entrées.
+  // chunks indexés
   const totalChunks =
     stats?.total_chunks ?? entries.reduce((s, e) => s + (e.chunks_count ?? 0), 0);
   const categoryCount = stats ? Object.keys(stats.by_category || {}).length : 0;
-  // Couverture honnête : part des entrées effectivement indexées (chunks > 0).
+  // part des entrées indexées
   const indexedEntries = entries.filter((e) => (e.chunks_count ?? 0) > 0).length;
   const coverage = entries.length > 0 ? Math.round((indexedEntries / entries.length) * 100) : 0;
 
@@ -320,7 +315,7 @@ export default function KnowledgePage() {
     },
   ];
 
-  // Styles partagés de la grille de la liste (header + lignes alignés).
+  // grille partagée
   const gridStyle: CSSProperties = {
     display: "grid",
     gridTemplateColumns: "2fr 110px 90px 100px 110px 52px",
@@ -330,7 +325,7 @@ export default function KnowledgePage() {
 
   return (
     <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
-      {/* Header éditorial */}
+      {/* header */}
       <div style={{ display: "flex", alignItems: "flex-end", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
         <div style={{ minWidth: 0 }}>
           <h1
@@ -371,7 +366,7 @@ export default function KnowledgePage() {
         </button>
       </div>
 
-      {/* Stats row (données réelles) */}
+      {/* stats */}
       <div
         style={{
           display: "grid",
@@ -406,7 +401,7 @@ export default function KnowledgePage() {
         ))}
       </div>
 
-      {/* Recherche sémantique (#12) */}
+      {/* recherche sémantique */}
       <div style={{ position: "relative", marginBottom: 20 }}>
         <Search
           style={{
@@ -459,7 +454,7 @@ export default function KnowledgePage() {
         )}
       </div>
 
-      {/* Résultats de recherche */}
+      {/* résultats */}
       {searchHits !== null && (
         <div className="jcard" style={{ padding: 18, marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
@@ -528,7 +523,7 @@ export default function KnowledgePage() {
         </div>
       )}
 
-      {/* Drop zone (branchée aux vrais handlers d'import) */}
+      {/* drop zone */}
       <div
         style={{
           padding: 28,
@@ -565,7 +560,7 @@ export default function KnowledgePage() {
             Jenny les lit, les découpe en chunks, et les utilise en moins de 30 secondes. Format max 50 MB par fichier.
           </div>
         </div>
-        {/* Input réel multi-fichiers déclenché par « Parcourir » (#13). */}
+        {/* input multi-fichiers */}
         <input
           ref={filesInputRef}
           type="file"
@@ -629,7 +624,7 @@ export default function KnowledgePage() {
         </div>
       </div>
 
-      {/* Add form modal */}
+      {/* modal d'ajout */}
       <AnimatePresence>
         {showAddForm && (
           <motion.div
@@ -667,7 +662,7 @@ export default function KnowledgePage() {
                 </button>
               </div>
 
-              {/* Mode toggle (masqué en édition : on modifie le texte) */}
+              {/* toggle de mode */}
               {!editingId && (
                 <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
                   {([
@@ -812,7 +807,7 @@ export default function KnowledgePage() {
         )}
       </AnimatePresence>
 
-      {/* Entries list */}
+      {/* liste des entrées */}
       {isLoading ? (
         <div className="space-y-3">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -876,7 +871,7 @@ export default function KnowledgePage() {
                     borderBottom: i < entries.length - 1 ? "1px solid var(--divider-soft)" : "none",
                   }}
                 >
-                  {/* Source : pastille type + titre + sous-titre chunks */}
+                  {/* source */}
                   <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
                     <div
                       className="jmono"
@@ -929,7 +924,7 @@ export default function KnowledgePage() {
                   {/* Ajouté */}
                   <div style={{ fontSize: 12, color: "var(--text-2)" }}>{shortDateFr(entry.created_at)}</div>
 
-                  {/* Chunks (métrique réelle ; avertissement honnête si non indexé) */}
+                  {/* chunks */}
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span
                       className="jmono"
@@ -952,7 +947,7 @@ export default function KnowledgePage() {
                     )}
                   </div>
 
-                  {/* Menu ⋯ (édition / suppression réelles) */}
+                  {/* menu actions */}
                   <div style={{ display: "flex", justifyContent: "flex-end", position: "relative" }}>
                     {deletingId === entry.id ? (
                       <Trash2 className="animate-spin" style={{ width: 16, height: 16, color: "var(--text-3)" }} />

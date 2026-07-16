@@ -1,13 +1,4 @@
-"""Tâches asynchrones ARQ.
-
-Définit les tâches de fond exécutées par le worker ARQ :
-- normalisation de messages,
-- traitement / classification ML,
-- génération de réponses,
-- synchronisation connecteurs.
-
-ARQ utilise Redis comme broker (déjà dans la stack).
-"""
+"""tâches de fond ARQ."""
 
 from __future__ import annotations
 
@@ -33,7 +24,7 @@ logger = get_logger(__name__)
 
 
 def _intent_from_checkpoint(text: str) -> tuple[str | None, float]:
-    """Charge le prédicteur intent si checkpoint présent (léger)."""
+    """charge l'intent si checkpoint."""
     ckpt = Path("checkpoints/intent/best_model.pt")
     if not ckpt.exists():
         return None, 0.0
@@ -51,7 +42,7 @@ def _intent_from_checkpoint(text: str) -> tuple[str | None, float]:
 
 
 async def normalize_message(ctx: dict[str, Any], message_id: str) -> dict[str, str]:
-    """Normalise un message après ingestion."""
+    """normalise un message."""
     logger.info("task.normalize_message.start", message_id=message_id)
     mid = UUID(message_id)
 
@@ -95,7 +86,7 @@ async def normalize_message(ctx: dict[str, Any], message_id: str) -> dict[str, s
 
 
 async def process_message(ctx: dict[str, Any], message_id: str) -> dict[str, str]:
-    """Enrichit le message (intent léger) après normalisation."""
+    """enrichit le message."""
     logger.info("task.process_message.start", message_id=message_id)
     mid = UUID(message_id)
 
@@ -133,13 +124,13 @@ async def process_message(ctx: dict[str, Any], message_id: str) -> dict[str, str
 
 
 async def sync_connector(ctx: dict[str, Any], connector_name: str) -> dict[str, str]:
-    """Synchronise les messages depuis un connecteur externe (polling)."""
+    """sync connecteur externe."""
     logger.info("task.sync_connector.start", connector=connector_name)
     return {"status": "synced", "connector": connector_name}
 
 
 async def poll_imap_mailbox(ctx: dict[str, Any]) -> dict[str, str]:
-    """Lit la boîte IMAP (non lus), ingère et enfile la normalisation."""
+    """lit la boîte IMAP."""
     settings = get_settings()
     bid_str = (settings.imap_business_id or settings.default_business_id or "").strip()
     if (
@@ -188,19 +179,7 @@ async def poll_imap_mailbox(ctx: dict[str, Any]) -> dict[str, str]:
 
 
 async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
-    """Cron (chaque minute) : dé-snooze les conversations dues et escalade les
-    clients mécontents restés sans réponse au-delà du SLA (#5/#6).
-
-    - Dé-snooze : ``snoozed_until`` échu → on l'efface (la conversation
-      réapparaît dans la vue active) et on notifie l'agent qui l'avait reportée.
-    - Auto-escalade : conversation au sentiment négatif, non escaladée, dont le
-      dernier message est entrant (client en attente) depuis plus que le SLA du
-      business → on lève le drapeau, on remonte la priorité et on notifie.
-
-    Tourne dans le process worker : on persiste des notifications en base (la
-    cloche du dashboard les relève) plutôt que de pousser sur le bus SSE
-    in-process de l'API (autre process).
-    """
+    """cron : dé-snooze + escalade."""
     from sqlalchemy import select
 
     from jenny.domain.models.business import Business
@@ -216,7 +195,7 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
     review_asked = 0
     rebook_nudged = 0
     async with async_session_factory() as session, session.begin():
-        # 1. Dé-snooze des conversations dont l'échéance est passée.
+        # 1. dé-snooze les échues
         due = (
             await session.execute(
                 select(Conversation).where(
@@ -240,7 +219,7 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
             )
             unsnoozed += 1
 
-        # 2. Escalade des clients mécontents sans réponse au-delà du SLA.
+        # 2. escalade hors SLA
         last_direction = (
             select(Message.direction)
             .where(Message.conversation_id == Conversation.id)
@@ -283,9 +262,7 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
                 )
                 escalated += 1
 
-        # 3+4. Rappels de RDV — délais CONFIGURABLES par salon (#90) :
-        # rappel « imminent » (reminder_lead_minutes) et « la veille »
-        # (day_reminder_lead_hours), lus sur le business de chaque RDV.
+        # 3+4. rappels rdv configurables
         from datetime import timedelta
 
         from sqlalchemy import or_
@@ -347,8 +324,7 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
                 )
                 day_reminded += 1
 
-        # 5. Avis post-RDV : prestation honorée et terminée récemment (< 48h),
-        # avis pas encore demandé → on invite le salon à solliciter un retour.
+        # 5. avis post-rdv
         review_window_start = now - timedelta(hours=48)
         done_appts = (
             await session.execute(
@@ -376,8 +352,7 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
             )
             review_asked += 1
 
-        # 6. Relance de re-réservation : dernier RDV honoré il y a 6-9 semaines,
-        # client identifié, AUCUN RDV à venir → on suggère de le relancer (fidélisation).
+        # 6. relance re-réservation
         rebook_old = now - timedelta(days=63)
         rebook_due = now - timedelta(days=42)
         stale_appts = (
@@ -392,7 +367,7 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
             )
         ).scalars().all()
         for a in stale_appts:
-            # Pas de relance si le client a déjà un RDV à venir.
+            # déjà un rdv → skip
             upcoming = (
                 await session.execute(
                     select(Appointment.id).where(
@@ -403,7 +378,7 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
                     ).limit(1)
                 )
             ).first()
-            a.rebook_reminder_sent_at = now  # marqué dans tous les cas (anti-rebalayage)
+            a.rebook_reminder_sent_at = now  # marqué anti-rebalayage
             if upcoming is not None:
                 continue
             session.add(
@@ -441,12 +416,12 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
 
 
 async def startup(ctx: dict[str, Any]) -> None:
-    """Initialisation au démarrage du worker."""
+    """démarrage worker."""
     logger.info("worker.startup")
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
-    """Nettoyage à l'arrêt du worker."""
+    """arrêt worker."""
     logger.info("worker.shutdown")
 
 
@@ -457,7 +432,7 @@ def _imap_cron_minutes() -> set[int]:
 
 
 class WorkerSettings:
-    """Configuration du worker ARQ."""
+    """config worker ARQ."""
 
     functions: ClassVar[list] = [
         normalize_message,
@@ -471,11 +446,9 @@ class WorkerSettings:
 
     cron_jobs: ClassVar[list] = [
         cron(poll_imap_mailbox, minute=_imap_cron_minutes()),
-        # Balaye chaque minute : dé-snooze + auto-escalade (#5/#6).
+        # balaye chaque minute
         cron(sweep_conversations, minute=set(range(60))),
     ]
 
-    # arq lit cet attribut via settings_cls.__dict__ et le passe TEL QUEL à
-    # create_pool : ce doit donc être une instance RedisSettings, pas une
-    # méthode (un @staticmethod serait passé sans être appelé → crash).
+    # arq veut une instance RedisSettings
     redis_settings: ClassVar[RedisSettings] = RedisSettings.from_dsn(get_settings().redis_url)

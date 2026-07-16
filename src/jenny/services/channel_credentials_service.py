@@ -1,17 +1,4 @@
-"""Identifiants de canal par business — résolution + chiffrement au repos.
-
-Couche UNIQUE qui décide d'où viennent les identifiants d'un canal, exactement
-comme ``deposit_service`` choisit Stripe vs mode manuel :
-
-1. **Identifiants du business en base** (``ChannelAccount.credentials_``) en priorité ;
-2. sinon **variables d'environnement globales** (``get_settings()``) ;
-3. sinon **None** → l'état « non connecté » (réception OK, envoi désactivé, sans planter).
-
-Les secrets en base sont chiffrés au repos (Fernet) si ``JENNY_MASTER_KEY`` est
-défini ; sinon stockés en clair (dev / mono-tenant, transport HTTPS).
-
-Aucune session n'est committée ici : tout passe par la session de l'appelant.
-"""
+"""Identifiants de canal par business."""
 
 from __future__ import annotations
 
@@ -31,7 +18,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-# ── Identifiants typés par canal ────────────────────────────────────────────
+# identifiants typés par canal
 @dataclass
 class WhatsAppCreds:
     phone_number_id: str
@@ -66,7 +53,7 @@ class EmailCreds:
 AnyCreds = WhatsAppCreds | InstagramCreds | EmailCreds
 
 
-# ── Spécification des champs (pour la validation + le formulaire front) ──────
+# spécification des champs
 @dataclass
 class FieldSpec:
     key: str
@@ -99,7 +86,7 @@ CHANNEL_FIELDS: dict[str, list[FieldSpec]] = {
     ],
 }
 
-# Clé de l'identifiant externe (routage des webhooks entrants) par canal.
+# clé externe par canal
 _EXTERNAL_KEY: dict[str, str] = {
     "whatsapp": "phone_number_id",
     "instagram": "page_id",
@@ -109,14 +96,14 @@ _EXTERNAL_KEY: dict[str, str] = {
 
 
 def external_account_id_for(channel: str, data: dict) -> str:
-    """Identifiant qui sert au routage webhook (phone_number_id, page_id, email)."""
+    """Identifiant pour le routage webhook."""
     if channel == "email":
         return str(data.get("smtp_from_email") or data.get("imap_user") or data.get("smtp_username") or "")
     return str(data.get(_EXTERNAL_KEY.get(channel, "external_account_id"), "") or "")
 
 
 def _has_token(channel: str, data: dict) -> bool:
-    """Des identifiants exploitables sont-ils présents pour ce canal ?"""
+    """Identifiants exploitables ?"""
     if channel in ("whatsapp", "instagram", "messenger"):
         return bool(data.get("access_token"))
     if channel == "email":
@@ -124,7 +111,7 @@ def _has_token(channel: str, data: dict) -> bool:
     return False
 
 
-# ── Chiffrement au repos (Fernet, facultatif) ───────────────────────────────
+# chiffrement au repos
 def _fernet():
     key = (get_settings().master_key or "").strip()
     if not key:
@@ -133,13 +120,13 @@ def _fernet():
         from cryptography.fernet import Fernet
 
         return Fernet(key.encode())
-    except Exception as exc:  # clé invalide → on retombe en clair, sans planter
+    except Exception as exc:  # clé invalide
         logger.warning("channel_creds.fernet_init_failed", error=str(exc))
         return None
 
 
 def encrypt_credentials(data: dict) -> dict:
-    """Chiffre le dict d'identifiants si une clé maître est configurée, sinon clair."""
+    """Chiffre si clé maître."""
     f = _fernet()
     if f is None:
         return dict(data)
@@ -148,7 +135,7 @@ def encrypt_credentials(data: dict) -> dict:
 
 
 def decrypt_credentials(stored: dict | None) -> dict:
-    """Déchiffre la colonne ``credentials_`` (gère le clair ET le chiffré)."""
+    """Déchiffre credentials_."""
     if not stored:
         return {}
     if "__enc__" in stored:
@@ -164,7 +151,7 @@ def decrypt_credentials(stored: dict | None) -> dict:
     return dict(stored)
 
 
-# ── Identifiants depuis l'environnement (fallback global) ────────────────────
+# fallback depuis l'env
 def _creds_from_env(channel: str) -> dict | None:
     s = get_settings()
     if channel == "whatsapp" and s.whatsapp_access_token:
@@ -199,7 +186,7 @@ def _creds_from_env(channel: str) -> dict | None:
 
 
 def env_has_credentials(channel: str) -> bool:
-    """True si des identifiants globaux d'environnement existent pour ce canal."""
+    """Identifiants env présents ?"""
     return _creds_from_env(channel) is not None
 
 
@@ -238,11 +225,11 @@ def _build_typed(channel: str, data: dict) -> AnyCreds | None:
     return None
 
 
-# ── Résolution ───────────────────────────────────────────────────────────────
+# résolution
 async def resolve_raw(
     session: AsyncSession, business_id: UUID | None, channel: str
 ) -> dict | None:
-    """Dict d'identifiants exploitable : business en base d'abord, sinon env, sinon None."""
+    """Base d'abord, sinon env."""
     if business_id is not None:
         repo = ChannelAccountRepository(session)
         acct = await repo.get_account(business_id, channel)
@@ -258,7 +245,7 @@ async def resolve_raw(
 async def resolve(
     session: AsyncSession, business_id: UUID | None, channel: str
 ) -> AnyCreds | None:
-    """Identifiants typés du canal pour ce business, ou None (« non connecté »)."""
+    """Identifiants typés ou None."""
     raw = await resolve_raw(session, business_id, channel)
     if raw is None:
         return None
@@ -268,17 +255,12 @@ async def resolve(
 async def is_connected(
     session: AsyncSession, business_id: UUID | None, channel: str
 ) -> bool:
-    """True si le canal a des identifiants exploitables (base OU env)."""
+    """Canal connecté ?"""
     return await resolve_raw(session, business_id, channel) is not None
 
 
 async def matches_verify_token(session: AsyncSession, channel: str, token: str) -> bool:
-    """Le ``token`` correspond-il au verify token env OU à celui d'un business ?
-
-    Permet la vérification du webhook Meta (GET challenge) sans contexte business :
-    on accepte le token global d'environnement, ou celui collé par n'importe quel
-    business pour ce canal.
-    """
+    """Vérifie le verify token."""
     if not token:
         return False
     env = _creds_from_env(channel)
@@ -293,11 +275,7 @@ async def matches_verify_token(session: AsyncSession, channel: str, token: str) 
 
 
 def normalize_connect_payload(channel: str, raw: dict) -> tuple[str, dict, list[str]]:
-    """Valide/normalise un payload de connexion. Renvoie (external_id, creds, erreurs).
-
-    Ne conserve que les champs connus du canal ; vérifie les champs requis ;
-    déduit l'identifiant externe (routage webhook).
-    """
+    """Valide un payload de connexion."""
     specs = CHANNEL_FIELDS.get(channel)
     errors: list[str] = []
     if specs is None:
@@ -310,7 +288,7 @@ def normalize_connect_payload(channel: str, raw: dict) -> tuple[str, dict, list[
                 errors.append(f"Champ requis manquant : {spec.label}")
             continue
         creds[spec.key] = val.strip() if isinstance(val, str) else val
-    # Port email en entier.
+    # port en entier
     if channel == "email" and "smtp_port" in creds:
         try:
             creds["smtp_port"] = int(creds["smtp_port"])
@@ -322,7 +300,7 @@ def normalize_connect_payload(channel: str, raw: dict) -> tuple[str, dict, list[
     return external_id, creds, errors
 
 
-# Champs exposables au front (jamais les valeurs des secrets).
+# champs exposables au front
 def public_field_specs(channel: str) -> list[dict]:
     return [
         {"key": f.key, "label": f.label, "secret": f.secret, "required": f.required, "placeholder": f.placeholder}
@@ -330,5 +308,5 @@ def public_field_specs(channel: str) -> list[dict]:
     ]
 
 
-# Évite l'avertissement de lint sur ``field`` non utilisé si l'on étend plus tard.
+# évite l'avertissement lint
 _ = field

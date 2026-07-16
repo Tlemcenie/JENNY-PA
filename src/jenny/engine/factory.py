@@ -1,15 +1,4 @@
-"""Factory du moteur conversationnel Jenny.
-
-Construit un `ConversationEngine` totalement câblé :
-- provider LLM (depuis Settings, fallback templates si absent)
-- registre d'actions (devis, paiement, RDV, ticket, planning, commande)
-- agents (faq, action, planning, payment, quote, fallback, escalation)
-- routeur d'agents
-- générateur de réponses (LLM)
-
-Utilisé par toutes les routes (`/conversation/chat`, webhooks…) afin de
-garantir un comportement cohérent et configurable depuis le `.env`.
-"""
+"""fabrique le moteur conversationnel."""
 
 from __future__ import annotations
 
@@ -46,22 +35,14 @@ logger = get_logger(__name__)
 
 
 def build_retriever() -> VectorRetriever:
-    """Construit le retriever RAG (embeddings configurés + pgvector).
-
-    L'embedder et le store sont instanciés sans I/O ; la session DB est
-    ouverte à la demande lors de chaque recherche.
-    """
+    """construit le retriever rag."""
     embedder = get_default_embedder()
     store = PgVectorStore(embedding_dim=embedder.dimension)
     return VectorRetriever(embedder=embedder, vector_store=store)
 
 
 def load_ml_predictors() -> tuple[object | None, object | None]:
-    """Charge les prédicteurs Intent/NER depuis les checkpoints entraînés.
-
-    Tolérant aux pannes : si les checkpoints sont absents ou si torch n'est
-    pas disponible, renvoie (None, None) et le moteur bascule sur les règles.
-    """
+    """charge les modèles ml."""
     settings = get_settings()
     if not settings.enable_ml_models:
         return None, None
@@ -91,20 +72,19 @@ def load_ml_predictors() -> tuple[object | None, object | None]:
 def build_action_registry(
     calendar: GoogleCalendarService | None = None,
 ) -> ActionRegistry:
-    """Enregistre toutes les actions métier disponibles."""
+    """enregistre les actions métier."""
     registry = ActionRegistry()
 
     registry.register(CheckOrderAction(), intents=["order_status"])
-    # Planning = disponibilités RÉELLES (agenda DB via availability_service),
-    # plus de Google Calendar simulé.
+    # vraies dispos en base
     registry.register(CheckPlanningAction(), intents=["planning"])
-    # Réservation RÉELLE en base (catalogue + agenda) plutôt que simulée.
+    # vraie résa en base
     registry.register(BookAppointmentDBAction(), intents=["appointment"])
-    # Gestion par le client de son propre RDV (annuler / déplacer / confirmer).
+    # gère le rdv client
     registry.register(ManageAppointmentAction(), intents=["manage_appointment"])
-    # Inscription en liste d'attente quand le salon est complet (anti-no-show).
+    # liste d'attente si complet
     registry.register(JoinWaitlistAction(), intents=["join_waitlist"])
-    # Enregistrement du nom du client (après « c'est à quel nom ? »).
+    # enregistre le nom
     registry.register(SetCustomerNameAction(), intents=["set_customer_name"])
     registry.register(SetCustomerPhoneAction(), intents=["set_customer_phone"])
     registry.register(CreateTicketAction(), intents=["complaint", "support"])
@@ -119,7 +99,7 @@ def build_agent_router(
     calendar: GoogleCalendarService | None = None,
     retriever: VectorRetriever | None = None,
 ) -> AgentRouter:
-    """Enregistre les agents Jenny dans un AgentRouter."""
+    """branche les agents."""
     cal = calendar or GoogleCalendarService()
     router = AgentRouter()
 
@@ -139,22 +119,12 @@ def build_engine(
     state_manager: StateManager | None = None,
     calendar: GoogleCalendarService | None = None,
 ) -> ConversationEngine:
-    """Construit un `ConversationEngine` prêt à l'emploi.
-
-    Args:
-        llm_provider: provider LLM à utiliser. Si None, lecture des Settings.
-        state_manager: gestionnaire d'état partagé (Redis si dispo).
-        calendar: service Google Calendar (réel ou simulé).
-
-    Returns:
-        Un moteur entièrement câblé. Si le LLM n'est pas configuré,
-        il bascule sur des templates pour ne pas casser l'expérience.
-    """
+    """construit un moteur complet."""
     cal = calendar or GoogleCalendarService()
     sm = state_manager or StateManager()
 
     registry = build_action_registry(calendar=cal)
-    # Un seul retriever partagé : l'agent FAQ ET le grounding RAG transverse du moteur.
+    # retriever partagé
     retriever = build_retriever()
     router = build_agent_router(registry, calendar=cal, retriever=retriever)
 
@@ -183,13 +153,13 @@ def build_engine(
     return engine
 
 
-# ── Singleton partagé entre les routes (reset possible pour les tests) ──
+# singleton partagé
 
 _engine_singleton: ConversationEngine | None = None
 
 
 def get_engine() -> ConversationEngine:
-    """Renvoie le moteur partagé (lazy init via `build_engine`)."""
+    """moteur partagé, lazy init."""
     global _engine_singleton
     if _engine_singleton is None:
         _engine_singleton = build_engine()
@@ -197,6 +167,6 @@ def get_engine() -> ConversationEngine:
 
 
 def reset_engine() -> None:
-    """Réinitialise le singleton (utile pour les tests)."""
+    """reset pour les tests."""
     global _engine_singleton
     _engine_singleton = None

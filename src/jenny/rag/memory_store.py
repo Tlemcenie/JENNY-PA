@@ -1,10 +1,4 @@
-"""Vector Store en mémoire — Pour tests et développement local.
-
-Implémente la même interface que PgVectorStore mais stocke
-tout en mémoire avec recherche cosinus numpy.
-
-En production, utiliser PgVectorStore avec pgvector.
-"""
+"""vector store en mémoire."""
 
 from __future__ import annotations
 
@@ -20,7 +14,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class MemoryDocument:
-    """Document stocké en mémoire."""
+    """doc en mémoire."""
 
     id: str
     content: str
@@ -32,7 +26,7 @@ class MemoryDocument:
 
 @dataclass
 class StoredDocument:
-    """Document retourné par une recherche."""
+    """doc retourné par recherche."""
 
     id: str
     content: str
@@ -42,7 +36,7 @@ class StoredDocument:
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Calcule la similarité cosinus entre deux vecteurs."""
+    """similarité cosinus."""
     dot = sum(x * y for x, y in zip(a, b, strict=False))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
@@ -52,10 +46,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 class InMemoryVectorStore:
-    """Vector store en mémoire pour tests et développement.
-
-    Même interface que PgVectorStore pour interchangeabilité.
-    """
+    """store mémoire pour les tests."""
 
     def __init__(
         self,
@@ -68,7 +59,7 @@ class InMemoryVectorStore:
 
     @property
     def count(self) -> int:
-        """Nombre de documents dans le store."""
+        """nb de documents."""
         return len([d for d in self._documents if d.collection == self.collection])
 
     async def add_document(
@@ -78,7 +69,7 @@ class InMemoryVectorStore:
         metadata: dict | None = None,
         **kwargs,
     ) -> str:
-        """Ajoute un document avec son embedding."""
+        """ajoute un document."""
         doc_id = str(uuid4())
         doc = MemoryDocument(
             id=doc_id,
@@ -96,7 +87,7 @@ class InMemoryVectorStore:
         documents: list[dict],
         **kwargs,
     ) -> list[str]:
-        """Ajoute plusieurs documents en batch."""
+        """ajout en batch."""
         ids = []
         for doc in documents:
             doc_id = await self.add_document(
@@ -115,23 +106,23 @@ class InMemoryVectorStore:
         score_threshold: float = 0.0,
         **kwargs,
     ) -> list[StoredDocument]:
-        """Recherche par similarité cosinus."""
+        """recherche cosinus."""
         collection_docs = [d for d in self._documents if d.collection == self.collection]
 
         if not collection_docs:
             return []
 
-        # Calculer les scores
+        # calcule les scores
         scored = []
         for doc in collection_docs:
             score = _cosine_similarity(query_embedding, doc.embedding)
             if score >= score_threshold:
                 scored.append((doc, score))
 
-        # Trier par score décroissant
+        # tri décroissant
         scored.sort(key=lambda x: x[1], reverse=True)
 
-        # Limiter
+        # coupe au top_k
         results = []
         for doc, score in scored[:top_k]:
             results.append(
@@ -152,13 +143,13 @@ class InMemoryVectorStore:
         return results
 
     async def delete_document(self, doc_id: str, **kwargs) -> bool:
-        """Supprime un document par ID."""
+        """supprime par id."""
         before = len(self._documents)
         self._documents = [d for d in self._documents if d.id != doc_id]
         return len(self._documents) < before
 
     async def delete_collection(self, **kwargs) -> int:
-        """Supprime tous les documents de la collection."""
+        """vide la collection."""
         before = len(self._documents)
         self._documents = [d for d in self._documents if d.collection != self.collection]
         count = before - len(self._documents)
@@ -166,5 +157,5 @@ class InMemoryVectorStore:
         return count
 
     def clear(self) -> None:
-        """Vide tout le store."""
+        """vide tout."""
         self._documents.clear()

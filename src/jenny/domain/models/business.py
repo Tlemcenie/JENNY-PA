@@ -1,8 +1,4 @@
-"""Modèle SQLAlchemy pour les businesses (comptes utilisateurs).
-
-Représente un freelance, une PME ou un petit commerce
-qui utilise Jenny pour gérer ses messages clients.
-"""
+"""modèle SQLAlchemy des businesses."""
 
 import uuid
 
@@ -14,7 +10,7 @@ from jenny.db.base import Base, TimestampMixin
 
 
 class Business(Base, TimestampMixin):
-    """Compte business (freelance, PME, commerce)."""
+    """compte business."""
 
     __tablename__ = "businesses"
 
@@ -60,8 +56,7 @@ class Business(Base, TimestampMixin):
         default=True,
         comment="Business actif ou désactivé",
     )
-    # Horaires d'ouverture : {"mon": ["09:00","19:00"], "sun": null, …} (clés en
-    # anglais lun-dim). null/absent = fermé ce jour-là.
+    # horaires d'ouverture, null = fermé
     business_hours: Mapped[dict | None] = mapped_column(JSON, default=None)
     auto_reply_message: Mapped[str | None] = mapped_column(
         Text,
@@ -75,16 +70,12 @@ class Business(Base, TimestampMixin):
         nullable=False,
         comment="Seuil SLA par défaut : conversation en retard si en attente depuis +N min",
     )
-    # Surcharges SLA fines : {"priority": {"high": 10, "low": 120},
-    # "channel": {"whatsapp": 15}}. La résolution prend le min applicable ;
-    # absence → sla_minutes. Permet un SLA plus strict pour les priorités hautes.
+    # surcharges SLA par priorité/canal
     sla_rules: Mapped[dict | None] = mapped_column(JSON, default=None)
-    # « Cerveau de Jenny » : personnalité configurable (ton, curseurs, règles d'or,
-    # vocabulaire). {"tone": "cool", "sliders": {...}, "rules": [...], "vocab": [...]}.
+    # personnalité configurable de jenny
     persona: Mapped[dict | None] = mapped_column(JSON, default=None)
 
-    # ── Acompte anti-no-show (configurable par le salon) ──
-    # Demander un acompte à la réservation réduit fortement les lapins.
+    # acompte anti no-show
     deposit_enabled: Mapped[bool] = mapped_column(
         default=False,
         server_default="false",
@@ -106,7 +97,7 @@ class Business(Base, TimestampMixin):
         comment="Acompte forfaitaire (centimes) quand le prix de la prestation est inconnu",
     )
 
-    # ── Rappels configurables + fidélité ──
+    # rappels + fidélité
     reminder_lead_minutes: Mapped[int] = mapped_column(
         Integer, default=60, server_default="60", nullable=False,
         comment="Délai du rappel « imminent » avant le RDV (minutes)",
@@ -120,13 +111,8 @@ class Business(Base, TimestampMixin):
         comment="Nombre de RDV honorés pour débloquer une récompense fidélité (0 = désactivé)",
     )
 
-    # Relations
-    # ⚠️ Efficacité : ces collections sont volumineuses (tous les clients, RDV,
-    # commandes… d'un salon). Surtout PAS « lazy=selectin » : chaque chargement
-    # d'un Business (à CHAQUE message du chat) déclencherait un SELECT par
-    # collection → toute la base du salon en mémoire pour rien. Aucun code ne lit
-    # ces relations via l'objet Business (les besoins réels passent par des requêtes
-    # filtrées dédiées). On les laisse donc en chargement à la demande (« select »).
+    # relations
+    # pas de selectin, trop lourd
     customers = relationship("Customer", back_populates="business", lazy="select")
     conversations = relationship("Conversation", back_populates="business", lazy="select")
     customer_addresses = relationship(

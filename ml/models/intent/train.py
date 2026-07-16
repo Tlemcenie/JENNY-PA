@@ -1,19 +1,4 @@
-"""Script d'entraînement du classifieur d'intention — Multi-Label.
-
-Entraîne un Bi-LSTM + Attention avec BCEWithLogitsLoss
-pour supporter la détection de PLUSIEURS intentions simultanées.
-
-Features :
-- ✅ Multi-label (BCEWithLogitsLoss + sigmoid)
-- ✅ 3-way split : train / validation / test
-- ✅ Progress bars visuelles (rich)
-- ✅ Support MPS (Apple M1 Pro)
-- ✅ Early stopping + best model checkpoint
-
-Usage :
-    PYTHONPATH=src:. python -m ml.models.intent.train
-    PYTHONPATH=src:. python -m ml.models.intent.train --data data/generated/intents.jsonl --epochs 40
-"""
+"""entraînement du classifieur d'intention."""
 
 from __future__ import annotations
 
@@ -53,16 +38,7 @@ def train_intent_model(
     data_path: str | None = None,
     output_dir: str = "checkpoints/intent",
 ) -> IntentClassifier:
-    """Entraîne le modèle de détection d'intention (multi-label).
-
-    Args:
-        config: Configuration du modèle.
-        data_path: Chemin vers les données JSONL.
-        output_dir: Répertoire de sauvegarde.
-
-    Returns:
-        Modèle entraîné.
-    """
+    """entraîne le modèle d'intention."""
     setup_logging()
     config = config or IntentModelConfig()
     torch.manual_seed(config.seed)
@@ -75,9 +51,7 @@ def train_intent_model(
         )
     )
 
-    # ══════════════════════════════════════════════
-    # 1. Charger les données
-    # ══════════════════════════════════════════════
+    # 1. charger les données
     if data_path and Path(data_path).exists():
         dataset = IntentDataset.from_jsonl(data_path, config=config)
         console.print(
@@ -88,9 +62,7 @@ def train_intent_model(
         dataset = IntentDataset(texts, labels, config=config)
         console.print(f"  📂 Données sample : [yellow]{len(dataset):,} exemples[/yellow]")
 
-    # ══════════════════════════════════════════════
-    # 2. Split 3-way : train / validation / test
-    # ══════════════════════════════════════════════
+    # 2. split train/val/test
     total = len(dataset)
     train_size = int(0.70 * total)
     val_size = int(0.15 * total)
@@ -116,9 +88,7 @@ def train_intent_model(
     split_table.add_row("[bold]Total[/bold]", f"[bold]{total:,}[/bold]", "100%")
     console.print(split_table)
 
-    # ══════════════════════════════════════════════
-    # 3. Modèle
-    # ══════════════════════════════════════════════
+    # 3. modèle
     config.vocab_size = len(dataset.vocab)
     model = IntentClassifier(config)
     model = model.to(config.device)
@@ -133,9 +103,7 @@ def train_intent_model(
     model_table.add_row("Multi-label", "✅" if config.multi_label else "❌")
     console.print(model_table)
 
-    # ══════════════════════════════════════════════
-    # 4. Optimiseur, loss, scheduler
-    # ══════════════════════════════════════════════
+    # 4. optimiseur, loss, scheduler
     optimizer = AdamW(
         model.parameters(),
         lr=config.learning_rate,
@@ -156,9 +124,7 @@ def train_intent_model(
         criterion = nn.CrossEntropyLoss()
         console.print("  📉 Loss : [cyan]CrossEntropyLoss[/cyan] (single-label)")
 
-    # ══════════════════════════════════════════════
-    # 5. Boucle d'entraînement avec rich progress
-    # ══════════════════════════════════════════════
+    # 5. boucle d'entraînement
     best_metric = 0.0
     patience_counter = 0
     max_patience = 10
@@ -220,7 +186,7 @@ def train_intent_model(
             train_acc = correct / max(total, 1)
             avg_loss = total_loss / max(len(train_loader), 1)
 
-            # ── Évaluation sur validation ──
+            # éval validation
             if config.multi_label:
                 val_metric = _evaluate_multi_label(model, val_loader, config)
             else:
@@ -242,7 +208,7 @@ def train_intent_model(
                 }
             )
 
-            # Mise à jour progress bar
+            # maj progress bar
             epoch_progress.update(
                 task_epoch,
                 description=(
@@ -255,7 +221,7 @@ def train_intent_model(
             )
             epoch_progress.advance(task_epoch)
 
-            # Sauvegarder le meilleur modèle
+            # sauve le meilleur modèle
             if val_metric > best_metric:
                 best_metric = val_metric
                 patience_counter = 0
@@ -266,19 +232,17 @@ def train_intent_model(
             else:
                 patience_counter += 1
 
-            # Early stopping
+            # early stopping
             if patience_counter >= max_patience:
                 console.print(
                     f"\n  [yellow]⏹ Early stopping à l'epoch {epoch + 1} (patience={max_patience})[/yellow]"
                 )
                 break
 
-    # ══════════════════════════════════════════════
-    # 6. Évaluation finale sur le test set
-    # ══════════════════════════════════════════════
+    # 6. éval finale sur test
     console.print("\n[bold cyan]📋 Évaluation sur le Test Set[/bold cyan]")
 
-    # Recharger le meilleur modèle
+    # recharge le meilleur modèle
     best_path = Path(output_dir) / "best_model.pt"
     if best_path.exists():
         checkpoint = torch.load(best_path, map_location=config.device, weights_only=False)
@@ -303,7 +267,7 @@ def train_intent_model(
     results_table.add_row("Checkpoint", str(best_path))
     console.print(results_table)
 
-    # Per-class metrics si disponibles
+    # métriques par classe
     if test_details.get("per_class"):
         class_table = Table(title="📊 F1 par intention")
         class_table.add_column("Intent", style="cyan")
@@ -335,7 +299,7 @@ def _evaluate(
     loader: DataLoader,
     device: str,
 ) -> float:
-    """Évalue le modèle single-label."""
+    """éval single-label."""
     model.eval()
     correct = 0
     total = 0
@@ -359,7 +323,7 @@ def _evaluate_multi_label(
     loader: DataLoader,
     config: IntentModelConfig,
 ) -> float:
-    """Évalue le modèle multi-label (F1-score micro)."""
+    """éval multi-label, f1 micro."""
     model.eval()
     true_positives = 0
     false_positives = 0
@@ -392,12 +356,12 @@ def _evaluate_multi_label_detailed(
     loader: DataLoader,
     config: IntentModelConfig,
 ) -> tuple[float, dict]:
-    """Évalue le modèle multi-label avec métriques détaillées par classe."""
+    """éval détaillée par classe."""
     model.eval()
     threshold = config.multi_label_threshold
     num_classes = config.num_classes
 
-    # Per-class counters
+    # compteurs par classe
     tp = [0] * num_classes
     fp = [0] * num_classes
     fn = [0] * num_classes
@@ -416,7 +380,7 @@ def _evaluate_multi_label_detailed(
                 fp[c] += ((preds[:, c] == 1) & (labels_multi[:, c] == 0)).sum().item()
                 fn[c] += ((preds[:, c] == 0) & (labels_multi[:, c] == 1)).sum().item()
 
-    # Micro F1
+    # f1 micro
     total_tp = sum(tp)
     total_fp = sum(fp)
     total_fn = sum(fn)
@@ -424,7 +388,7 @@ def _evaluate_multi_label_detailed(
     recall = total_tp / max(total_tp + total_fn, 1)
     f1 = 2 * precision * recall / max(precision + recall, 1e-8)
 
-    # Per-class F1
+    # f1 par classe
     per_class = {}
     for c in range(num_classes):
         p = tp[c] / max(tp[c] + fp[c], 1)
@@ -447,7 +411,7 @@ def _save_checkpoint(
     config: IntentModelConfig,
     output_dir: str,
 ) -> None:
-    """Sauvegarde le modèle, le vocabulaire et la config."""
+    """sauve modèle, vocab, config."""
     path = Path(output_dir)
     path.mkdir(parents=True, exist_ok=True)
 

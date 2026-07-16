@@ -14,16 +14,9 @@ import { ownerChat, ApiError, type OwnerChatResponse } from "@/lib/api";
 import { easeOutExpo } from "@/lib/motion";
 import { generateUUID, cn } from "@/lib/utils";
 
-// ════════════════════════════════════════════════════════════════════════
-// Page « Assistant Jenny » (#62) — chat côté GÉRANT du salon.
-// Ici Jenny est transparente : c'est l'assistante du coiffeur. Elle fait des
-// comptes rendus, bloque des créneaux, enrichit la base et répond aux
-// questions. (À ne pas confondre avec le chat client où Jenny se présente
-// comme un membre humain de l'équipe.)
-// Branchée sur le vrai endpoint `ownerChat` → POST /api/v1/owner/chat.
-// ════════════════════════════════════════════════════════════════════════
+// chat côté gérant
 
-// Action métier renvoyée par le backend → petit badge discret sur la bulle.
+// badge selon l'action backend
 const ACTION_BADGES: Record<string, { emoji: string; label: string }> = {
   block_slot: { emoji: "📅", label: "créneau bloqué" },
   add_knowledge: { emoji: "📚", label: "ajouté à la base" },
@@ -39,8 +32,7 @@ interface ChatMessage {
   error?: boolean;
 }
 
-// Suggestions rapides au-dessus de la saisie. `insert` insère le texte dans le
-// champ (sans envoyer) au lieu de déclencher l'appel — utile pour « Note que… ».
+// suggestions rapides
 const SUGGESTIONS: { label: string; insert?: boolean }[] = [
   { label: "Combien j'ai de rendez-vous ?" },
   { label: "Bloque demain de 12h à 14h" },
@@ -76,7 +68,7 @@ export default function AssistantPage() {
     scrollToBottom();
   }, [messages, isSending, scrollToBottom]);
 
-  // Hauteur auto de la zone de saisie (1 → ~6 lignes).
+  // hauteur auto du textarea
   useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
@@ -84,9 +76,7 @@ export default function AssistantPage() {
     el.style.height = Math.min(el.scrollHeight, 160) + "px";
   }, [input]);
 
-  // Envoi d'un message : ajoute la bulle gérant, appelle `ownerChat`, puis la
-  // réponse de Jenny (ou un message d'erreur dans le fil). `text` permet aux
-  // chips d'envoyer directement sans passer par l'état du champ.
+  // envoi d'un message
   const send = useCallback(
     async (raw?: string) => {
       const text = (raw ?? input).trim();
@@ -133,7 +123,7 @@ export default function AssistantPage() {
         ]);
       } finally {
         setIsSending(false);
-        // Redonne le focus au champ après l'envoi (confort clavier).
+        // refocus après envoi
         requestAnimationFrame(() => inputRef.current?.focus());
       }
     },
@@ -147,8 +137,7 @@ export default function AssistantPage() {
     }
   };
 
-  // Chip : soit on insère un préfixe dans le champ (« Note que »), soit on
-  // envoie directement le message.
+  // chip : insérer ou envoyer
   const handleSuggestion = (s: { label: string; insert?: boolean }) => {
     if (s.insert) {
       setInput((prev) => {
@@ -163,7 +152,7 @@ export default function AssistantPage() {
 
   return (
     <div className="flex flex-col h-full bg-jenny-bg">
-      {/* ════════ En-tête ════════ */}
+      {/* en-tête */}
       <motion.header
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -187,7 +176,7 @@ export default function AssistantPage() {
         </div>
       </motion.header>
 
-      {/* ════════ Zone de messages ════════ */}
+      {/* zone de messages */}
       <div className="flex-1 overflow-y-auto px-5 md:px-8 py-6">
         <div className="max-w-3xl mx-auto space-y-4">
           <AnimatePresence initial={false}>
@@ -199,7 +188,7 @@ export default function AssistantPage() {
                 transition={{ type: "spring", stiffness: 380, damping: 30, mass: 0.7 }}
                 className={cn("flex items-start gap-3", msg.isUser ? "justify-end" : "")}
               >
-                {/* Avatar Jenny (gauche) */}
+                {/* avatar jenny */}
                 {!msg.isUser &&
                   (msg.error ? (
                     <span className="w-9 h-9 rounded-xl bg-jenny-error/10 flex items-center justify-center shrink-0">
@@ -209,7 +198,7 @@ export default function AssistantPage() {
                     <JennyAvatar size={36} />
                   ))}
 
-                {/* Bulle + métadonnées */}
+                {/* bulle + méta */}
                 <div
                   className={cn(
                     "max-w-[78%] md:max-w-[68%] flex flex-col gap-1.5",
@@ -229,7 +218,7 @@ export default function AssistantPage() {
                     {msg.content}
                   </div>
 
-                  {/* Badge d'action métier (sur les bulles Jenny non-erreur) */}
+                  {/* badge action */}
                   {!msg.isUser && !msg.error && msg.action && ACTION_BADGES[msg.action] && (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-jenny-coral-tint dark:bg-jenny-coral/10 border border-jenny-coral/20 text-[0.6875rem] font-medium text-jenny-coral">
                       <span aria-hidden>{ACTION_BADGES[msg.action].emoji}</span>
@@ -245,7 +234,7 @@ export default function AssistantPage() {
             ))}
           </AnimatePresence>
 
-          {/* Indicateur « Jenny écrit… » */}
+          {/* jenny écrit */}
           <AnimatePresence>
             {isSending && (
               <motion.div
@@ -267,10 +256,10 @@ export default function AssistantPage() {
         </div>
       </div>
 
-      {/* ════════ Saisie + suggestions ════════ */}
+      {/* saisie + suggestions */}
       <div className="border-t border-jenny-divider bg-jenny-surface/60 backdrop-blur-sm px-5 md:px-8 py-4">
         <div className="max-w-3xl mx-auto">
-          {/* Chips de suggestions rapides */}
+          {/* chips suggestions */}
           <div className="flex flex-wrap gap-2 mb-3">
             {SUGGESTIONS.map((s) => (
               <button
@@ -285,7 +274,7 @@ export default function AssistantPage() {
             ))}
           </div>
 
-          {/* Barre de saisie */}
+          {/* barre de saisie */}
           <div className="flex items-end gap-3">
             <textarea
               ref={inputRef}

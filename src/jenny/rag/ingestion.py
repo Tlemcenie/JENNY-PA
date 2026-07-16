@@ -1,14 +1,4 @@
-"""Pipeline d'ingestion complet pour le RAG.
-
-Gère le découpage des documents en chunks, la génération
-d'embeddings et le stockage dans pgvector.
-
-Pipeline :
-1. Charger le document source (texte, PDF, etc.)
-2. Découper en chunks intelligents (respect des phrases)
-3. Générer les embeddings pour chaque chunk
-4. Stocker dans pgvector via le VectorStore
-"""
+"""pipeline d'ingestion rag."""
 
 from __future__ import annotations
 
@@ -29,7 +19,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class DocumentChunk:
-    """Chunk de document prêt à être indexé."""
+    """chunk prêt à indexer."""
 
     id: str = ""
     content: str = ""
@@ -42,14 +32,7 @@ class DocumentChunk:
 
 
 class DocumentIngester:
-    """Pipeline d'ingestion de documents dans la base vectorielle.
-
-    Étapes :
-    1. Chargement du document source.
-    2. Découpage en chunks intelligents.
-    3. Génération des embeddings.
-    4. Stockage dans pgvector.
-    """
+    """ingère les documents en base."""
 
     def __init__(
         self,
@@ -70,12 +53,8 @@ class DocumentIngester:
         text: str,
         metadata: dict | None = None,
     ) -> list[DocumentChunk]:
-        """Découpe un texte en chunks intelligents.
-
-        Respecte les limites de phrases pour éviter de couper
-        au milieu d'une phrase.
-        """
-        # Découper d'abord en phrases
+        """découpe en chunks."""
+        # découpe en phrases
         sentences = re.split(r"(?<=[.!?])\s+", text.strip())
 
         chunks: list[DocumentChunk] = []
@@ -86,7 +65,7 @@ class DocumentIngester:
             sentence_length = len(sentence)
 
             if current_length + sentence_length > self.chunk_size and current_chunk:
-                # Sauvegarder le chunk courant
+                # sauvegarde le chunk
                 chunk_text = " ".join(current_chunk)
                 chunks.append(
                     DocumentChunk(
@@ -95,7 +74,7 @@ class DocumentIngester:
                     )
                 )
 
-                # Overlap : garder les dernières phrases
+                # overlap sur la fin
                 overlap_text = ""
                 overlap_sentences: list[str] = []
                 for s in reversed(current_chunk):
@@ -111,7 +90,7 @@ class DocumentIngester:
             current_chunk.append(sentence)
             current_length += sentence_length
 
-        # Dernier chunk
+        # dernier chunk
         if current_chunk:
             chunks.append(
                 DocumentChunk(
@@ -128,19 +107,11 @@ class DocumentIngester:
         content: str,
         metadata: dict | None = None,
     ) -> int:
-        """Ingère un texte complet dans la base vectorielle.
-
-        Args:
-            content: Contenu textuel du document.
-            metadata: Métadonnées associées.
-
-        Returns:
-            Nombre de chunks indexés.
-        """
-        # 1. Découper en chunks
+        """ingère un texte."""
+        # découpage
         chunks = self.chunk_text(content, metadata)
 
-        # 2. Générer les embeddings
+        # embeddings
         if self.embedder is not None:
             texts = [c.content for c in chunks]
             embeddings = await self.embedder.embed_batch(texts)
@@ -149,7 +120,7 @@ class DocumentIngester:
         else:
             logger.warning("ingestion.no_embedder")
 
-        # 3. Stocker dans pgvector
+        # stockage pgvector
         if self.vector_store is not None and chunks[0].embedding is not None:
             documents = [
                 {
@@ -172,15 +143,7 @@ class DocumentIngester:
         file_path: str | Path,
         metadata: dict | None = None,
     ) -> int:
-        """Ingère un fichier texte.
-
-        Args:
-            file_path: Chemin vers le fichier.
-            metadata: Métadonnées supplémentaires.
-
-        Returns:
-            Nombre de chunks indexés.
-        """
+        """ingère un fichier."""
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"Fichier non trouvé : {path}")
@@ -201,16 +164,7 @@ class DocumentIngester:
         extensions: list[str] | None = None,
         metadata: dict | None = None,
     ) -> int:
-        """Ingère tous les fichiers d'un répertoire.
-
-        Args:
-            directory: Chemin du répertoire.
-            extensions: Extensions à traiter (ex: [".txt", ".md"]).
-            metadata: Métadonnées communes.
-
-        Returns:
-            Nombre total de chunks indexés.
-        """
+        """ingère tout un dossier."""
         dir_path = Path(directory)
         if not dir_path.is_dir():
             raise NotADirectoryError(f"Répertoire non trouvé : {dir_path}")

@@ -1,19 +1,4 @@
-"""Script d'entraînement du modèle NER BiGRU.
-
-Entraîne un BiGRU sur des données annotées en BIO
-pour extraire les entités clés des messages clients.
-
-Features :
-- ✅ 3-way split : train / validation / test
-- ✅ Progress bars visuelles (rich)
-- ✅ Support MPS (Apple M1 Pro)
-- ✅ Early stopping + best model checkpoint
-- ✅ Métriques détaillées par type d'entité
-
-Usage :
-    PYTHONPATH=src:. python -m ml.models.ner.train
-    PYTHONPATH=src:. python -m ml.models.ner.train --data data/generated/ner.jsonl --epochs 40
-"""
+"""entraîne le NER BiGRU."""
 
 from __future__ import annotations
 
@@ -53,16 +38,7 @@ def train_ner_model(
     data_path: str | None = None,
     output_dir: str = "checkpoints/ner",
 ) -> BiGRUNER:
-    """Entraîne le modèle NER.
-
-    Args:
-        config: Configuration du modèle.
-        data_path: Chemin vers les données JSONL.
-        output_dir: Répertoire de sauvegarde.
-
-    Returns:
-        Modèle entraîné.
-    """
+    """entraîne le modèle."""
     setup_logging()
     config = config or NERModelConfig()
     torch.manual_seed(config.seed)
@@ -75,9 +51,7 @@ def train_ner_model(
         )
     )
 
-    # ══════════════════════════════════════════════
-    # 1. Charger les données
-    # ══════════════════════════════════════════════
+    # 1. charge les données
     if data_path and Path(data_path).exists():
         dataset = NERDataset.from_jsonl(data_path, config=config)
         console.print(
@@ -88,9 +62,7 @@ def train_ner_model(
         dataset = NERDataset(token_seqs, tag_seqs, config=config)
         console.print(f"  📂 Données sample : [yellow]{len(dataset):,} exemples[/yellow]")
 
-    # ══════════════════════════════════════════════
-    # 2. Split 3-way : train / validation / test
-    # ══════════════════════════════════════════════
+    # 2. split train/val/test
     total = len(dataset)
     train_size = int(0.70 * total)
     val_size = int(0.15 * total)
@@ -116,9 +88,7 @@ def train_ner_model(
     split_table.add_row("[bold]Total[/bold]", f"[bold]{total:,}[/bold]", "100%")
     console.print(split_table)
 
-    # ══════════════════════════════════════════════
-    # 3. Modèle
-    # ══════════════════════════════════════════════
+    # 3. modèle
     config.vocab_size = len(dataset.vocab)
     model = BiGRUNER(config)
     model = model.to(config.device)
@@ -133,9 +103,7 @@ def train_ner_model(
     model_table.add_row("Entités", f"{len(ENTITY_TYPES)} ({', '.join(ENTITY_TYPES[:5])}...)")
     console.print(model_table)
 
-    # ══════════════════════════════════════════════
-    # 4. Optimiseur, loss, scheduler
-    # ══════════════════════════════════════════════
+    # 4. optim, loss, scheduler
     optimizer = AdamW(
         model.parameters(),
         lr=config.learning_rate,
@@ -149,13 +117,11 @@ def train_ner_model(
         patience=5,
     )
 
-    # Ignorer le padding (-100) dans la loss — "O" (index 0) est un vrai label !
+    # ignore le padding (-100)
     criterion = nn.CrossEntropyLoss(ignore_index=-100)
     console.print("  📉 Loss : [cyan]CrossEntropyLoss[/cyan] (ignore_index=-100)")
 
-    # ══════════════════════════════════════════════
-    # 5. Boucle d'entraînement avec rich progress
-    # ══════════════════════════════════════════════
+    # 5. boucle d'entraînement
     best_f1 = 0.0
     patience_counter = 0
     max_patience = 10
@@ -204,7 +170,7 @@ def train_ner_model(
 
             avg_loss = total_loss / max(len(train_loader), 1)
 
-            # ── Évaluation sur validation ──
+            # éval validation
             val_f1 = _evaluate(model, val_loader, config)
             scheduler.step(val_f1)
             current_lr = optimizer.param_groups[0]["lr"]
@@ -232,7 +198,7 @@ def train_ner_model(
             )
             epoch_progress.advance(task_epoch)
 
-            # Sauvegarder le meilleur modèle
+            # garde le meilleur
             if val_f1 > best_f1:
                 best_f1 = val_f1
                 patience_counter = 0
@@ -243,19 +209,17 @@ def train_ner_model(
             else:
                 patience_counter += 1
 
-            # Early stopping
+            # early stopping
             if patience_counter >= max_patience:
                 console.print(
                     f"\n  [yellow]⏹ Early stopping à l'epoch {epoch + 1} (patience={max_patience})[/yellow]"
                 )
                 break
 
-    # ══════════════════════════════════════════════
-    # 6. Évaluation finale sur le test set
-    # ══════════════════════════════════════════════
+    # 6. éval finale test
     console.print("\n[bold cyan]📋 Évaluation sur le Test Set[/bold cyan]")
 
-    # Recharger le meilleur modèle
+    # recharge le meilleur
     best_path = Path(output_dir) / "best_model.pt"
     if best_path.exists():
         checkpoint = torch.load(best_path, map_location=config.device, weights_only=False)
@@ -275,7 +239,7 @@ def train_ner_model(
     results_table.add_row("Checkpoint", str(best_path))
     console.print(results_table)
 
-    # Per-entity metrics
+    # métriques par entité
     if test_details.get("per_entity"):
         entity_table = Table(title="📊 F1 par type d'entité")
         entity_table.add_column("Entité", style="cyan")
@@ -307,7 +271,7 @@ def _evaluate(
     loader: DataLoader,
     config: NERModelConfig,
 ) -> float:
-    """Évalue le modèle NER (token-level F1 sur les entités)."""
+    """f1 token-level."""
     model.eval()
     correct_entities = 0
     predicted_entities = 0
@@ -346,10 +310,10 @@ def _evaluate_detailed(
     loader: DataLoader,
     config: NERModelConfig,
 ) -> tuple[float, dict]:
-    """Évalue le modèle NER avec métriques détaillées par type d'entité."""
+    """métriques détaillées par entité."""
     model.eval()
 
-    # Per-entity counters (on utilise le préfixe B-/I- pour identifier l'entité)
+    # compteurs par entité
     entity_tp: dict[str, int] = {}
     entity_fp: dict[str, int] = {}
     entity_fn: dict[str, int] = {}
@@ -380,11 +344,11 @@ def _evaluate_detailed(
                     p_tag = ID_TO_TAG.get(p, "O")
                     t_tag = ID_TO_TAG.get(t, "O")
 
-                    # Extraire le type d'entité
+                    # extrait le type
                     p_entity = p_tag.split("-", 1)[1] if "-" in p_tag else None
                     t_entity = t_tag.split("-", 1)[1] if "-" in t_tag else None
 
-                    if t != 0:  # True entity token
+                    if t != 0:  # vraie entité
                         total_fn += 1 if p != t else 0
                         total_tp += 1 if p == t else 0
                         if t_entity:
@@ -392,7 +356,7 @@ def _evaluate_detailed(
                                 entity_tp[t_entity] = entity_tp.get(t_entity, 0) + 1
                             else:
                                 entity_fn[t_entity] = entity_fn.get(t_entity, 0) + 1
-                    if p != 0 and p != t:  # Predicted entity token (faux positif)
+                    if p != 0 and p != t:  # faux positif
                         total_fp += 1
                         if p_entity:
                             entity_fp[p_entity] = entity_fp.get(p_entity, 0) + 1
@@ -425,7 +389,7 @@ def _save_checkpoint(
     config: NERModelConfig,
     output_dir: str,
 ) -> None:
-    """Sauvegarde le modèle NER."""
+    """sauvegarde le modèle."""
     path = Path(output_dir)
     path.mkdir(parents=True, exist_ok=True)
 

@@ -1,10 +1,4 @@
-"""Exécution du banc d'essai : moteur réel (Ollama) + RAG en mémoire + scoring.
-
-Pour chaque scénario, on amorce une base de connaissances **en mémoire** (vrais
-embeddings nomic-embed-text), on fait tourner le VRAI moteur conversationnel
-(qwen2.5:7b-instruct) tour par tour, puis on score chaque réponse selon les attentes
-du scénario. Aucune dépendance Postgres : l'éval est hermétique et reproductible.
-"""
+"""Banc d'essai du moteur."""
 
 from __future__ import annotations
 
@@ -27,7 +21,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Intentions purement relationnelles : pas de recherche RAG.
+# intentions sans RAG
 _RELATIONAL = {"greeting", "closing", "small_talk", "escalation"}
 
 
@@ -39,7 +33,7 @@ class _Hit:
 
 
 class EvalRetriever:
-    """Retriever RAG en mémoire (vrais embeddings) compatible avec ``FAQAgent``."""
+    """Retriever RAG en mémoire."""
 
     def __init__(self, embedder) -> None:
         self.embedder = embedder
@@ -61,21 +55,14 @@ class EvalRetriever:
             for c, v, m in self._docs
         ]
         scored.sort(key=lambda h: h.score, reverse=True)
-        # MÊME échelle que la prod : re-ranking lexical partagé (rag/rerank.py).
-        # Sans lui, les scores d'éval (cosinus brut) ne vivent pas sur l'échelle
-        # sur laquelle GAP_SCORE_FLOOR/STRONG sont calibrés → banc d'essai faussé.
+        # même échelle que la prod
         from jenny.rag.rerank import rerank
 
         return rerank(query, scored, top_k)
 
 
 class EvalRouter(AgentRouter):
-    """Routeur contrôlé : consulte toujours la KB pour les intentions « question ».
-
-    En production le routage dépend du modèle d'intention ; pour mesurer le
-    grounding de façon fiable, on s'assure ici que la base de connaissances est
-    bien interrogée pour toute demande non purement relationnelle.
-    """
+    """Routeur contrôlé pour l'éval."""
 
     def __init__(self, faq: FAQAgent, fallback: FallbackAgent) -> None:
         super().__init__()
@@ -96,7 +83,7 @@ class EvalRouter(AgentRouter):
 
 
 def build_eval_engine(provider, retriever: EvalRetriever) -> ConversationEngine:
-    """Moteur conversationnel pour l'éval (état en mémoire, RAG en mémoire)."""
+    """Moteur pour l'éval."""
     router = EvalRouter(FAQAgent(retriever=retriever), FallbackAgent())
     return ConversationEngine(
         state_manager=StateManager(redis_url="redis://localhost:6390/0"),  # force mémoire
@@ -105,11 +92,11 @@ def build_eval_engine(provider, retriever: EvalRetriever) -> ConversationEngine:
     )
 
 
-# ── Scoring ───────────────────────────────────────────────────────────────────
+# scoring
 
 
 def _forbidden_identity_or_leak(text: str) -> list[str]:
-    """Renvoie les violations « persona » trouvées (IA assumée / fuite RAG)."""
+    """Violations persona trouvées."""
     hits: list[str] = []
     if _AI_TERMS_RE.search(text or ""):
         hits.append("mention IA/robot")
@@ -119,7 +106,7 @@ def _forbidden_identity_or_leak(text: str) -> list[str]:
 
 
 def score_turn(turn: Turn, response) -> list[dict]:
-    """Évalue une réponse contre les attentes d'un tour. Liste de checks."""
+    """Score une réponse."""
     text = response.response_text or ""
     low = text.lower()
     checks: list[dict] = []
@@ -127,7 +114,7 @@ def score_turn(turn: Turn, response) -> list[dict]:
     def add(name: str, passed: bool, detail: str = "") -> None:
         checks.append({"name": name, "passed": bool(passed), "detail": detail})
 
-    # Persona : toujours vérifié (jamais d'IA assumée, jamais de fuite).
+    # persona toujours vérifiée
     violations = _forbidden_identity_or_leak(text)
     add("persona_humaine", not violations, ", ".join(violations))
 
@@ -161,7 +148,7 @@ def score_turn(turn: Turn, response) -> list[dict]:
 
 
 async def run_scenario(scenario: Scenario, *, embedder, provider) -> dict:
-    """Exécute un scénario complet (multi-tours) et score chaque réponse."""
+    """Joue un scénario complet."""
     retriever = EvalRetriever(embedder)
     await retriever.seed(scenario.knowledge)
     engine = build_eval_engine(provider, retriever)
@@ -203,7 +190,7 @@ async def run_scenario(scenario: Scenario, *, embedder, provider) -> dict:
 
 
 async def run_all(scenarios) -> dict:
-    """Exécute tous les scénarios et agrège les métriques d'efficacité."""
+    """Lance tous les scénarios."""
     from jenny.llm.providers import get_default_llm_provider
     from jenny.rag.embeddings import get_default_embedder
 
@@ -217,7 +204,7 @@ async def run_all(scenarios) -> dict:
         logger.info("eval.scenario.start", id=sc.id)
         results.append(await run_scenario(sc, embedder=embedder, provider=provider))
 
-    # Agrégation par critère.
+    # agrégation par critère
     by_criterion: dict[str, dict[str, int]] = {}
     for r in results:
         for t in r["turns"]:

@@ -1,8 +1,4 @@
-"""Dataset PyTorch pour le NER (Named Entity Recognition).
-
-Gère le chargement et le batching des données annotées
-au format BIO pour l'entraînement du BiGRU.
-"""
+"""Dataset PyTorch pour le NER."""
 
 from __future__ import annotations
 
@@ -19,14 +15,7 @@ if TYPE_CHECKING:
 
 
 class NERDataset(Dataset):
-    """Dataset pour l'entraînement du modèle NER.
-
-    Format de données attendu (JSONL) :
-    {"tokens": ["Commande", "CMD-123"], "tags": ["O", "B-ORDER_NUMBER"]}
-    {"tokens": ["Le", "15/03/2026"], "tags": ["O", "B-DATE"]}
-
-    Chaque ligne contient une liste de tokens et les tags BIO associés.
-    """
+    """Dataset tokens + tags BIO."""
 
     def __init__(
         self,
@@ -57,20 +46,20 @@ class NERDataset(Dataset):
         tokens = self.token_sequences[idx]
         tags = self.tag_sequences[idx]
 
-        # Encoder les tokens
+        # encode les tokens
         input_ids = [self.vocab.get(t.lower(), 1) for t in tokens]
         tag_ids = [TAG_TO_ID.get(t, 0) for t in tags]
 
-        # Tronquer
+        # tronque
         max_len = self.config.max_seq_length
         input_ids = input_ids[:max_len]
         tag_ids = tag_ids[:max_len]
 
-        # Padding
+        # padding
         padding = max_len - len(input_ids)
         attention_mask = [1] * len(input_ids) + [0] * padding
         input_ids = input_ids + [0] * padding
-        tag_ids = tag_ids + [-100] * padding  # -100 = ignore in CrossEntropyLoss
+        tag_ids = tag_ids + [-100] * padding  # -100 ignoré par la loss
 
         return {
             "input_ids": torch.tensor(input_ids, dtype=torch.long),
@@ -85,7 +74,7 @@ class NERDataset(Dataset):
         config: NERModelConfig | None = None,
         vocab: dict[str, int] | None = None,
     ) -> NERDataset:
-        """Charge un dataset depuis un fichier JSONL."""
+        """Charge depuis un JSONL."""
         token_sequences: list[list[str]] = []
         tag_sequences: list[list[str]] = []
         with open(path, encoding="utf-8") as f:
@@ -108,13 +97,9 @@ class NERDataset(Dataset):
 
 
 def generate_sample_data() -> tuple[list[list[str]], list[list[str]]]:
-    """Données d'entraînement pour le NER.
-
-    60+ exemples annotés en BIO avec variété d'entités.
-    En production, ces données viendront de data/labeled/.
-    """
+    """Données d'entraînement NER."""
     samples: list[tuple[list[str], list[str]]] = [
-        # ── ORDER_NUMBER ──
+        # ORDER_NUMBER
         (
             ["Ma", "commande", "CMD-12345", "est", "en", "retard"],
             ["O", "O", "B-ORDER_NUMBER", "O", "O", "O"],
@@ -139,7 +124,7 @@ def generate_sample_data() -> tuple[list[list[str]], list[list[str]]]:
             ["Référence", "CMD-00042", "statut", "?"],
             ["O", "B-ORDER_NUMBER", "O", "O"],
         ),
-        # ── DATE ──
+        # DATE
         (
             ["Livraison", "prévue", "le", "15/03/2026"],
             ["O", "O", "O", "B-DATE"],
@@ -164,7 +149,7 @@ def generate_sample_data() -> tuple[list[list[str]], list[list[str]]]:
             ["Créneau", "du", "18/03/2026", "ok", "pour", "moi"],
             ["O", "O", "B-DATE", "O", "O", "O"],
         ),
-        # ── PHONE ──
+        # PHONE
         (
             ["Appelez-moi", "au", "06", "12", "34", "56", "78"],
             ["O", "O", "B-PHONE", "I-PHONE", "I-PHONE", "I-PHONE", "I-PHONE"],
@@ -181,7 +166,7 @@ def generate_sample_data() -> tuple[list[list[str]], list[list[str]]]:
             ["Contactez", "06", "11", "22", "33", "44", "svp"],
             ["O", "B-PHONE", "I-PHONE", "I-PHONE", "I-PHONE", "I-PHONE", "O"],
         ),
-        # ── EMAIL ──
+        # EMAIL
         (
             ["Mon", "email", "est", "marie@example.com"],
             ["O", "O", "O", "B-EMAIL"],
@@ -202,7 +187,7 @@ def generate_sample_data() -> tuple[list[list[str]], list[list[str]]]:
             ["Réponse", "à", "info@boutique.com", "svp"],
             ["O", "O", "B-EMAIL", "O"],
         ),
-        # ── PRODUCT ──
+        # PRODUCT
         (
             ["Je", "cherche", "le", "produit", "iPhone", "15"],
             ["O", "O", "O", "O", "B-PRODUCT", "I-PRODUCT"],
@@ -227,7 +212,7 @@ def generate_sample_data() -> tuple[list[list[str]], list[list[str]]]:
             ["Commande", "de", "PlayStation", "5", "en", "stock", "?"],
             ["O", "O", "B-PRODUCT", "I-PRODUCT", "O", "O", "O"],
         ),
-        # ── AMOUNT ──
+        # AMOUNT
         (
             ["Montant", "de", "150.50", "€"],
             ["O", "O", "B-AMOUNT", "I-AMOUNT"],
@@ -248,7 +233,7 @@ def generate_sample_data() -> tuple[list[list[str]], list[list[str]]]:
             ["Paiement", "de", "45.00", "€", "effectué"],
             ["O", "O", "B-AMOUNT", "I-AMOUNT", "O"],
         ),
-        # ── NAME ──
+        # NAME
         (
             ["Je", "suis", "Marie", "Dupont"],
             ["O", "O", "B-NAME", "I-NAME"],
@@ -273,7 +258,7 @@ def generate_sample_data() -> tuple[list[list[str]], list[list[str]]]:
             ["Mme", "Isabelle", "Moreau", "a", "appelé"],
             ["O", "B-NAME", "I-NAME", "O", "O"],
         ),
-        # ── LOCATION ──
+        # LOCATION
         (
             ["Livraison", "à", "Paris", "75001"],
             ["O", "O", "B-LOCATION", "I-LOCATION"],
@@ -298,7 +283,7 @@ def generate_sample_data() -> tuple[list[list[str]], list[list[str]]]:
             ["Livrer", "à", "Nice", "06000"],
             ["O", "O", "B-LOCATION", "I-LOCATION"],
         ),
-        # ── ENTITÉS MULTIPLES ──
+        # entités multiples
         (
             ["Commande", "ORD-2026-789", "du", "10/03/2026", "pour", "Jean", "Martin"],
             ["O", "B-ORDER_NUMBER", "O", "B-DATE", "O", "B-NAME", "I-NAME"],
@@ -327,7 +312,7 @@ def generate_sample_data() -> tuple[list[list[str]], list[list[str]]]:
             ["Retour", "Samsung", "Galaxy", "S24", "commande", "CMD-9999"],
             ["O", "B-PRODUCT", "I-PRODUCT", "I-PRODUCT", "O", "B-ORDER_NUMBER"],
         ),
-        # ── PHRASES SANS ENTITÉ (important pour le "O") ──
+        # phrases sans entité
         (
             ["Bonjour", "je", "voudrais", "un", "devis"],
             ["O", "O", "O", "O", "O"],

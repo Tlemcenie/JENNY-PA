@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Génération massive de données NER via Groq LLM.
-
-Génère 5000+ exemples diversifiés pour l'entraînement
-du modèle BiGRU NER (Named Entity Recognition).
-
-Usage :
-    PYTHONPATH=src:. python ml/data_generation/generate_ner_data.py
-"""
+"""génère les données NER."""
 
 from __future__ import annotations
 
@@ -35,23 +28,22 @@ console = Console()
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY") or os.environ.get("JENNY_GROQ_API_KEY", "")
 
-# Entités supportées par Jenny NER (aligné avec ml/models/ner/config.py)
+# entités supportées
 ENTITY_TYPES = [
-    "NAME",  # Nom de personne
-    "DATE",  # Date / jour
-    "TIME",  # Heure
-    "SERVICE",  # Type de prestation
-    "PHONE",  # Numéro de téléphone
-    "EMAIL",  # Adresse email
-    "LOCATION",  # Lieu / adresse
-    "AMOUNT",  # Montant / prix
-    "ORDER_NUMBER",  # Numéro de commande
-    "PRODUCT",  # Produit
-    "DURATION",  # Durée
+    "NAME",  # nom
+    "DATE",  # date / jour
+    "TIME",  # heure
+    "SERVICE",  # prestation
+    "PHONE",  # téléphone
+    "EMAIL",  # email
+    "LOCATION",  # lieu
+    "AMOUNT",  # prix
+    "ORDER_NUMBER",  # numéro commande
+    "PRODUCT",  # produit
+    "DURATION",  # durée
 ]
 
-# Templates pour générer des phrases avec entités annotées
-# Le format est : "{texte}" avec des marqueurs [ENTITY_TYPE:valeur]
+# templates de phrases annotées
 ENTITY_TEMPLATES = {
     "appointment": [
         "Je voudrais un rendez-vous [DATE:{date}] à [TIME:{time}] pour [SERVICE:{service}]",
@@ -94,7 +86,7 @@ ENTITY_TEMPLATES = {
     ],
 }
 
-# Valeurs possibles pour chaque entité
+# valeurs possibles
 ENTITY_VALUES = {
     "person": [
         "Marie Dupont",
@@ -274,16 +266,16 @@ ENTITY_VALUES = {
 
 
 def fill_template(template: str) -> tuple[str, list[dict]]:
-    """Remplit un template avec des valeurs aléatoires et extrait les entités BIO."""
+    """remplit un template."""
 
     entities_found = []
     filled = template
 
-    # Trouver tous les placeholders [TYPE:valeur]
+    # trouve les placeholders
     pattern = r"\[([A-Z_]+):\{(\w+)\}\]"
     matches = list(re.finditer(pattern, filled))
 
-    # Remplacer en sens inverse pour garder les positions
+    # remplace en sens inverse
     for match in reversed(matches):
         entity_type = match.group(1)
         value_key = match.group(2)
@@ -302,7 +294,7 @@ def fill_template(template: str) -> tuple[str, list[dict]]:
 
 
 def text_to_bio(text: str, entities: list[dict]) -> list[tuple[str, str]]:
-    """Convertit un texte + entités en format BIO."""
+    """convertit en BIO."""
 
     words = text.split()
     tags = ["O"] * len(words)
@@ -311,7 +303,7 @@ def text_to_bio(text: str, entities: list[dict]) -> list[tuple[str, str]]:
         entity_words = entity["value"].split()
         entity_type = entity["type"]
 
-        # Trouver la position de l'entité dans le texte
+        # cherche la position
         for i in range(len(words) - len(entity_words) + 1):
             if words[i : i + len(entity_words)] == entity_words:
                 tags[i] = f"B-{entity_type}"
@@ -327,7 +319,7 @@ def generate_ner_batch_llm(
     entity_focus: str,
     batch_size: int = 40,
 ) -> list[dict]:
-    """Génère des phrases avec entités annotées via LLM."""
+    """génère via LLM."""
 
     entity_desc = {
         "NAME": "noms de personnes (prénom, nom complet)",
@@ -388,7 +380,7 @@ Génère UNIQUEMENT les lignes au format demandé :"""
             sentence = parts[0].strip()
             entities_str = parts[1].strip()
 
-            # Enlever numérotation
+            # enlève la numérotation
             sentence = re.sub(r"^\d+[\.\)]\s*", "", sentence)
 
             entities = []
@@ -425,7 +417,7 @@ Génère UNIQUEMENT les lignes au format demandé :"""
 
 
 def generate_template_examples(count_per_template: int = 20) -> list[dict]:
-    """Génère des exemples à partir des templates."""
+    """exemples via templates."""
     examples = []
 
     for _category, templates in ENTITY_TEMPLATES.items():
@@ -447,7 +439,7 @@ def generate_template_examples(count_per_template: int = 20) -> list[dict]:
 
 
 def generate_no_entity_examples(client: Groq, count: int = 300) -> list[dict]:
-    """Génère des phrases SANS entités (label tout 'O')."""
+    """phrases sans entités."""
 
     prompt = f"""Génère {count} phrases de clients d'un salon de coiffure qui NE contiennent PAS d'informations personnelles.
 
@@ -504,18 +496,14 @@ def main():
 
     all_examples: list[dict] = []
 
-    # ══════════════════════════════════════════════
-    # Phase 1 : Exemples via templates (rapide, fiable)
-    # ══════════════════════════════════════════════
+    # phase 1 : templates
     console.print("\n[bold cyan]📊 Phase 1 : Données via templates[/bold cyan]")
 
     template_examples = generate_template_examples(count_per_template=30)
     all_examples.extend(template_examples)
     console.print(f"  ✅ [green]{len(template_examples)} exemples générés via templates[/green]")
 
-    # ══════════════════════════════════════════════
-    # Phase 2 : Exemples via LLM (par type d'entité)
-    # ══════════════════════════════════════════════
+    # phase 2 : llm
     console.print("\n[bold cyan]📊 Phase 2 : Données via LLM[/bold cyan]")
 
     batches_per_entity = 8
@@ -547,9 +535,7 @@ def main():
             progress.advance(task_entities)
             console.print(f"  ✅ [green]{entity_type:12s}[/green] → {entity_count:4d} exemples LLM")
 
-    # ══════════════════════════════════════════════
-    # Phase 3 : Phrases sans entités (classe O)
-    # ══════════════════════════════════════════════
+    # phase 3 : sans entités
     console.print("\n[bold cyan]📊 Phase 3 : Phrases sans entités[/bold cyan]")
 
     for _ in range(5):
@@ -558,9 +544,7 @@ def main():
         time.sleep(0.3)
     console.print("  ✅ [green]~500 exemples sans entités[/green]")
 
-    # ══════════════════════════════════════════════
-    # Shuffle et sauvegarde
-    # ══════════════════════════════════════════════
+    # shuffle puis sauvegarde
     random.shuffle(all_examples)
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -569,7 +553,7 @@ def main():
 
     console.print(f"\n[bold green]✅ Dataset NER sauvegardé : {output_path}[/bold green]")
 
-    # Stats
+    # stats
     table = Table(title="📊 Statistiques NER")
     table.add_column("Métrique", style="cyan")
     table.add_column("Valeur", style="green", justify="right")

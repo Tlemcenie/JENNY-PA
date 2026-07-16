@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""Génération massive de données d'intent via Groq LLM.
-
-Génère 5000+ exemples diversifiés pour l'entraînement
-du classifieur d'intention multi-label.
-
-Usage :
-    PYTHONPATH=src:. python ml/data_generation/generate_intent_data.py
-
-Prend en compte le feedback du prof :
-- Ajouter des exemples "small_talk" variés
-- Ajouter des variantes de paiement ("paiement carte", etc.)
-- Beaucoup plus de diversité pour éviter l'overfitting
-"""
+"""génère les données d'intent."""
 
 from __future__ import annotations
 
@@ -39,7 +27,7 @@ console = Console()
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY") or os.environ.get("JENNY_GROQ_API_KEY", "")
 
-# Les intentions supportées par Jenny
+# intents supportés
 INTENT_LABELS = [
     "greeting",
     "order_status",
@@ -53,11 +41,11 @@ INTENT_LABELS = [
     "quote",
     "planning",
     "general",
-    "small_talk",  # Ajouté suite au feedback du prof
-    "payment_question",  # Ajouté suite au feedback du prof
+    "small_talk",  # feedback prof
+    "payment_question",  # feedback prof
 ]
 
-# Description de chaque intention pour le prompt LLM
+# descriptions pour le prompt
 INTENT_DESCRIPTIONS = {
     "greeting": "Salutations, bonjour, salut, hey, coucou — le client dit bonjour de manière formelle ou informelle",
     "order_status": "Le client demande des informations sur sa commande, livraison, colis, suivi, tracking",
@@ -75,7 +63,7 @@ INTENT_DESCRIPTIONS = {
     "payment_question": "Question sur les moyens de paiement acceptés : carte bancaire, CB, espèces, chèque, Apple Pay, paiement en plusieurs fois",
 }
 
-# Exemples seed pour chaque intention (aide le LLM à comprendre le style)
+# exemples seed
 SEED_EXAMPLES = {
     "greeting": [
         "Bonjour !",
@@ -180,7 +168,7 @@ SEED_EXAMPLES = {
     ],
 }
 
-# Combinaisons multi-label courantes
+# combos multi-label
 MULTI_LABEL_COMBOS = [
     (["appointment", "quote"], "RDV + devis"),
     (["appointment", "pricing"], "RDV + prix"),
@@ -208,7 +196,7 @@ def generate_batch_with_llm(
     batch_size: int = 50,
     context: str = "salon de coiffure",
 ) -> list[str]:
-    """Génère un batch de messages pour une intention donnée via Groq."""
+    """génère un batch."""
 
     seeds = SEED_EXAMPLES.get(intent, ["Bonjour"])
     seeds_str = "\n".join(f"- {s}" for s in seeds)
@@ -248,10 +236,10 @@ Génère UNIQUEMENT les messages, un par ligne, RIEN d'autre :"""
             for line in text.split("\n")
             if line.strip() and len(line.strip()) > 1
         ]
-        # Nettoyer les lignes numérotées
+        # nettoie les lignes
         cleaned = []
         for line in lines:
-            # Enlever numérotation "1. ", "1) ", etc.
+            # enlève la numérotation
             import re
 
             line = re.sub(r"^\d+[\.\)]\s*", "", line)
@@ -269,7 +257,7 @@ def generate_multi_label_batch(
     description: str,
     batch_size: int = 30,
 ) -> list[tuple[str, list[str]]]:
-    """Génère des exemples multi-label."""
+    """génère du multi-label."""
 
     intent_descs = " ET ".join(INTENT_DESCRIPTIONS.get(i, i) for i in intents)
 
@@ -330,9 +318,7 @@ def main():
 
     all_examples: list[dict] = []
 
-    # ══════════════════════════════════════════════
-    # Phase 1 : Exemples single-label (par intention)
-    # ══════════════════════════════════════════════
+    # phase 1 : single-label
     batches_per_intent = 8  # 8 batches de 50
 
     console.print("\n[bold cyan]📊 Phase 1 : Données single-label[/bold cyan]")
@@ -352,20 +338,20 @@ def main():
         for intent in INTENT_LABELS:
             intent_examples = []
 
-            # Ajouter les seeds d'abord
+            # seeds d'abord
             for seed in SEED_EXAMPLES.get(intent, []):
                 intent_examples.append(seed)
 
-            # Générer par batch via LLM
+            # batchs via llm
             task_batch = progress.add_task(f"  [dim]{intent}[/dim]", total=batches_per_intent)
 
             for _batch_idx in range(batches_per_intent):
                 messages = generate_batch_with_llm(client, intent, batch_size=50)
                 intent_examples.extend(messages)
                 progress.advance(task_batch)
-                time.sleep(0.3)  # Rate limit Groq
+                time.sleep(0.3)  # rate limit groq
 
-            # Dédupliquer
+            # dédup
             seen = set()
             unique = []
             for msg in intent_examples:
@@ -386,9 +372,7 @@ def main():
             progress.advance(task_intents)
             console.print(f"  ✅ [green]{intent:15s}[/green] → {len(unique):4d} exemples")
 
-    # ══════════════════════════════════════════════
-    # Phase 2 : Exemples multi-label
-    # ══════════════════════════════════════════════
+    # phase 2 : multi-label
     console.print("\n[bold cyan]📊 Phase 2 : Données multi-label[/bold cyan]")
 
     with Progress(
@@ -417,16 +401,14 @@ def main():
             )
             time.sleep(0.3)
 
-    # ══════════════════════════════════════════════
-    # Phase 3 : Shuffle et sauvegarde
-    # ══════════════════════════════════════════════
+    # phase 3 : shuffle + save
     random.shuffle(all_examples)
 
     with open(output_path, "w", encoding="utf-8") as f:
         for example in all_examples:
             f.write(json.dumps(example, ensure_ascii=False) + "\n")
 
-    # Statistiques
+    # stats
     console.print(f"\n[bold green]✅ Dataset sauvegardé : {output_path}[/bold green]")
 
     table = Table(title="📊 Statistiques du dataset")
@@ -435,7 +417,7 @@ def main():
     table.add_row("Total exemples", f"{len(all_examples):,}")
     table.add_row("Fichier", str(output_path))
 
-    # Compter par intention
+    # compte par intent
     intent_counts: dict[str, int] = {}
     multi_count = 0
     for ex in all_examples:

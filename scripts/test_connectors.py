@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""Script de test des connecteurs — vérifi configuration + webhooks simulés.
-
-Usage:
-    python scripts/test_connectors.py
-    python scripts/test_connectors.py --channel whatsapp
-    python scripts/test_connectors.py --env-check
-    python scripts/test_connectors.py --webhook whatsapp
-
-Options:
-    --env-check          Vérifier les variables d'env chargées
-    --channel <name>     Tester un connecteur spécifique (whatsapp, instagram, etc)
-    --webhook <name>     Simuler un webhook (local, sans appels réels)
-    --verbose            Afficher tous les détails
-"""
+"""teste les connecteurs."""
 
 import asyncio
 import json
@@ -20,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Ajouter les chemins
+# ajoute les chemins
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -29,9 +16,7 @@ from jenny.core.logging import setup_logging
 
 setup_logging()
 
-# ────────────────────────────────────────────
-# Utilitaires de coloring
-# ────────────────────────────────────────────
+# couleurs terminal
 
 
 class Colors:
@@ -65,13 +50,11 @@ def section(title: str) -> None:
     print(f"{Colors.BOLD}{Colors.BLUE}{'─' * 60}{Colors.RESET}\n")
 
 
-# ────────────────────────────────────────────
-# Checkers
-# ────────────────────────────────────────────
+# checks
 
 
 def check_env() -> None:
-    """Afficher les variables d'env chargées."""
+    """affiche les vars d'env."""
     settings = get_settings()
 
     section("Configuration Chargée")
@@ -116,7 +99,7 @@ def check_env() -> None:
 
 
 async def check_whatsapp_health() -> None:
-    """Vérifier la connectivité WhatsApp."""
+    """vérifie whatsapp."""
     settings = get_settings()
     if not settings.whatsapp_access_token:
         error("WhatsApp: TOKEN MANQUANT")
@@ -130,7 +113,7 @@ async def check_whatsapp_health() -> None:
 
 
 async def check_instagram_health() -> None:
-    """Vérifier la connectivité Instagram."""
+    """vérifie instagram."""
     settings = get_settings()
     if not settings.instagram_access_token:
         error("Instagram: TOKEN MANQUANT")
@@ -145,7 +128,7 @@ async def check_instagram_health() -> None:
 
 
 async def test_webhook_simulation(channel: str) -> None:
-    """Simuler un webhook (sans vraie requête HTTP)."""
+    """simule un webhook."""
     section(f"Simulation Webhook — {channel.upper()}")
 
     if channel == "whatsapp":
@@ -217,17 +200,15 @@ async def test_webhook_simulation(channel: str) -> None:
 
 
 def show_usage() -> None:
-    """Afficher l'aide."""
+    """affiche l'aide."""
     print(__doc__)
 
 
-# ────────────────────────────────────────────
-# Main
-# ────────────────────────────────────────────
+# main
 
 
 async def main() -> None:
-    """Exécuter les tests."""
+    """lance les tests."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Test des connecteurs Jenny")

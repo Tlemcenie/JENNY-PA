@@ -33,17 +33,7 @@ import { UsersTab } from "@/components/admin/users-tab";
 import { AuditTab } from "@/components/admin/audit-tab";
 import { PlatformBrainCard } from "@/components/admin/platform-brain-card";
 
-// ── Console super-admin plateforme (DA « Jenny Front », variante nuit profonde).
-// Page autonome plein écran (hors groupe (dashboard)) : elle gère elle-même son
-// layout et son gating. Réservée aux comptes `is_superuser`. Toutes les données
-// proviennent des vrais endpoints /api/v1/admin/* + /ready + /settings/llm ; les
-// actions (activer/suspendre une entreprise, donner/retirer le rôle admin, changer
-// le moteur d'IA) sont réelles, avec confirmation et toast. La page n'appelle
-// JAMAIS les APIs admin pour un non-admin.
-//
-// Découpée en composants sous components/admin/ : la page ne porte que le shell,
-// le gating, le chargement (Promise.all) et les mutations. Chaque onglet est
-// autonome ; le journal d'audit charge ses propres données (pagination/recherche).
+// console super-admin plateforme
 
 type TabId = "overview" | "businesses" | "users" | "audit" | "brain";
 
@@ -72,7 +62,7 @@ export default function AdminPage() {
   const isSuperuser = !!user?.is_superuser;
 
   const [tab, setTab] = useState<TabId>("overview");
-  // Sens du glissement de l'onglet (gauche/droite) selon la position relative.
+  // sens du glissement
   const prevIndex = useRef(TAB_INDEX.overview);
 
   const [overview, setOverview] = useState<AdminOverview | null>(null);
@@ -82,18 +72,18 @@ export default function AdminPage() {
   const [dataLoading, setDataLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // IDs en cours de mutation → désactive le bouton + spinner local.
+  // ids en mutation
   const [pendingBiz, setPendingBiz] = useState<string | null>(null);
   const [pendingUser, setPendingUser] = useState<string | null>(null);
 
-  // ── Gating : redirection si non connecté (jamais d'appel admin pour autrui). ──
+  // redirection si non connecté
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
       router.replace("/login");
     }
   }, [isAuthenticated, isLoading, router]);
 
-  // ── Chargement initial de la console (uniquement pour un super-admin). ──
+  // chargement initial
   const loadAll = useCallback(async () => {
     setDataLoading(true);
     setLoadError(null);
@@ -121,13 +111,13 @@ export default function AdminPage() {
 
   const selectTab = useCallback((next: TabId) => {
     setTab((cur) => {
-      // Mémorise l'index de l'onglet quitté pour déduire le sens du glissement.
+      // mémorise l'onglet quitté
       prevIndex.current = TAB_INDEX[cur];
       return next;
     });
   }, []);
 
-  // ── Action : activer / suspendre une entreprise (confirmation gérée dans l'onglet). ──
+  // activer / suspendre une entreprise
   async function handleToggleBusiness(biz: AdminBusiness) {
     const next = !biz.is_active;
     setPendingBiz(biz.id);
@@ -142,9 +132,7 @@ export default function AdminPage() {
     }
   }
 
-  // ── Action : accorder / retirer le rôle super-admin. ──
-  // L'API renvoie un 400 si l'on tente de retirer ses propres droits → on remonte
-  // le détail (errorMessage lit le `detail` FastAPI).
+  // donner / retirer le rôle admin
   async function handleToggleSuperuser(target: AdminUserItem) {
     const next = !target.is_superuser;
     const who = target.full_name || target.email;
@@ -164,21 +152,21 @@ export default function AdminPage() {
     }
   }
 
-  // ── Écran de chargement de l'auth (avant résolution). ──
+  // écran de chargement auth
   if (isLoading || !isAuthenticated) {
     return <AdminFullScreenLoader label="Vérification de la session…" />;
   }
 
-  // ── Accès refusé : compte authentifié mais non super-admin. ──
+  // accès refusé
   if (!isSuperuser) {
     return <AccessDenied onBack={() => router.push("/chat")} />;
   }
 
-  // Sens de la transition d'onglet (droite si on avance, gauche si on recule).
+  // sens de la transition
   const goingForward = TAB_INDEX[tab] >= prevIndex.current;
   const tabVariants = reduce ? undefined : goingForward ? slideInRight : slideInLeft;
 
-  // ── Console (super-admin). ──
+  // console
   return (
     <ConfirmProvider>
       <AdminScreen>
@@ -206,7 +194,7 @@ export default function AdminPage() {
             {/* Onglets */}
             <AdminTabBar tabs={TABS} active={tab} onSelect={selectTab} />
 
-            {/* Erreur de chargement globale (overview / entreprises / comptes) */}
+            {/* erreur de chargement */}
             {loadError && !dataLoading && (
               <div
                 className="rounded-2xl p-5 mb-6 flex flex-col sm:flex-row sm:items-center gap-3"
@@ -224,7 +212,7 @@ export default function AdminPage() {
               </div>
             )}
 
-            {/* Contenu par onglet — transition glissée (slideInLeft/Right). */}
+            {/* contenu par onglet */}
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
                 key={tab}

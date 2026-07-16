@@ -1,9 +1,6 @@
-# Contexte uploadé à Cloud Build (gcloud builds submit).
-# But : upload mince. Les Dockerfiles (api.prod / worker / frontend) ne copient
-# que src, ml, migrations, checkpoints/{intent,ner}, alembic.ini, pyproject, et
-# le source frontend. On exclut tout le reste (dev, caches, gros poids).
+# contexte cloud build, upload mince
 
-# ── VCS / éditeurs ──
+# vcs / éditeurs
 .git/
 .gitignore
 .idea/
@@ -12,7 +9,7 @@
 .DS_Store
 .claude/
 
-# ── Python / venv / caches ──
+# python / caches
 .venv/
 venv/
 **/__pycache__/
@@ -24,24 +21,21 @@ venv/
 .coverage
 htmlcov/
 
-# ── Node / build front (rebuild dans l'image) ──
+# node / build front
 node_modules/
 frontend/node_modules/
 frontend/.next/
 .next/
 
-# ── Runtime local / données / logs ──
+# runtime local
 var/
 dump.rdb
 *.log
 test.db
 data/
 
-# ── Poids lourds ──
+# gros fichiers
 *.mp4
 *.mov
 
-# On GARDE checkpoints/intent + checkpoints/ner (modèles intention/NER) ET
-# checkpoints/nanogpt + le package nanogpt/ : embarqués dans l'image API pour que
-# le modèle maison soit sélectionnable EN PROD (démo de soutenance : switch live
-# vers « NanoGPT — maison » devant le jury). +~204 Mo à l'upload/l'image.
+# on garde les checkpoints (prod)

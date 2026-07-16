@@ -11,40 +11,32 @@ import { TypingIndicator } from "./typing-indicator";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { ScheduleAppointmentDialog } from "@/components/customer/schedule-appointment-dialog";
 
-// Suggestions clientes (présentation) : elles ne font que pré-remplir l'input —
-// même comportement que l'état vide existant, aucune logique réseau ajoutée.
+// suggestions statiques
 const QUICK_SUGGESTIONS = [
   "Quels sont vos horaires ?",
   "Je voudrais prendre rendez-vous",
   "Combien coûte une coupe ?",
 ];
 
-/**
- * Quick-replies CONTEXTUELLES : d'après la dernière question de Jenny, on propose
- * des réponses toutes prêtes (envoi au tap) pour fluidifier la prise de rendez-vous.
- * Purement dérivé du texte + du signal `needs_clarification` — aucun appel réseau.
- * Renvoie [] quand rien de pertinent (on retombe alors sur les suggestions statiques).
- */
+/** quick-replies contextuelles */
 function deriveQuickReplies(text: string, needsClarification?: boolean): string[] {
   const t = text.toLowerCase();
   const asks = text.includes("?");
   if (!asks) return [];
-  // Jenny demande / énumère une prestation (« Une coupe, une couleur… ? »).
+  // question prestation
   const serviceWords = [
     "coupe", "couleur", "coloration", "balayage", "brushing", "mèches",
     "soin", "prestation", "réaliser", "coiffure",
   ];
   const serviceHits = serviceWords.filter((w) => t.includes(w)).length;
-  // Priorité au JOUR/HEURE si Jenny le demande explicitement (sinon « pour quel
-  // jour » serait capté à tort comme une question de prestation).
+  // priorité au jour/heure
   const asksDay = /quel\s+jour|quand|quelle\s+date|jour vous arrange|disponib|quel moment vous/.test(t);
   const asksTime = /quelle?\s+heure|à quelle heure|quel\s+moment|créneau|plutôt le matin|après-?midi/.test(t);
   if (!asksDay && !asksTime && (serviceHits >= 2 || /quelle?\s+(prestation|service|coiffure)|que souhaitez/.test(t)))
     return ["Une coupe", "Une couleur", "Un balayage"];
   if (asksTime && !asksDay) return ["En matinée", "L'après-midi", "En fin de journée"];
   if (asksDay) return ["Aujourd'hui", "Demain", "Ce samedi"];
-  // Question fermée (oui/non) : détectée dans le TEXTE (fiable, independant du
-  // flag moteur) ou signalée par needs_clarification. Message court seulement.
+  // question oui/non
   const yesNo =
     /\b(vous voulez|voulez-vous|souhaitez-vous|est-ce que|[çc]a vous (va|convient|dit|tente)|je vous (réserve|note|cale|inscris|bloque)|on (part|réserve|cale) sur|c'est bon pour|d'accord)\b/.test(
       t
@@ -66,7 +58,7 @@ interface ChatMessage {
     needsClarification?: boolean;
     pdfUrl?: string;
   };
-  // Id serveur du message Jenny (persisté) → cible du feedback 👍/👎.
+  // id serveur pour le feedback
   messageId?: string;
   error?: boolean;
 }
@@ -119,12 +111,11 @@ export function ChatInterface() {
     setMessages((prev) => [...prev, userMsg]);
     setIsTyping(true);
 
-    // Bulle Jenny vide qui va se remplir token par token. On garde son id
-    // stable pendant tout le stream pour ne mettre à jour que ce message.
+    // bulle jenny du stream
     const jennyId = generateUUID();
     const jennyTimestamp = new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
-    // Append d'un token au contenu de la bulle Jenny en cours.
+    // ajoute un token
     const appendToken = (token: string) => {
       setMessages((prev) =>
         prev.map((m) => (m.id === jennyId ? { ...m, content: m.content + token } : m))
@@ -143,8 +134,7 @@ export function ChatInterface() {
           language: "fr",
         },
         (token) => {
-          // Au tout premier token : on insère la bulle Jenny puis on coupe
-          // l'indicateur « Jenny écrit… » — le texte prend le relais.
+          // premier token : insère la bulle
           if (!firstTokenReceived) {
             firstTokenReceived = true;
             setIsTyping(false);
@@ -162,7 +152,7 @@ export function ChatInterface() {
           appendToken(token);
         },
         (meta) => {
-          // Fin du stream : on attache les métadonnées (intent, agent…).
+          // fin du stream : meta
           const finalMeta = {
             intent: typeof meta.intent === "string" ? meta.intent : undefined,
             confidence:
@@ -177,8 +167,7 @@ export function ChatInterface() {
                 ? (meta.action_result as { pdf_url: string }).pdf_url
                 : undefined,
           };
-          // Le back envoie la version FINALE nettoyée (garde-fou persona) dans
-          // `text` : elle fait autorité → on remplace l'affichage brut par elle.
+          // texte final du back
           const finalText = typeof meta.text === "string" ? meta.text : undefined;
           const finalMessageId =
             typeof meta.message_id === "string" ? meta.message_id : undefined;
@@ -208,9 +197,7 @@ export function ChatInterface() {
         }
       );
     } catch (streamErr) {
-      // Le streaming a échoué : on retombe proprement sur l'appel non-streamé
-      // existant pour ne rien casser. La bulle Jenny n'a pas encore été insérée
-      // (ou est vide), donc on la (re)construit avec la réponse complète.
+      // fallback non-streamé
       setMessages((prev) => prev.filter((m) => m.id !== jennyId));
 
       abortRef.current?.abort();
@@ -295,7 +282,7 @@ export function ChatInterface() {
       className="jx"
       style={{ display: "grid", gridTemplateRows: "auto 1fr", height: "100%", background: "var(--surface)" }}
     >
-      {/* ── En-tête du chat : avatar + nom + badge « EN LIGNE » + sous-titre réel ── */}
+      {/* en-tête du chat */}
       <div
         style={{
           padding: "16px 32px",
@@ -360,7 +347,7 @@ export function ChatInterface() {
         </div>
       </div>
 
-      {/* ── Colonne de messages : fond dégradé, colonne centrée max 680 ── */}
+      {/* colonne de messages */}
       <div
         style={{
           display: "flex",
@@ -419,7 +406,7 @@ export function ChatInterface() {
               </motion.div>
             ) : (
               <>
-                {/* Séparateur de date — étiquette mono entre deux filets */}
+                {/* séparateur de date */}
                 <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "2px 0 4px" }}>
                   <div style={{ flex: 1, height: 1, background: "var(--divider)" }} />
                   <span
@@ -506,7 +493,7 @@ export function ChatInterface() {
           </div>
         </div>
 
-        {/* ── Dock de saisie : pilules de suggestion + barre arrondie + envoi coral ── */}
+        {/* dock de saisie */}
         <div style={{ padding: "14px 32px 20px", borderTop: "1px solid var(--divider)", background: "var(--surface)" }}>
           <div style={{ maxWidth: 680, margin: "0 auto" }}>
             {error && (
@@ -532,8 +519,7 @@ export function ChatInterface() {
             )}
 
             {(() => {
-              // Quick-replies contextuelles si Jenny vient de poser une question ;
-              // sinon, suggestions statiques d'entrée (qui pré-remplissent l'input).
+              // quick-replies ou statiques
               const lastJenny = [...messages].reverse().find((m) => !m.isUser && !m.error);
               const contextual =
                 lastJenny && !isTyping
@@ -646,7 +632,7 @@ export function ChatInterface() {
         </div>
       </div>
 
-      {/* Planifier un rendez-vous lié à la conversation courante (#27) */}
+      {/* dialog rdv */}
       <ScheduleAppointmentDialog
         open={scheduleOpen}
         onClose={() => setScheduleOpen(false)}

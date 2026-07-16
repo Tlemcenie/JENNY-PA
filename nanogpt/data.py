@@ -1,23 +1,4 @@
-"""Collecte de corpus + tokenizer BPE maison + tokenisation → bins.
-
-But : construire un gros corpus de texte FR (FAQ / Q&R / langue générale) pour
-entraîner le LM NanoGPT **from scratch** (aucun fine-tune, aucun poids pré-entraîné).
-
-Sources (best-effort, cumulées jusqu'à la cible) :
-  1. Données internes Jenny (FAQ d'éval, intents générés, base de connaissances).
-  2. Datasets publics via HuggingFace `datasets` (Wikipédia FR, Q&R FR).
-  3. Scraping léger de pages FAQ publiques (stdlib, poli, best-effort).
-
-Le tokenizer est lui aussi entraîné de zéro (BPE byte-level sur le corpus) — il
-n'apporte aucune connaissance, il ne fait que découper le texte.
-
-Usage :
-    python -m nanogpt.data --target-mb 40 --vocab-size 16000
-Produit :
-    data/raw/corpus_fr.txt
-    checkpoints/nanogpt/tokenizer.json
-    data/processed/train.bin, val.bin, meta.json
-"""
+"""corpus FR + tokenizer BPE."""
 
 from __future__ import annotations
 
@@ -36,8 +17,7 @@ RAW = ROOT / "data" / "raw" / "corpus_fr.txt"
 PROC = ROOT / "data" / "processed"
 TOKENIZER_PATH = ROOT / "checkpoints" / "nanogpt" / "tokenizer.json"
 
-# Pages FR publiques à scraper (best-effort ; échecs ignorés). Wikipédia = fiable,
-# libre, et pile dans le use case (coiffure / beauté / relation & service client).
+# pages FR à scraper
 FAQ_URLS = [
     "https://fr.wikipedia.org/wiki/Foire_aux_questions",
     "https://fr.wikipedia.org/wiki/Service_client",
@@ -70,13 +50,11 @@ def _log(msg: str) -> None:
     print(f"[data] {msg}", flush=True)
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# 1. Sources
-# ──────────────────────────────────────────────────────────────────────────
+# sources
 def _internal_texts() -> list[str]:
-    """Textes internes Jenny : FAQ d'éval, intents, KB de seed."""
+    """textes internes Jenny."""
     out: list[str] = []
-    # Scénarios d'éval (connaissances FAQ inline)
+    # scénarios d'éval
     try:
         from jenny.eval.scenarios import SCENARIOS  # type: ignore
 
@@ -89,7 +67,7 @@ def _internal_texts() -> list[str]:
     except Exception as exc:
         _log(f"scénarios d'éval indisponibles ({exc})")
 
-    # JSONL générés (intents / ner) — on récupère les champs texte
+    # jsonl générés
     for name in ("intents.jsonl", "ner.jsonl"):
         p = ROOT / "data" / "generated" / name
         if not p.exists():
@@ -111,7 +89,7 @@ def _internal_texts() -> list[str]:
 
 
 class _TextExtractor(HTMLParser):
-    """Strip HTML → texte (stdlib, pas de dépendance)."""
+    """html vers texte."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -134,7 +112,7 @@ class _TextExtractor(HTMLParser):
 
 
 def _scrape_faq(urls: list[str], budget_chars: int) -> list[str]:
-    """Scraping poli de pages FAQ publiques (best-effort)."""
+    """scrape les faq."""
     out: list[str] = []
     total = 0
     for url in urls:
@@ -157,24 +135,20 @@ def _scrape_faq(urls: list[str], budget_chars: int) -> list[str]:
     return out
 
 
-# Datasets HF cumulés jusqu'à la cible (repo, config, field, kind).
-#   kind="text" → champ texte direct ; kind="qa" → Q&R (question/contexte/réponse).
-# Les sources *gated* (OSCAR, CulturaX) nécessitent un token HF accepté ; sinon
-# elles sont ignorées en silence. Pour un gros run, fais `huggingface-cli login`
-# ou exporte HF_TOKEN (compte gratuit) — ça enlève aussi les limites de débit.
+# datasets HF cumulés
 HF_SOURCES = [
-    ("HuggingFaceFW/fineweb-2", "fra_Latn", "text", "text"),   # web FR haute qualité (gros)
-    ("wikimedia/wikipedia", "20231101.fr", "text", "text"),     # encyclopédie FR (propre)
-    ("allenai/c4", "fr", "text", "text"),                       # Common Crawl FR nettoyé
-    ("uonlp/CulturaX", "fr", "text", "text"),                   # *gated* — multilingue nettoyé
-    ("oscar-corpus/OSCAR-2301", "fr", "text", "text"),          # *gated* — crawl web FR massif
-    ("etalab-ia/piaf", None, None, "qa"),                       # Q&R FR (saveur FAQ)
+    ("HuggingFaceFW/fineweb-2", "fra_Latn", "text", "text"),   # web FR
+    ("wikimedia/wikipedia", "20231101.fr", "text", "text"),     # wikipédia FR
+    ("allenai/c4", "fr", "text", "text"),                       # common crawl FR
+    ("uonlp/CulturaX", "fr", "text", "text"),                   # gated
+    ("oscar-corpus/OSCAR-2301", "fr", "text", "text"),          # gated
+    ("etalab-ia/piaf", None, None, "qa"),                       # Q&R FR
     ("lincoln/newsquadfr", None, None, "qa"),                   # Q&R FR
 ]
 
 
 def _extract_row(row: dict, field: str | None, kind: str) -> str | None:
-    """Extrait le texte d'une ligne (texte direct, ou reformaté Q&R/FAQ)."""
+    """texte d'une ligne."""
     if kind == "qa":
         q = row.get("question")
         ctx = row.get("context")
@@ -192,7 +166,7 @@ def _extract_row(row: dict, field: str | None, kind: str) -> str | None:
 
 
 def _hf_stream(target_chars: int) -> list[str]:
-    """Texte FR en flux depuis plusieurs datasets HuggingFace (bulk + Q&R/FAQ)."""
+    """stream texte depuis HF."""
     out: list[str] = []
     total = 0
     try:
@@ -226,24 +200,22 @@ def _hf_stream(target_chars: int) -> list[str]:
     return out
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# 2. Pipeline
-# ──────────────────────────────────────────────────────────────────────────
+# pipeline
 def collect_corpus(target_mb: float) -> Path:
-    """Assemble le corpus FR jusqu'à ~target_mb Mo, écrit data/raw/corpus_fr.txt."""
+    """assemble le corpus."""
     target_chars = int(target_mb * 1_000_000)
     RAW.parent.mkdir(parents=True, exist_ok=True)
 
     chunks: list[str] = []
     chunks += _internal_texts()
-    # Un peu de FAQ scrapée (plafonnée), puis le gros via datasets.
+    # faq scrapée puis datasets
     chunks += _scrape_faq(FAQ_URLS, budget_chars=min(target_chars // 10, 200_000))
     used = sum(len(c) for c in chunks)
     if used < target_chars:
         chunks += _hf_stream(target_chars - used)
 
     text = "\n\n".join(c.strip() for c in chunks if c and c.strip())
-    # Nettoyage léger
+    # nettoyage léger
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
@@ -256,7 +228,7 @@ def collect_corpus(target_mb: float) -> Path:
 
 
 def train_tokenizer(corpus_path: Path, vocab_size: int) -> Path:
-    """Entraîne un tokenizer BPE byte-level FROM SCRATCH sur le corpus."""
+    """entraîne le tokenizer."""
     from tokenizers import Tokenizer  # type: ignore
     from tokenizers.decoders import ByteLevel as ByteLevelDecoder  # type: ignore
     from tokenizers.models import BPE  # type: ignore
@@ -265,7 +237,7 @@ def train_tokenizer(corpus_path: Path, vocab_size: int) -> Path:
 
     tok = Tokenizer(BPE(unk_token="<unk>"))
     tok.pre_tokenizer = ByteLevel(add_prefix_space=False)
-    tok.decoder = ByteLevelDecoder()  # decode() reconstruit texte propre (espaces/newlines)
+    tok.decoder = ByteLevelDecoder()  # decode propre
     trainer = BpeTrainer(
         vocab_size=vocab_size,
         special_tokens=["<unk>", "<bos>", "<eos>", "<pad>"],
@@ -279,7 +251,7 @@ def train_tokenizer(corpus_path: Path, vocab_size: int) -> Path:
 
 
 def tokenize_corpus(corpus_path: Path, tokenizer_path: Path, val_frac: float) -> dict:
-    """Encode le corpus → train.bin / val.bin (uint16) + meta.json."""
+    """corpus vers bins."""
     import numpy as np
     from tokenizers import Tokenizer  # type: ignore
 
@@ -323,9 +295,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     _code = main()
-    # Sortie forcée : le streaming HF `datasets` laisse parfois des threads réseau
-    # non-daemon qui font traîner l'arrêt du process (et bloqueraient un `&&` placé
-    # derrière, ex. `data && train`). On termine net une fois le pipeline fini.
+    # sortie forcée (threads HF)
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(_code or 0)

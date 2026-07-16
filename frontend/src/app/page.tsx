@@ -25,17 +25,9 @@ import { useAuth } from "@/lib/auth-context";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { staggerContainer, staggerItem } from "@/lib/motion";
 
-// Page d'accueil publique (DA « Jenny Front ») — nuit profonde + corail,
-// titres en Instrument Serif, accents mono. Recrée fidèlement l'écran Landing
-// du design handoff, adaptée à Next + au stack existant.
-//
-// Hero « scénique » : l'animation Jenny Intro est intégrée EN FOND (plein
-// cadre, ambiance), surmontée d'un wordmark « Jenny » géant et fantôme (jeu
-// premier plan / arrière plan / lettres) et de la mascotte au premier plan.
-// Le contenu et les couches glissent en parallaxe au défilement (fluide).
-// La démo de chat (« présentation ») a sa propre section « Cas d'usage ».
+// landing publique, hero animé
 
-// Liens de navigation → ancres vers de VRAIES sections de la page (défilement doux).
+// ancres de nav
 const NAV_LINKS: { label: string; target: string }[] = [
   { label: "Produit", target: "produit" },
   { label: "Cas d'usage", target: "apercu" },
@@ -79,7 +71,7 @@ const FEATURES = [
 const PAGE_BG =
   "radial-gradient(ellipse at 70% 0%, rgba(255,127,106,0.18) 0%, transparent 50%), radial-gradient(ellipse at 0% 80%, rgba(114,132,168,0.12) 0%, transparent 50%), #0E0B14";
 
-// Petit avatar Jenny pour les bulles de la démo de chat.
+// avatar des bulles
 function MascotBubble() {
   return <JennyAvatar size={24} tone="dark" />;
 }
@@ -89,7 +81,7 @@ export default function LandingPage() {
   const ctaHref = isAuthenticated ? "/chat" : "/register";
   const reduce = useReducedMotion();
 
-  // La page défile dans ce conteneur (pas la fenêtre) → on le passe à useScroll.
+  // scroll dans ce conteneur
   const scrollRef = useRef<HTMLDivElement>(null);
   const heroRef = useRef<HTMLElement>(null);
 
@@ -99,15 +91,14 @@ export default function LandingPage() {
     offset: ["start start", "end start"],
   });
 
-  // Parallaxe douce des couches du hero (désactivée si prefers-reduced-motion).
+  // parallaxe du hero
   const videoY = useTransform(scrollYProgress, [0, 1], ["0%", "16%"]);
   const videoScale = useTransform(scrollYProgress, [0, 1], [1, 1.14]);
-  // Le wordmark est une couche d'arrière-plan : déplacement doux (révélation
-  // subtile en remontant), pas un mouvement rapide d'avant-plan.
+  // wordmark en fond
   const wordmarkY = useTransform(scrollYProgress, [0, 1], ["0%", "-12%"]);
   const mascotY = useTransform(scrollYProgress, [0, 1], ["0%", "20%"]);
   const contentY = useTransform(scrollYProgress, [0, 1], ["0%", "-14%"]);
-  // Fonte tardive : le CTA reste visible/cliquable presque jusqu'à la sortie du hero.
+  // cta visible longtemps
   const contentFade = useTransform(scrollYProgress, [0, 0.95], [1, 0]);
 
   return (
@@ -116,7 +107,7 @@ export default function LandingPage() {
       className="relative h-full overflow-y-auto text-[#F4F1ED]"
       style={{ background: PAGE_BG, fontFamily: "var(--font-sans)", scrollbarGutter: "stable" }}
     >
-      {/* ── Nav ── */}
+      {/* nav */}
       <nav
         className="sticky top-0 z-30 flex items-center px-6 md:px-16 py-5"
         style={{ backdropFilter: "blur(12px)", background: "rgba(14,11,20,0.7)" }}
@@ -165,13 +156,12 @@ export default function LandingPage() {
         </div>
       </nav>
 
-      {/* ── Hero scénique : vidéo en fond + lettres + mascotte, en couches ── */}
+      {/* hero en couches */}
       <header
         ref={heroRef}
         className="relative isolate overflow-hidden flex flex-col justify-center min-h-[600px] md:min-h-[90vh]"
       >
-        {/* Couche 0 — animation Jenny Intro plein cadre (ambiance, en boucle).
-            pointer-events-none : ne capte ni clic ni scroll. */}
+        {/* couche 0 : vidéo en fond */}
         <motion.div
           aria-hidden
           style={reduce ? undefined : { y: videoY, scale: videoScale }}
@@ -189,7 +179,7 @@ export default function LandingPage() {
           />
         </motion.div>
 
-        {/* Couche 1 — wordmark « Jenny » géant et fantôme (jeu de lettres). */}
+        {/* couche 1 : wordmark fantôme */}
         <motion.div
           aria-hidden
           style={reduce ? undefined : { y: wordmarkY }}
@@ -198,14 +188,13 @@ export default function LandingPage() {
           <span
             className="font-display leading-[0.8] tracking-[-0.04em] text-[30vw] md:text-[24vw]"
             style={{
-              // backgroundImage (longhand) et NON `background` : éviter le conflit
-              // shorthand/longhand avec backgroundClip (avertissement React 19).
+              // longhand, sinon warning react
               backgroundImage:
                 "linear-gradient(180deg, rgba(255,127,106,0.30) 0%, rgba(255,127,106,0.10) 58%, transparent 88%)",
               WebkitBackgroundClip: "text",
               backgroundClip: "text",
               color: "transparent",
-              // Halo corail doux autour des lettres → présence renforcée du logo.
+              // halo corail
               filter: "drop-shadow(0 0 48px rgba(255,127,106,0.18))",
             }}
           >
@@ -213,23 +202,18 @@ export default function LandingPage() {
           </span>
         </motion.div>
 
-        {/* Couche 2 — voiles de lisibilité (vertical pour mobile + biais à
-            gauche pour la profondeur sur grand écran). */}
+        {/* couche 2 : voiles lisibilité */}
         <div
           aria-hidden
           className="absolute inset-0 z-[2] pointer-events-none"
           style={{
-            // Plus léger qu'avant : on laisse VOIR la vidéo en fond (intention :
-            // « vidéo en fond »), le biais gauche garde le texte parfaitement lisible.
+            // léger, vidéo visible derrière
             background:
               "linear-gradient(180deg, rgba(14,11,20,0.78) 0%, rgba(14,11,20,0.40) 46%, rgba(14,11,20,0.72) 100%), linear-gradient(100deg, rgba(14,11,20,0.70) 0%, rgba(14,11,20,0.06) 72%)",
           }}
         />
 
-        {/* Couche 3 — mascotte au premier plan (la « photo »). Affichée à partir
-            de lg : sur tablette, le hero reste « wordmark only » pour éviter que
-            le texte ne chevauche la mascotte. Image décorative (alt vide) : le
-            titre/sous-titre portent déjà tout le sens. */}
+        {/* couche 3 : mascotte */}
         <motion.div
           style={reduce ? undefined : { y: mascotY }}
           className="pointer-events-none absolute right-[-2%] bottom-[-2%] z-[3] hidden lg:block w-[40vw] max-w-[500px] will-change-transform"
@@ -253,7 +237,7 @@ export default function LandingPage() {
           />
         </motion.div>
 
-        {/* Couche 10 — contenu (glisse vers le haut + fond au défilement). */}
+        {/* couche 10 : contenu */}
         <motion.div
           style={reduce ? undefined : { y: contentY, opacity: contentFade }}
           className="relative z-10 w-full max-w-[1100px] mx-auto px-6 md:px-16 py-20 md:py-0 will-change-transform"
@@ -313,7 +297,7 @@ export default function LandingPage() {
           </motion.div>
         </motion.div>
 
-        {/* Indice de défilement (renforce le « slide » fluide). */}
+        {/* indice de scroll */}
         {!reduce && (
           <motion.div
             aria-hidden
@@ -333,7 +317,7 @@ export default function LandingPage() {
         )}
       </header>
 
-      {/* ── Bandeau canaux (connectez en un clic) ── */}
+      {/* bandeau canaux */}
       <div className="px-6 md:px-16 py-10 md:py-12">
         <div className="max-w-[1100px] mx-auto flex flex-wrap gap-8 md:gap-12 items-center justify-center opacity-50">
           <span className="font-mono text-[11px] tracking-[0.18em] uppercase">Connectez en un clic ·</span>
@@ -345,10 +329,10 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* ── Cas d'usage : la « présentation » (démo de chat), à sa place ── */}
+      {/* cas d'usage */}
       <section id="apercu" className="px-6 md:px-16 pb-16 md:pb-24 scroll-mt-24">
         <div className="max-w-[1100px] mx-auto grid lg:grid-cols-[0.85fr_1.15fr] gap-12 lg:gap-16 items-center">
-          {/* Colonne éditoriale */}
+          {/* colonne éditoriale */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
@@ -388,7 +372,7 @@ export default function LandingPage() {
             </ul>
           </motion.div>
 
-          {/* Carte chat (la démo, mise en valeur) */}
+          {/* carte chat */}
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
@@ -466,7 +450,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Features ── */}
+      {/* features */}
       <section
         id="produit"
         className="px-6 md:px-16 py-16 md:py-20 scroll-mt-20"
@@ -511,7 +495,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Tarifs (honnête : essai gratuit, pas de prix fictif) ── */}
+      {/* tarifs */}
       <section id="tarifs" className="px-6 md:px-16 py-16 md:py-20 scroll-mt-20">
         <div className="max-w-[1100px] mx-auto">
           <div className="font-mono text-[11px] tracking-[0.32em] uppercase text-jenny-coral mb-[18px]">
@@ -567,7 +551,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── FAQ (réponses réelles sur le produit) ── */}
+      {/* faq */}
       <section
         id="faq"
         className="px-6 md:px-16 py-16 md:py-20 scroll-mt-20"
@@ -612,7 +596,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── CTA final ── */}
+      {/* cta final */}
       <section className="px-6 md:px-16 py-20 md:py-[100px] text-center">
         <h2 className="font-display text-[44px] md:text-[80px] leading-none tracking-[-0.025em] mb-6">
           Prêt à arrêter de répondre
@@ -631,7 +615,7 @@ export default function LandingPage() {
         </Link>
       </section>
 
-      {/* ── Footer ── */}
+      {/* footer */}
       <footer
         className="px-6 md:px-16 py-8 flex flex-wrap gap-3 items-center justify-between"
         style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}

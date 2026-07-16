@@ -1,8 +1,4 @@
-"""Inférence du modèle NER BiGRU.
-
-Charge le modèle entraîné et extrait les entités
-d'un message texte au format structuré.
-"""
+"""inférence du modèle NER."""
 
 from __future__ import annotations
 
@@ -18,11 +14,7 @@ logger = get_logger(__name__)
 
 
 class NERPredictor:
-    """Extracteur d'entités à partir d'un checkpoint BiGRU.
-
-    Charge le modèle entraîné et fournit une interface simple
-    pour extraire les entités nommées d'un message texte.
-    """
+    """extracteur d'entités BiGRU."""
 
     def __init__(
         self,
@@ -37,7 +29,7 @@ class NERPredictor:
 
     @classmethod
     def from_checkpoint(cls, checkpoint_path: str | Path) -> NERPredictor:
-        """Charge un prédicteur depuis un checkpoint."""
+        """charge depuis un checkpoint."""
         path = Path(checkpoint_path)
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint NER non trouvé : {path}")
@@ -46,8 +38,7 @@ class NERPredictor:
         config = checkpoint["config"]
         vocab = checkpoint["vocab"]
 
-        # Device figé au checkpoint (souvent 'mps' — entraînement Mac). On le re-résout
-        # au runtime, sinon .to('mps') plante sur Linux/CPU (prod Cloud Run).
+        # re-résout le device au runtime
         if torch.cuda.is_available():
             config.device = "cuda"
         elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
@@ -64,11 +55,11 @@ class NERPredictor:
         return cls(model, vocab, config)
 
     def _tokenize(self, text: str) -> list[str]:
-        """Tokenize simple par espaces."""
+        """tokenize par espaces."""
         return text.strip().split()
 
     def _encode(self, tokens: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encode une séquence de tokens."""
+        """encode les tokens."""
         ids = [self.vocab.get(t.lower(), 1) for t in tokens]
 
         if len(ids) > self.config.max_seq_length:
@@ -85,14 +76,7 @@ class NERPredictor:
 
     @torch.no_grad()
     def predict(self, text: str) -> dict[str, str]:
-        """Extrait les entités d'un message.
-
-        Args:
-            text: Message texte à analyser.
-
-        Returns:
-            Dictionnaire {nom_entité: valeur} ex: {"order_number": "CMD-123"}
-        """
+        """extrait les entités."""
         tokens = self._tokenize(text)
         if not tokens:
             return {}
@@ -104,14 +88,11 @@ class NERPredictor:
         pred_tags = self.model.predict_tags(input_ids, attention_mask)
         pred_tags = pred_tags[0].cpu().tolist()
 
-        # Décoder les tags BIO en entités
+        # décode les tags BIO
         return self._decode_bio(tokens, pred_tags[: len(tokens)])
 
     def _decode_bio(self, tokens: list[str], tag_ids: list[int]) -> dict[str, str]:
-        """Décode les tags BIO en entités structurées.
-
-        Regroupe les tokens B- et I- consécutifs du même type.
-        """
+        """tags BIO vers entités."""
         entities: dict[str, str] = {}
         current_entity: str | None = None
         current_tokens: list[str] = []
@@ -120,27 +101,27 @@ class NERPredictor:
             tag = ID_TO_TAG.get(tag_id, "O")
 
             if tag.startswith("B-"):
-                # Sauvegarder l'entité précédente
+                # sauve l'entité précédente
                 if current_entity and current_tokens:
                     entity_key = current_entity.lower()
                     entities[entity_key] = " ".join(current_tokens)
 
-                current_entity = tag[2:]  # Retirer "B-"
+                current_entity = tag[2:]  # enlève le "B-"
                 current_tokens = [token]
 
             elif tag.startswith("I-") and current_entity == tag[2:]:
-                # Continuer l'entité courante
+                # continue l'entité
                 current_tokens.append(token)
 
             else:
-                # Tag "O" ou changement d'entité
+                # tag O ou changement
                 if current_entity and current_tokens:
                     entity_key = current_entity.lower()
                     entities[entity_key] = " ".join(current_tokens)
                 current_entity = None
                 current_tokens = []
 
-        # Dernière entité
+        # dernière entité
         if current_entity and current_tokens:
             entity_key = current_entity.lower()
             entities[entity_key] = " ".join(current_tokens)
@@ -149,10 +130,7 @@ class NERPredictor:
 
     @torch.no_grad()
     def predict_with_tags(self, text: str) -> list[tuple[str, str]]:
-        """Retourne les tokens avec leurs tags BIO.
-
-        Utile pour le debug et la visualisation.
-        """
+        """tokens avec leurs tags."""
         tokens = self._tokenize(text)
         if not tokens:
             return []

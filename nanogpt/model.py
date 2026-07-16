@@ -1,13 +1,4 @@
-"""Architecture Transformer NanoGPT.
-
-Implémentation minimaliste d'un GPT decoder-only :
-- Multi-Head Self-Attention (causale)
-- Feed-Forward Network
-- Layer Normalization (pre-norm)
-- Positional + Token Embeddings
-
-Inspiré de Karpathy's nanoGPT, adapté pour Jenny.
-"""
+"""transformer nanogpt maison."""
 
 import math
 
@@ -19,13 +10,13 @@ from nanogpt.config import NanoGPTConfig
 
 
 class CausalSelfAttention(nn.Module):
-    """Multi-Head Causal Self-Attention."""
+    """attention causale multi-têtes."""
 
     def __init__(self, config: NanoGPTConfig) -> None:
         super().__init__()
         assert config.n_embd % config.n_head == 0
 
-        # Projections Q, K, V en une seule matrice
+        # q, k, v ensemble
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
         self.attn_dropout = nn.Dropout(config.dropout)
@@ -34,7 +25,7 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
 
-        # Masque causal
+        # masque causal
         self.register_buffer(
             "bias",
             torch.tril(torch.ones(config.block_size, config.block_size)).view(
@@ -45,14 +36,14 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, n_embd = x.size()  # batch, sequence, embedding
 
-        # Calcul Q, K, V
+        # calcul q, k, v
         q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
         head_dim = n_embd // self.n_head
         q = q.view(batch, seq_len, self.n_head, head_dim).transpose(1, 2)
         k = k.view(batch, seq_len, self.n_head, head_dim).transpose(1, 2)
         v = v.view(batch, seq_len, self.n_head, head_dim).transpose(1, 2)
 
-        # Attention causale
+        # attention causale
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.bias[:, :, :seq_len, :seq_len] == 0, float("-inf"))
         att = nn_functional.softmax(att, dim=-1)
@@ -65,7 +56,7 @@ class CausalSelfAttention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    """Feed-Forward Network (MLP) avec GELU."""
+    """mlp avec gelu."""
 
     def __init__(self, config: NanoGPTConfig) -> None:
         super().__init__()
@@ -82,7 +73,7 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """Bloc Transformer (pre-norm) : Attention + FFN."""
+    """bloc transformer pre-norm."""
 
     def __init__(self, config: NanoGPTConfig) -> None:
         super().__init__()
@@ -98,14 +89,7 @@ class TransformerBlock(nn.Module):
 
 
 class NanoGPT(nn.Module):
-    """Modèle NanoGPT complet (decoder-only Transformer).
-
-    Architecture :
-    - Token Embedding + Positional Embedding
-    - N blocs TransformerBlock (pre-norm)
-    - LayerNorm finale
-    - Projection vers vocabulaire (weight tying)
-    """
+    """modèle nanogpt complet."""
 
     def __init__(self, config: NanoGPTConfig) -> None:
         super().__init__()
@@ -122,14 +106,14 @@ class NanoGPT(nn.Module):
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-        # Weight tying (embeddings ↔ output)
+        # weight tying
         self.transformer["wte"].weight = self.lm_head.weight
 
-        # Initialisation des poids
+        # init des poids
         self.apply(self._init_weights)
 
     def _init_weights(self, module: nn.Module) -> None:
-        """Initialisation Xavier/He standard."""
+        """init standard."""
         if isinstance(module, nn.Linear):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if module.bias is not None:
@@ -140,15 +124,7 @@ class NanoGPT(nn.Module):
     def forward(
         self, idx: torch.Tensor, targets: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Forward pass.
-
-        Args:
-            idx: Indices de tokens (B, T).
-            targets: Cibles pour le calcul de la loss (B, T) ou None.
-
-        Returns:
-            (logits, loss) — loss est None si targets est None.
-        """
+        """passe forward."""
         _, seq_len = idx.size()
         assert self.config.block_size >= seq_len, (
             f"Séquence trop longue ({seq_len} > {self.config.block_size})"
@@ -172,5 +148,5 @@ class NanoGPT(nn.Module):
         return logits, loss
 
     def count_parameters(self) -> int:
-        """Retourne le nombre total de paramètres entraînables."""
+        """compte les paramètres entraînables."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
