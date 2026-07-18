@@ -275,6 +275,11 @@ class BookAppointmentDBAction(BaseAction):
             await db.commit()
             await db.refresh(appt)
 
+            # notif live → cloche + calendrier
+            from jenny.core.events import publish_notification_event
+
+            publish_notification_event(bid, kind="booking", title="Nouveau rendez-vous pris par Jenny")
+
             # nom manquant → demandé après
             ask_name = customer_id is None
             if customer_id:

@@ -44,6 +44,7 @@ import {
   deleteAppointment,
   exportAppointmentsIcs,
   listAppointments,
+  subscribeToConversationEvents,
   updateAppointment,
   ApiError,
   type Appointment,
@@ -201,6 +202,13 @@ export default function CalendarPage() {
 
   useEffect(() => {
     fetchAppointments();
+  }, [fetchAppointments]);
+
+  // rafraîchit l'agenda en direct quand un RDV est pris (SSE)
+  useEffect(() => {
+    return subscribeToConversationEvents((ev) => {
+      if (ev.kind === "booking") void fetchAppointments();
+    });
   }, [fetchAppointments]);
 
   // jours + index par jour
