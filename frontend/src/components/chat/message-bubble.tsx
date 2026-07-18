@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { FileText } from "lucide-react";
+import { CreditCard, FileText } from "lucide-react";
 import { intentLabel } from "@/lib/utils";
 import { openQuotePdf } from "@/lib/api";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
@@ -19,6 +19,9 @@ interface MessageBubbleProps {
     phase?: string;
     // Devis généré par Jenny : URL du PDF à télécharger (bouton sous la bulle).
     pdfUrl?: string;
+    // acompte : lien de paiement Stripe
+    payUrl?: string;
+    payAmount?: number;
   };
   // Id du message Jenny persisté : active la validation 👍/👎 sous la bulle.
   messageId?: string;
@@ -61,6 +64,35 @@ function QuotePdfButton({ pdfUrl }: { pdfUrl: string }) {
       <FileText style={{ width: 14, height: 14 }} />
       {busy ? "Ouverture…" : failed ? "Réessayer le devis PDF" : "Voir le devis (PDF)"}
     </button>
+  );
+}
+
+// bouton acompte : ouvre le paiement Stripe
+function DepositPayButton({ payUrl, amount }: { payUrl: string; amount?: number }) {
+  return (
+    <a
+      href={payUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label="Payer l'acompte en ligne"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 7,
+        marginTop: 8,
+        padding: "7px 12px",
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: "#fff",
+        background: "var(--coral)",
+        border: "none",
+        borderRadius: 9,
+        textDecoration: "none",
+      }}
+    >
+      <CreditCard style={{ width: 14, height: 14 }} />
+      {amount ? `Payer l'acompte (${Math.round(amount)}€)` : "Payer l'acompte"}
+    </a>
   );
 }
 
@@ -136,6 +168,7 @@ export function MessageBubble({ content, isUser, timestamp, meta, messageId }: M
         )}
         {/* Devis PDF proposé par Jenny (bouton d'ouverture authentifié). */}
         {meta?.pdfUrl && <QuotePdfButton pdfUrl={meta.pdfUrl} />}
+        {meta?.payUrl && <DepositPayButton payUrl={meta.payUrl} amount={meta.payAmount} />}
         {/* Validation de la réponse (uniquement une fois le message persisté). */}
         {messageId && content.trim().length > 0 && (
           <FeedbackButtons messageId={messageId} />

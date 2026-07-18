@@ -57,6 +57,8 @@ interface ChatMessage {
     phase?: string;
     needsClarification?: boolean;
     pdfUrl?: string;
+    payUrl?: string;
+    payAmount?: number;
   };
   // id serveur pour le feedback
   messageId?: string;
@@ -166,6 +168,16 @@ export function ChatInterface() {
               typeof (meta.action_result as { pdf_url?: unknown } | undefined)?.pdf_url === "string"
                 ? (meta.action_result as { pdf_url: string }).pdf_url
                 : undefined,
+            payUrl:
+              typeof (meta.action_result as { deposit?: { checkout_url?: unknown } } | undefined)
+                ?.deposit?.checkout_url === "string"
+                ? (meta.action_result as { deposit: { checkout_url: string } }).deposit.checkout_url
+                : undefined,
+            payAmount:
+              typeof (meta.action_result as { deposit?: { amount_eur?: unknown } } | undefined)
+                ?.deposit?.amount_eur === "number"
+                ? (meta.action_result as { deposit: { amount_eur: number } }).deposit.amount_eur
+                : undefined,
           };
           // texte final du back
           const finalText = typeof meta.text === "string" ? meta.text : undefined;
@@ -226,6 +238,17 @@ export function ChatInterface() {
             pdfUrl:
               typeof (response.action_result as { pdf_url?: unknown } | undefined)?.pdf_url === "string"
                 ? (response.action_result as { pdf_url: string }).pdf_url
+                : undefined,
+            payUrl:
+              typeof (response.action_result as { deposit?: { checkout_url?: unknown } } | undefined)
+                ?.deposit?.checkout_url === "string"
+                ? (response.action_result as { deposit: { checkout_url: string } }).deposit
+                    .checkout_url
+                : undefined,
+            payAmount:
+              typeof (response.action_result as { deposit?: { amount_eur?: unknown } } | undefined)
+                ?.deposit?.amount_eur === "number"
+                ? (response.action_result as { deposit: { amount_eur: number } }).deposit.amount_eur
                 : undefined,
           },
           messageId: response.message_id ?? undefined,
