@@ -306,6 +306,32 @@ async def _persist_outbound_reply(
         logger.error("webhook.persist_outbound_failed", channel=channel, error=str(e))
 
 
+def _augment_for_text_channel(text: str, action_result: dict | None) -> str:
+    """Ajoute devis + lien acompte au texte (canaux sans bouton)."""
+    if not action_result:
+        return text
+    blocks: list[str] = []
+    # devis : PDF non partageable ici, résumé en texte
+    items = action_result.get("items")
+    if action_result.get("quote_id") and isinstance(items, list) and items:
+        ref = str(action_result.get("reference", "")).strip()
+        lines = [f"• {it.get('name', '')} : {float(it.get('price_eur', 0)):g} €" for it in items]
+        block = (f"📋 Devis {ref}".rstrip()) + "\n" + "\n".join(lines)
+        total = action_result.get("total_eur")
+        if total is not None:
+            block += f"\nTotal : {float(total):g} € TTC"
+        blocks.append(block)
+    # acompte : lien Stripe (URL publique)
+    dep = action_result.get("deposit")
+    if isinstance(dep, dict) and isinstance(dep.get("checkout_url"), str):
+        amt = dep.get("amount_eur")
+        head = f"💳 Acompte de {float(amt):g} € ici :" if amt is not None else "💳 Régler l'acompte ici :"
+        blocks.append(head + "\n" + dep["checkout_url"])
+    if blocks:
+        return text.rstrip() + "\n\n" + "\n\n".join(blocks)
+    return text
+
+
 async def _whatsapp_ingest_and_reply(
     msg_data: dict,
     business_id_str: str,
@@ -383,9 +409,10 @@ async def _whatsapp_ingest_and_reply(
     )
     try:
         out = await engine.process(req)
-        sent = await _whatsapp.send_reply(msg.from_, out.response_text, creds=wa_creds)
+        reply_text = _augment_for_text_channel(out.response_text, out.action_result)
+        sent = await _whatsapp.send_reply(msg.from_, reply_text, creds=wa_creds)
         await _persist_outbound_reply(
-            conv_id, business_id, "whatsapp", out.response_text, delivered=sent
+            conv_id, business_id, "whatsapp", reply_text, delivered=sent
         )
         await _persist_engine_signals_safe(
             business_id=business_id, customer_id=customer_id,
