@@ -207,6 +207,39 @@ l'UI** (page **Intégrations**) — aucune variable d'env à toucher :
 Tant qu'un canal n'a pas d'identifiants, il **reçoit** quand même (webhook) mais
 l'**envoi est désactivé** (badge « envoi désactivé ») — jamais d'erreur bloquante.
 
+## 11.5 Activer les paiements Stripe (acompte anti-no-show)
+
+Le code est prêt (Checkout Session réelle + webhook signé qui confirme le RDV).
+Pour l'allumer sur la démo — **mode test suffit** pour la soutenance :
+
+1. **Clés Stripe** (Dashboard Stripe → Developers → API keys, en mode test) :
+   ```bash
+   printf 'sk_test_xxx' | gcloud secrets versions add JENNY_STRIPE_SECRET_KEY --data-file=-
+   printf 'whsec_xxx'   | gcloud secrets create JENNY_STRIPE_WEBHOOK_SECRET --data-file=-   # 1re fois
+   ```
+2. **Câbler le secret webhook + l'URL front** sur le service. Le webhook lit
+   `JENNY_STRIPE_WEBHOOK_SECRET` ; les liens de paiement (`/book/merci`, `/book/annule`)
+   utilisent `JENNY_APP_BASE_URL` = **URL du frontend** (pas de l'API) :
+   ```bash
+   FRONT_URL=$(gcloud run services describe jenny-frontend --region=$REGION --format='value(status.url)')
+   gcloud run services update jenny-api --region=$REGION \
+     --update-secrets=JENNY_STRIPE_WEBHOOK_SECRET=JENNY_STRIPE_WEBHOOK_SECRET:latest \
+     --update-env-vars=JENNY_APP_BASE_URL=$FRONT_URL \
+     --no-cpu-throttling
+   ```
+   `--no-cpu-throttling` : les réponses WhatsApp partent en tâche de fond APRÈS la
+   réponse HTTP (FastAPI `BackgroundTasks`) ; sans CPU alloué en continu, Cloud Run
+   pourrait les couper.
+3. **Déclarer le webhook chez Stripe** (Dashboard → Developers → Webhooks → Add endpoint) :
+   - URL : `<API_URL>/api/v1/payments/stripe`
+   - Événements : `checkout.session.completed` (+ `payment_intent.succeeded` en option)
+   - Copier le *Signing secret* (`whsec_...`) → c'est la valeur de l'étape 1.
+4. **Activer l'acompte par salon** : dashboard → réglages du salon (« cerveau ») →
+   activer l'acompte + le pourcentage. À la prochaine résa, Jenny renvoie le lien de paiement.
+
+Test carte : `4242 4242 4242 4242`, date future, CVC quelconque. En local sans
+domaine public : `stripe listen --forward-to <API_URL>/api/v1/payments/stripe`.
+
 ## 12. Ce qui reste à faire / limites connues
 
 - **LLM** : sur GCP on passe par un fournisseur hébergé (Groq/OpenAI/Mistral) via
