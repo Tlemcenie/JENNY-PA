@@ -45,24 +45,34 @@ class PaymentAgent:
         # Chercher des infos dans les slots
         order_number = None
         amount = None
+        appointment_id = None
         for slot_name, slot in state.slots.items():
             if slot.filled:
                 if slot_name == "order_number":
                     order_number = slot.value
                 elif slot_name == "amount":
                     amount = slot.value
+                elif slot_name == "appointment_id":
+                    appointment_id = slot.value
 
         # Exécuter via le registre si disponible
         if self.registry is not None:
             action = self.registry.get_action("payment")
             if action is not None:
                 try:
-                    result = await action.execute(
-                        {
-                            "order_number": order_number,
-                            "amount": amount,
-                        }
-                    )
+                    # contexte business obligatoire
+                    params: dict[str, str | None] = {
+                        "order_number": order_number,
+                        "amount": amount,  # indicatif : le serveur recalcule
+                        "appointment_id": appointment_id,
+                    }
+                    if state.business_id is not None:
+                        params["business_id"] = str(state.business_id)
+                    if state.customer_id is not None:
+                        params["customer_id"] = str(state.customer_id)
+                    if state.conversation_id is not None:
+                        params["conversation_id"] = str(state.conversation_id)
+                    result = await action.execute(params)
                     return {
                         "response": result.get("message", "Paiement traité."),
                         "documents": [],

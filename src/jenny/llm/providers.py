@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -371,12 +372,20 @@ class LlamaProvider(BaseLLMProvider):
             return [0.0] * 384
 
 
+# modèle groq par défaut (seule référence)
+GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"
+# modèles à raisonnement (budget séparé)
+_REASONING_MODELS = ("gpt-oss", "qwen3", "deepseek-r1")
+# balises de pensée parfois laissées
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.S | re.I)
+
+
 class GroqProvider(BaseLLMProvider):
     """provider groq, compatible openai."""
 
     def __init__(
         self,
-        model: str = "llama-3.3-70b-versatile",
+        model: str = GROQ_DEFAULT_MODEL,
         api_key: str | None = None,
     ) -> None:
         self._model = model
@@ -390,6 +399,22 @@ class GroqProvider(BaseLLMProvider):
     @property
     def is_configured(self) -> bool:
         return bool(self.api_key)
+
+    def _payload(
+        self, messages: list[dict[str, str]], temperature: float, max_tokens: int
+    ) -> dict:
+        """Corps de requête, adapté au modèle."""
+        body: dict = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        # raisonnement bref, sinon réponse vide
+        if any(tag in self._model.lower() for tag in _REASONING_MODELS):
+            body["reasoning_effort"] = "low"
+            body["max_tokens"] = max(max_tokens, 400)
+        return body
 
     async def generate(
         self,
@@ -422,18 +447,24 @@ class GroqProvider(BaseLLMProvider):
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": self._model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    },
+                    json=self._payload(messages, temperature, max_tokens),
                     timeout=30.0,
                 )
                 response.raise_for_status()
                 data = response.json()
-                content = data["choices"][0]["message"]["content"]
+                msg = data["choices"][0]["message"]
+                content = _THINK_RE.sub("", msg.get("content") or "").strip()
                 usage = data.get("usage")
+                # vide = budget parti en raisonnement
+                if not content:
+                    logger.error(
+                        "llm.groq.empty_content",
+                        model=self._model,
+                        finish=data["choices"][0].get("finish_reason"),
+                    )
+                    return LLMResponse(
+                        content="", model=self._model, finish_reason="error", usage=usage
+                    )
                 return LLMResponse(content=content, model=self._model, usage=usage)
         except Exception as e:
             logger.error("llm.groq.error", error=str(e))
@@ -660,7 +691,7 @@ def get_default_llm_provider() -> BaseLLMProvider | None:
     groq: BaseLLMProvider | None = None
     if name != "groq":
         try:
-            g = get_llm_provider("groq", model="llama-3.3-70b-versatile")
+            g = get_llm_provider("groq", model=GROQ_DEFAULT_MODEL)
             groq = g if g.is_configured else None
         except Exception:
             groq = None

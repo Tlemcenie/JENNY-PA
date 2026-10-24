@@ -16,6 +16,7 @@ from pathlib import Path
 
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
+from jenny.llm.providers import GROQ_DEFAULT_MODEL
 
 logger = get_logger(__name__)
 
@@ -32,8 +33,8 @@ LLM_OPTIONS: dict[str, dict] = {
     },
     "groq": {
         "provider": "groq",
-        "model": "llama-3.3-70b-versatile",
-        "label": "Groq — Llama 3.3 70B",
+        "model": GROQ_DEFAULT_MODEL,
+        "label": "Groq — GPT-OSS 120B",
         "hint": "Hébergé, très rapide et qualitatif. Le cerveau par défaut en prod.",
     },
     "nanogpt": {

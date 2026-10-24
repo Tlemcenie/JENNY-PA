@@ -13,6 +13,40 @@ from zoneinfo import ZoneInfo
 
 _DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
+# jours en français
+_DAY_LABELS_FR = {
+    "mon": "lundi",
+    "tue": "mardi",
+    "wed": "mercredi",
+    "thu": "jeudi",
+    "fri": "vendredi",
+    "sat": "samedi",
+    "sun": "dimanche",
+}
+# horaires par défaut (mêmes que la dispo)
+_FALLBACK_HOURS: dict[str, list[str] | None] = {
+    "mon": ["09:00", "19:00"],
+    "tue": ["09:00", "19:00"],
+    "wed": ["09:00", "19:00"],
+    "thu": ["09:00", "19:00"],
+    "fri": ["09:00", "19:00"],
+    "sat": ["09:00", "18:00"],
+    "sun": None,
+}
+
+
+def format_hours(business_hours: dict | None) -> str:
+    """Horaires lisibles pour le prompt."""
+    hours = business_hours or _FALLBACK_HOURS
+    parts = []
+    for key in _DAYS:
+        rng = hours.get(key)
+        if rng and len(rng) == 2:
+            parts.append(f"{_DAY_LABELS_FR[key]} {rng[0]}-{rng[1]}")
+        else:
+            parts.append(f"{_DAY_LABELS_FR[key]} fermé")
+    return "Horaires d'ouverture (n'invente rien d'autre) : " + " ; ".join(parts) + "."
+
 
 def is_open(
     business_hours: dict | None,

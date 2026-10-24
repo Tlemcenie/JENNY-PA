@@ -60,8 +60,24 @@ async def _auth(client: AsyncClient, email: str) -> tuple[dict, str]:
     return headers, bid
 
 
-async def _seed_customer_rdv(bid: str, *, hours_ahead: int = 30) -> str:
-    start = datetime.now(UTC) + timedelta(hours=hours_ahead)
+def _next_open_day_10h() -> datetime:
+    """Prochain jour ouvré à 10h UTC.
+
+    Sans ça le test tombait un dimanche (fermé) selon le jour où on le lance :
+    « déplacer à 16h » visait un jour fermé → success=False.
+    """
+    d = datetime.now(UTC) + timedelta(days=1)
+    while d.weekday() > 4:  # samedi/dimanche
+        d += timedelta(days=1)
+    return d.replace(hour=10, minute=0, second=0, microsecond=0)
+
+
+async def _seed_customer_rdv(bid: str, *, hours_ahead: int | None = None) -> str:
+    start = (
+        datetime.now(UTC) + timedelta(hours=hours_ahead)
+        if hours_ahead is not None
+        else _next_open_day_10h()
+    )
     async with async_session_factory() as s, s.begin():
         cust = Customer(business_id=UUID(bid), full_name="Client Test", email="c@x.com")
         s.add(cust)

@@ -92,6 +92,8 @@ class TestPromptBuilder:
         assert "Ma commande" in prompt
 
     def test_rag_prompt_with_documents(self) -> None:
+        # les docs passent par le prompt SYSTÈME (comme le chemin normal),
+        # le prompt utilisateur garde la question + l'historique
         builder = PromptBuilder()
         state = ConversationState()
         state.add_user_message("Quels sont vos horaires ?")
@@ -99,9 +101,23 @@ class TestPromptBuilder:
         documents = [
             {"content": "Ouvert du lundi au vendredi, 9h-18h", "score": 0.95},
         ]
-        prompt = builder.build_rag_user_prompt(state, documents)
-        assert "9h-18h" in prompt
-        assert "horaires" in prompt
+        state.retrieved_documents = documents
+        system = builder.build_rag_system_prompt(state)
+        user = builder.build_rag_user_prompt(state, documents)
+        assert "9h-18h" in system
+        assert "horaires" in user
+
+    def test_rag_prompt_garde_les_regles_de_base(self) -> None:
+        # avant : le chemin RAG repartait de zéro et perdait le ton + les faits
+        builder = PromptBuilder()
+        state = ConversationState()
+        state.add_user_message("vous avez de la place jeudi ?")
+        state.retrieved_documents = [{"content": "Infos salon", "score": 0.4}]
+        state.action_result = {"success": True, "day": "jeudi 24/07", "time": "14h00"}
+
+        system = builder.build_rag_system_prompt(state)
+        assert "À DIRE AU CLIENT" in system  # les faits d'action survivent
+        assert "jeudi 24/07" in system  # le créneau réel est verrouillé
 
     def test_slot_filling_prompt(self) -> None:
         builder = PromptBuilder()

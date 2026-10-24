@@ -48,16 +48,6 @@ Jenny : Pas de souci, on rattrape ça facilement avec un bon soin avant. On rega
 Client : merci beaucoup
 Jenny : Avec plaisir, à très vite ! 😊"""
 
-SYSTEM_PROMPT_RAG = """Tu es Jenny, l'assistante de l'établissement. Tu parles aux clients comme un membre de l'équipe.
-
-Règles :
-- Réponds en t'appuyant sur ce que tu sais de l'établissement, comme si ces informations étaient les tiennes.
-- Ne mentionne JAMAIS de « documents », de numéros, de sources ni de score de pertinence : réponds directement.
-- Si une information te manque, ne le signale jamais et n'explique jamais pourquoi : propose naturellement de vérifier et de revenir vers le client, ou de le mettre en relation avec l'équipe. (Interdit : « je n'ai pas l'information », « les informations fournies ne contiennent pas… », « en tant qu'IA… ».)
-- N'invente jamais de prix, de créneaux ni de faits.
-- Ne dis JAMAIS que tu es une IA, un bot ou un programme. Reste naturelle et chaleureuse.
-"""
-
 SLOT_FILLING_PROMPT = """Tu es Jenny, l'assistante de l'établissement, et tu fais partie de l'équipe.
 Tu dois collecter les informations manquantes du client pour traiter sa demande.
 Informations manquantes : {missing_slots}.
@@ -189,6 +179,10 @@ def build_context_instructions(state: ConversationState) -> str:
     if catalog:
         lines.append(catalog)
 
+    hours_text = getattr(state, "business_hours_text", None)
+    if hours_text:
+        lines.append(hours_text)
+
     clarify = getattr(state, "clarification_instruction", None)
     if clarify:
         lines.append(clarify)
@@ -239,7 +233,8 @@ class PromptBuilder:
                 # on verrouille le jour/heure
                 if public.get("success") and public.get("day") and public.get("time"):
                     base += (
-                        f"\nRDV réservé — prestation : {public['service']} · jour : "
+                        f"\nRDV réservé — prestation : {public.get('service', 'la prestation')}"
+                        f" · jour : "
                         f"{public['day']} · heure : {public['time']}. Annonce au client que "
                         "c'est confirmé, avec tes mots, en gardant EXACTEMENT ce jour et cette "
                         "heure (ne les change pas). Une à deux phrases, chaleureux."
@@ -466,45 +461,30 @@ class PromptBuilder:
         return "\n".join(parts)
 
     def build_rag_system_prompt(self, state: ConversationState) -> str:
-        """prompt système RAG."""
-        return (
-            SYSTEM_PROMPT_RAG
-            + build_context_instructions(state)
-            + build_persona_instructions(state.business_persona, state.business_name)
-        )
+        """prompt système RAG = le prompt normal.
+
+        Avant, ce chemin repartait de zéro (SYSTEM_PROMPT_RAG seul) et perdait le
+        ton, les règles de format ET le bloc « À DIRE AU CLIENT » (créneaux réels,
+        jour/heure verrouillés) → Jenny pouvait inventer un horaire. Or
+        ``build_system_prompt`` injecte déjà ``state.retrieved_documents``.
+        """
+        return self.build_system_prompt(state)
 
     def build_rag_user_prompt(
         self,
         state: ConversationState,
         documents: list[dict],
     ) -> str:
-        """prompt utilisateur avec docs RAG."""
-        parts: list[str] = []
-
-        # infos internes de contexte
+        """prompt utilisateur avec docs RAG (garde l'historique)."""
+        # les docs partent déjà dans le prompt système
+        base = self.build_user_prompt(state)
         if documents:
-            parts.append("=== Informations internes (base de connaissances) ===")
-            for i, doc in enumerate(documents, 1):
-                content = doc.get("content", "")
-                parts.append(f"\n[{i}]")
-                parts.append(content[:500])
-
-        # question du client
-        if state.message_history:
-            last = state.message_history[-1]
-            if last["role"] == "user":
-                parts.append(f"\n=== Question du client ===\n{last['content']}")
-
-        parts.append(
-            "\n=== Instructions ===\n"
-            "Réponds à la question en t'appuyant sur les informations ci-dessus, comme si tu "
-            "les connaissais. Ne mentionne jamais ces informations comme des 'documents', ne cite "
-            "aucun numéro ni score. Si une information manque, ne le signale pas et n'explique pas "
-            "pourquoi : propose naturellement de vérifier et de revenir vers le client. "
-            "Ne dis jamais que tu es une IA."
-        )
-
-        return "\n".join(parts)
+            base += (
+                "\nAppuie-toi sur les informations internes données plus haut comme si tu "
+                "les connaissais. S'il te manque une info, ne l'explique pas : propose "
+                "simplement de vérifier et de revenir vers le client."
+            )
+        return base
 
     def build_slot_filling_prompt(self, state: ConversationState) -> str:
         """collecte des infos manquantes."""

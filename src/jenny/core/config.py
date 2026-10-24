@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     mistral_api_key: str = ""
     llama_base_url: str = "http://localhost:11434"  # Ollama / vLLM local
     llm_provider: str = "groq"  # groq, openai, mistral, llama…
-    llm_model: str = "llama-3.3-70b-versatile"  # modèle par défaut Groq
+    llm_model: str = "openai/gpt-oss-120b"  # modèle par défaut Groq
     llm_temperature: float = 0.4  # bas = stable/posé
     # garde le modèle chargé
     llama_keep_alive: str = "30m"

@@ -197,6 +197,17 @@ async def _run_engine_chat(
     prestations = await load_active_prestations(db, body.business_id)
     catalog = format_catalog(prestations)
 
+    # horaires réels pour le prompt (best-effort, comme la persona)
+    from jenny.domain.models.business import Business
+    from jenny.engine.business_hours import format_hours
+
+    hours_text: str | None = None
+    try:
+        _biz = await db.get(Business, body.business_id)
+        hours_text = format_hours(_biz.business_hours if _biz else None)
+    except Exception:  # pragma: no cover - DB best-effort
+        hours_text = None
+
     result: EngineResponse = await engine.process(
         EngineRequest(
             conversation_id=body.conversation_id,
@@ -210,6 +221,7 @@ async def _run_engine_chat(
             customer_facts=customer_facts,
             catalog=catalog or None,
             catalog_services=[p.name for p in prestations] or None,
+            hours_text=hours_text,
         ),
         on_token=on_token,
     )

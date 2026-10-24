@@ -63,6 +63,17 @@ _CATALOG_TOPIC_RE = re.compile(
     r"(?:vos|tes|les|des)\s+(?:prestations|tarifs|services|prix)\b|catalogue|grille\s+tarifaire",
     re.I,
 )
+# on veut la liste des prestations
+_CATALOG_LIST_RE = re.compile(
+    r"(?:vous|tu)\s+(?:faites|fais|proposez|propose|avez|offrez|faîtes)\s+quoi"
+    r"|quoi\s+comme\s+(?:prestations?|services?|soins?|coupes?)"
+    r"|qu['’]?est[- ]ce\s+que\s+(?:vous|tu)\s+(?:faites|proposez|avez|fais)"  # noqa: RUF001
+    r"|quelles?\s+(?:sont\s+)?(?:vos|les)?\s*(?:prestations?|services?|soins?|options?)"
+    r"|c['’]?est\s+quoi\s+(?:vos|les)\s+(?:prestations?|services?|tarifs?)"  # noqa: RUF001
+    r"|(?:vos|tes|les)\s+(?:prestations?|services?)\b"
+    r"|catalogue|grille\s+tarifaire|liste\s+(?:des\s+)?(?:prestations?|services?)",
+    re.I,
+)
 
 _AFFIRM_RE = re.compile(
     r"^\s*(oui|ouais|ok|d['’]accord|c['’]est\s+(?:bon|parfait)|[çc]a\s+me\s+va|"  # noqa: RUF001
@@ -95,12 +106,25 @@ _COMPLAINT_SIGNAL_RE = re.compile(
 
 # capture du nom
 _NAME_RE = re.compile(r"^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’\- ]{1,40}$")  # noqa: RUF001
+# préfixes « c'est pour… », « je m'appelle… »
+_NAME_INTRO_RE = re.compile(
+    r"^\s*(?:c['’]est\s+pour|c['’]est\s+au\s+nom\s+de|c['’]est|moi\s+c['’]est|"  # noqa: RUF001
+    r"je\s+m['’]appelle|au\s+nom\s+de|je\s+suis|mon\s+nom\s+(?:c['’]est|est))\s+",  # noqa: RUF001
+    re.I,
+)
+# pas des noms
+_NOT_A_NAME = frozenset(
+    {"moi", "lui", "elle", "nous", "vous", "eux", "toi", "ça", "pour", "oui", "non", "ok"}
+)
 
 
 def looks_like_name(text: str) -> bool:
     """Ressemble à un nom ?"""
     t = (text or "").strip()
     if not t or "?" in t or any(ch.isdigit() for ch in t):
+        return False
+    t = _NAME_INTRO_RE.sub("", t).strip(" .!,")  # retire le préfixe
+    if not t or t.lower() in _NOT_A_NAME:
         return False
     if _CLOSING_RE.search(t) or _GREETING_PREFIX_RE.match(t):
         return False
@@ -192,6 +216,8 @@ class EngineRequest:
     catalog: str | None = None
     # noms des prestations
     catalog_services: list[str] | None = None
+    # horaires d'ouverture (texte)
+    hours_text: str | None = None
 
 
 @dataclass
@@ -271,6 +297,9 @@ class ConversationEngine:
         # catalogue de prestations
         if request.catalog:
             state.business_catalog = request.catalog
+        # horaires pour le prompt
+        if request.hours_text:
+            state.business_hours_text = request.hours_text
 
         # 2. intention
         intent_result = await self._detect_intent(request.message_text, state)
@@ -342,6 +371,28 @@ class ConversationEngine:
             intent_result = {
                 **intent_result,
                 "intent": "quote",
+                "confidence": max(intent_result.get("confidence", 0.0), 0.85),
+                "needs_clarification": False,
+            }
+
+        # catalogue générique → info groundée (pas small_talk / planning)
+        if (
+            _CATALOG_LIST_RE.search(request.message_text or "")
+            and not _cited_prestation
+            and not _has_when  # une vraie demande de créneau a une date
+            and intent_result["intent"]
+            not in (
+                "appointment",
+                "manage_appointment",
+                "escalation",
+                "complaint",
+                "quote",
+            )
+        ):
+            logger.info("engine.intent.catalog_to_faq", was=intent_result["intent"])
+            intent_result = {
+                **intent_result,
+                "intent": "faq",
                 "confidence": max(intent_result.get("confidence", 0.0), 0.85),
                 "needs_clarification": False,
             }

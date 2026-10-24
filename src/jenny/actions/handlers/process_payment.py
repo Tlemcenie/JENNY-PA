@@ -25,17 +25,10 @@ class ProcessPaymentAction(BaseAction):
 
     async def execute(self, params: dict) -> dict:
         order_number = params.get("order_number")
-        amount = params.get("amount")
         bid_str = params.get("business_id")
         settings = get_settings()
 
         payment_id = f"PAY-{uuid4().hex[:8].upper()}"
-        logger.info(
-            "action.process_payment",
-            payment_id=payment_id,
-            order_number=order_number,
-            amount=amount,
-        )
 
         if not bid_str:
             return ActionResult(
@@ -44,6 +37,25 @@ class ProcessPaymentAction(BaseAction):
             ).to_dict()
 
         business_id = UUID(bid_str)
+
+        # JAMAIS le montant du client : il viendrait du texte (« je paie 1 € »).
+        # On le relit côté serveur : acompte du RDV, sinon total du devis.
+        claimed = params.get("amount")
+        cents = await self._resolve_amount_minor(business_id, params)
+        logger.info(
+            "action.process_payment",
+            payment_id=payment_id,
+            order_number=order_number,
+            amount_minor=cents,
+            claimed_by_client=claimed,
+        )
+        if cents is None:
+            return ActionResult(
+                success=True,
+                message="Montant à confirmer par le salon avant paiement.",
+                data={"payment_id": payment_id, "status": "amount_unresolved"},
+            ).to_dict()
+        amount = f"{cents / 100:.2f}"
 
         if settings.stripe_secret_key and amount:
             try:
@@ -159,6 +171,51 @@ class ProcessPaymentAction(BaseAction):
                 "status": "pending_config",
             },
         ).to_dict()
+
+    async def _resolve_amount_minor(self, business_id: UUID, params: dict) -> int | None:
+        """Montant en centimes, lu en base (source sûre)."""
+        from sqlalchemy import select
+
+        from jenny.domain.models.appointment import Appointment
+        from jenny.domain.models.quote import Quote
+
+        appt_id = params.get("appointment_id")
+        conv_id = params.get("conversation_id")
+        ref = params.get("order_number")
+        try:
+            async with async_session_factory() as db:
+                # 1) acompte du RDV visé
+                if appt_id:
+                    appt = await db.get(Appointment, UUID(str(appt_id)))
+                    if appt and appt.business_id == business_id and appt.deposit_cents:
+                        return int(appt.deposit_cents)
+                # 2) dernier RDV de la conversation
+                if conv_id:
+                    q = (
+                        select(Appointment)
+                        .where(
+                            Appointment.business_id == business_id,
+                            Appointment.conversation_id == UUID(str(conv_id)),
+                            Appointment.deposit_cents.is_not(None),
+                        )
+                        .order_by(Appointment.created_at.desc())
+                        .limit(1)
+                    )
+                    appt = (await db.execute(q)).scalars().first()
+                    if appt and appt.deposit_cents:
+                        return int(appt.deposit_cents)
+                # 3) devis cité par sa référence
+                if ref:
+                    q2 = select(Quote).where(
+                        Quote.business_id == business_id,
+                        Quote.reference == str(ref),
+                    )
+                    quote = (await db.execute(q2)).scalars().first()
+                    if quote and quote.total_cents:
+                        return int(quote.total_cents)
+        except Exception as exc:  # pragma: no cover - dépend de la base
+            logger.error("action.process_payment.amount_error", error=str(exc))
+        return None
 
     async def _paypal_token(self) -> str:
         s = get_settings()

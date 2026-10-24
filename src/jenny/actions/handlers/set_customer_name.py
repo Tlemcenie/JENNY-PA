@@ -16,10 +16,12 @@ from jenny.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Politesses éventuelles autour du nom (« c'est Marie », « moi c'est Marie »).
+# Politesses éventuelles autour du nom (« c'est Marie », « c'est pour Marie »).
+# Ordre : les préfixes longs AVANT « c'est » seul (sinon « pour » reste collé).
 _STRIP_RE = re.compile(
-    r"^\s*(?:c['’]est|moi\s+c['’]est|je\s+m['’]appelle|au\s+nom\s+de|"  # noqa: RUF001
-    r"c['’]est\s+pour)\s+",  # noqa: RUF001
+    r"^\s*(?:c['’]est\s+pour|c['’]est\s+au\s+nom\s+de|moi\s+c['’]est|"  # noqa: RUF001
+    r"je\s+m['’]appelle|mon\s+nom\s+(?:c['’]est|est)|au\s+nom\s+de|"  # noqa: RUF001
+    r"je\s+suis|c['’]est|pour)\s+",  # noqa: RUF001
     re.I,
 )
 
