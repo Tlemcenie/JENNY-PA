@@ -24,6 +24,7 @@ from sqlalchemy import and_, select
 from jenny.api.dependencies import DbSession
 from jenny.core.logging import get_logger
 from jenny.db.conflicts import is_slot_taken
+from jenny.notifications.outbound import notify_customer
 from jenny.domain.models.appointment import Appointment
 from jenny.domain.models.business import Business
 from jenny.domain.models.customer import Customer
@@ -327,6 +328,17 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
         business_id=str(b.id),
         appt_id=str(appt.id),
         customer_id=str(customer.id),
+    )
+    # confirmation AU CLIENT : avant, il ne recevait rien du tout
+    await notify_customer(
+        db,
+        business_id=b.id,
+        customer_id=customer.id,
+        text=(
+            f"Votre rendez-vous est confirmé : {title}, le {when_local}. "
+            f"À très vite chez {b.name} ! Pour modifier ou annuler, répondez à ce message."
+        ),
+        subject=f"Rendez-vous confirmé — {b.name}",
     )
 
     return BookingConfirmation(

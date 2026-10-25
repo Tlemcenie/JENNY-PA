@@ -175,6 +175,20 @@ async def notify_waitlist_for_freed_slot(
             },
         )
     )
+    # on prévient LE CLIENT, pas seulement le salon
+    from jenny.notifications.outbound import notify_customer
+
+    await notify_customer(
+        db,
+        business_id=business_id,
+        customer_id=match.customer_id,
+        conversation_id=match.conversation_id,
+        text=(
+            f"Bonne nouvelle : un créneau{slot_txt} vient de se libérer "
+            f"pour « {svc_label} ». Ça vous intéresse ? Répondez-moi et je vous le bloque."
+        ),
+        subject="Un créneau s'est libéré",
+    )
     logger.info(
         "waitlist.notified",
         business_id=str(business_id),

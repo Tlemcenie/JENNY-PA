@@ -15,6 +15,7 @@ from jenny.connectors.email.imap_utils import fetch_unseen_mails_sync, parse_mim
 from jenny.connectors.email.service import EmailConnectorService
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
+from jenny.notifications.outbound import notify_customer
 from jenny.db.repositories.message_event_repo import MessageEventRepository
 from jenny.db.repositories.message_repo import MessageRepository
 from jenny.db.session import async_session_factory
@@ -276,6 +277,7 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
                     Appointment,
                     Business.reminder_lead_minutes,
                     Business.day_reminder_lead_hours,
+                    Business.name,
                 )
                 .join(Business, Business.id == Appointment.business_id)
                 .where(
@@ -289,7 +291,7 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
                 )
             )
         ).all()
-        for a, lead_min, lead_hours in rem_rows:
+        for a, lead_min, lead_hours, salon in rem_rows:
             lead_min = int(lead_min or 60)
             lead_hours = int(lead_hours or 24)
             start = a.start_at if a.start_at.tzinfo else a.start_at.replace(tzinfo=UTC)
@@ -308,6 +310,17 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
                         meta={"appointment_id": str(a.id)},
                     )
                 )
+                await notify_customer(
+                    session,
+                    business_id=a.business_id,
+                    customer_id=a.customer_id,
+                    conversation_id=a.conversation_id,
+                    text=(
+                        f"Petit rappel : votre rendez-vous {a.title} "
+                        f"est à {start:%H:%M} aujourd'hui{loc}. À tout à l'heure !"
+                    ),
+                    subject=f"Rappel : votre rendez-vous {salon or ''}".strip(),
+                )
                 reminded += 1
             elif a.day_reminder_sent_at is None and lead_min < delta_min <= lead_hours * 60:
                 a.day_reminder_sent_at = now
@@ -321,6 +334,17 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
                         conversation_id=a.conversation_id,
                         meta={"appointment_id": str(a.id)},
                     )
+                )
+                await notify_customer(
+                    session,
+                    business_id=a.business_id,
+                    customer_id=a.customer_id,
+                    conversation_id=a.conversation_id,
+                    text=(
+                        f"Rappel : votre rendez-vous {a.title} est demain "
+                        f"à {start:%H:%M}{loc}. À demain !"
+                    ),
+                    subject=f"Votre rendez-vous demain {salon or ''}".strip(),
                 )
                 day_reminded += 1
 
