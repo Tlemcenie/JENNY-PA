@@ -96,12 +96,16 @@ def build_eval_engine(provider, retriever: EvalRetriever) -> ConversationEngine:
 
 
 def _forbidden_identity_or_leak(text: str) -> list[str]:
-    """Violations persona trouvées."""
+    """Violations trouvées.
+
+    Dire « assistante virtuelle » est désormais OBLIGATOIRE (AI Act art. 50) :
+    on ne vérifie plus l'absence d'aveu, mais l'absence de mécanique interne.
+    """
     hits: list[str] = []
     if _AI_TERMS_RE.search(text or ""):
-        hits.append("mention IA/robot")
+        hits.append("tournure mécanique (« en tant qu'IA », « modèle de langage »)")
     if _META_LEAK_RE.search(text or ""):
-        hits.append("fuite RAG / aveu d'ignorance")
+        hits.append("fuite RAG")
     return hits
 
 
@@ -116,7 +120,7 @@ def score_turn(turn: Turn, response) -> list[dict]:
 
     # persona toujours vérifiée
     violations = _forbidden_identity_or_leak(text)
-    add("persona_humaine", not violations, ", ".join(violations))
+    add("pas_de_fuite_interne", not violations, ", ".join(violations))
 
     if turn.expect_lang is not None:
         got = response.detected_language or detect_language(turn.user)

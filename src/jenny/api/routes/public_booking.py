@@ -23,6 +23,7 @@ from sqlalchemy import and_, select
 
 from jenny.api.dependencies import DbSession
 from jenny.core.logging import get_logger
+from jenny.db.conflicts import is_slot_taken
 from jenny.domain.models.appointment import Appointment
 from jenny.domain.models.business import Business
 from jenny.domain.models.customer import Customer
@@ -313,7 +314,13 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
         entity_id=appt.id,
         summary=f"Réservation en ligne « {title} » le {when_local}",
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as exc:  # créneau pris entre-temps (course)
+        if not is_slot_taken(exc):
+            raise
+        await db.rollback()
+        raise HTTPException(409, "Ce créneau vient d'être réservé, choisissez-en un autre") from exc
     await db.refresh(appt)
     logger.info(
         "public.booking.created",

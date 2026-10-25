@@ -18,7 +18,7 @@ def format_markdown(data: dict) -> str:
         "|---|---|",
     ]
     labels = {
-        "persona_humaine": "Persona humaine (jamais « IA », pas de fuite)",
+        "pas_de_fuite_interne": "Pas de mécanique interne exposée",
         "langue": "Bonne langue de réponse",
         "clarification": "Clarification au bon moment",
         "lacune_detectee": "Lacune détectée",

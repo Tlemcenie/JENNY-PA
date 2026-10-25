@@ -18,13 +18,15 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# mots qui trahissent une IA
+# tournures mécaniques : on les lisse, mais dire « assistante virtuelle »
+# est OBLIGATOIRE (AI Act art. 50) donc ce terme n'est plus filtré.
 _AI_TERMS_RE = re.compile(
-    r"intelligence artificielle|mod[èe]le de langage|mod[èe]le d['’]?ia|"  # noqa: RUF001
-    r"assistant(?:e)? virtuel(?:le)?|chatbot|programme informatique|"
-    r"\bIA\b|\bA\.?I\.?\b|\bbot\b|\brobot\b",
+    r"mod[èe]le de langage|mod[èe]le d['’]?ia|chatbot|programme informatique|"  # noqa: RUF001
+    r"en tant qu['’]\s*(?:ia|intelligence artificielle)",  # noqa: RUF001
     re.IGNORECASE,
 )
+# la divulgation autorisée : une phrase qui la contient n'est jamais coupée
+_DISCLOSURE_RE = re.compile(r"assistant(?:e)?\s+virtuel(?:le)?", re.IGNORECASE)
 # auto-référence
 _SELF_REF_RE = re.compile(
     r"\bje\b|\bj['’]|\bme\b|\bm['’]|\bmoi\b|\bmon\b|\bma\b|\bmes\b|\bsuis\b",  # noqa: RUF001
@@ -42,42 +44,75 @@ _META_LEAK_RE = re.compile(
     r"selon (?:les? )?(?:documents?|informations?)|je n['’]ai pas (?:cette |d['’])?(?:information|acc[èe]s)|"  # noqa: RUF001
     r"je ne dispose pas|je n['’]ai pas (?:l['’])?acc[èe]s|le(?:s)? document(?:s)? (?:ne )?(?:fourni|mentionne|conten)|"  # noqa: RUF001
     r"contexte fourni|je n['’]ai aucune information|"  # noqa: RUF001
-    # aveux d'ignorance directs
-    r"je ne sais pas|j['’]ignore|je l['’]ignore|aucune id[ée]e|je n['’]en sais rien|"  # noqa: RUF001
-    r"je ne peux pas (?:vous )?(?:dire|r[ée]pondre|aider)|je ne suis pas (?:s[ûu]re?|certaine?)|"
     # non-réponse explicite
     r"je\s+ne\s+fournis\s+pas\s+(?:d['’]|de\s+)?info",  # noqa: RUF001
     re.IGNORECASE,
 )
+# Aveux d'ignorance : à couper SEULEMENT quand c'est une non-réponse sèche.
+# « Je ne sais pas si vous préférez le matin ou l'après-midi ? » est une vraie
+# question de clarification — avant, elle était supprimée.
+_IGNORANCE_RE = re.compile(
+    r"je ne sais pas|j['’]ignore|je l['’]ignore|aucune id[ée]e|je n['’]en sais rien|"  # noqa: RUF001
+    r"je ne peux pas (?:vous )?(?:dire|r[ée]pondre|aider)|je ne suis pas (?:s[ûu]re?|certaine?)",
+    re.IGNORECASE,
+)
+# marques d'une phrase utile malgré l'aveu : on demande vraiment au client.
+# (« ou » seul ne suffit pas : « je suis une IA ou un humain » est une esquive)
+_UTILE_RE = re.compile(r"\?|dites[- ]moi|pr[ée]f[ée]rez|souhaitez|voulez", re.IGNORECASE)
 _IDENTITY_FALLBACK = (
-    "Je suis l'assistante de l'établissement, ravie de vous aider ! Que puis-je faire pour vous ?"
+    "Je suis Jenny, l'assistante virtuelle du salon 🙂 Que puis-je faire pour vous ?"
 )
 
 
+def _a_couper(phrase: str) -> bool:
+    """Phrase à retirer ? (mécanique ou fuite interne)"""
+    # la divulgation légale passe toujours
+    if _DISCLOSURE_RE.search(phrase):
+        return False
+    if _META_LEAK_RE.search(phrase):
+        return True
+    # tournure mécanique sur soi (« en tant qu'IA… »)
+    if _AI_TERMS_RE.search(phrase) and (
+        _SELF_REF_RE.search(phrase) or _IDENTITY_PROBE_RE.search(phrase)
+    ):
+        return True
+    # aveu d'ignorance SEC : on garde s'il amène une question ou un choix
+    return bool(_IGNORANCE_RE.search(phrase) and not _UTILE_RE.search(phrase))
+
+
 def sanitize_identity(text: str) -> str:
-    """Empêche Jenny de se dire IA."""
-    if not text or not (_AI_TERMS_RE.search(text) or _META_LEAK_RE.search(text)):
+    """Retire la mécanique interne, garde la divulgation."""
+    if not text:
+        return text
+    if not (
+        _AI_TERMS_RE.search(text) or _META_LEAK_RE.search(text) or _IGNORANCE_RE.search(text)
+    ):
         return text  # chemin rapide
 
-    sentences = re.split(r"(?<=[.!?…])\s+", text.strip())
-    kept = [
-        s
-        for s in sentences
-        if not (
-            (
-                _AI_TERMS_RE.search(s)
-                and (
-                    _SELF_REF_RE.search(s)  # je suis une IA
-                    or _IDENTITY_PROBE_RE.search(s)  # écho robot
-                )
-            )
-            or _META_LEAK_RE.search(s)  # fuite RAG
-        )
-    ]
-    cleaned = " ".join(kept).strip()
-    if len(cleaned) < 15:
+    phrases = re.split(r"(?<=[.!?…])\s+", text.strip())
+    gardees = [ph for ph in phrases if not _a_couper(ph)]
+    propre = " ".join(gardees).strip()
+    if len(propre) < 15:
         return _IDENTITY_FALLBACK
-    return cleaned
+    return propre
+
+
+def ensure_ai_disclosure(text: str, *, already_spoke: bool) -> str:
+    """Garantit la divulgation IA au 1er message (AI Act art. 50).
+
+    Le prompt la demande déjà, mais on ne peut pas dépendre du bon vouloir du
+    modèle pour une obligation légale : ici c'est déterministe.
+    """
+    if already_spoke or not text or _DISCLOSURE_RE.search(text):
+        return text
+    intro = "Je suis Jenny, l'assistante virtuelle du salon."
+    # on se glisse après la salutation si elle existe, sinon en tête
+    m = _OPENING_GREETING_RE.match(text)
+    if m:
+        salut = text[: m.end()].rstrip(" ,!.")
+        reste = text[m.end() :].lstrip(" ,!.")
+        return f"{salut} ! {intro} {reste}".strip()
+    return f"{intro} {text}".strip()
 
 
 # salutation d'ouverture
@@ -268,11 +303,25 @@ def strip_dialogue_scaffold(text: str) -> str:
 _FILLER_PHRASE_RE = re.compile(r"\s*\bn['’]?h[ée]sitez\s+pas\b[^.!?]*[.!?]?", re.I)  # noqa: RUF001
 
 
+# la clause porte-t-elle une vraie info ? (horaire, jour, choix, question)
+_CLAUSE_UTILE_RE = re.compile(
+    r"\d{1,2}\s*h|\d{1,2}/\d{1,2}|\?|\bou\b|"
+    r"\b(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|demain|aujourd)",
+    re.I,
+)
+
+
 def strip_filler_phrases(text: str) -> str:
-    """Vire les « n'hésitez pas »."""
+    """Vire les « n'hésitez pas » vides de sens."""
     if not _FILLER_PHRASE_RE.search(text):
         return text
-    out = _FILLER_PHRASE_RE.sub(" ", text)
+
+    def _remplace(m: re.Match) -> str:
+        # « n'hésitez pas à me dire si 14h ou 16h vous arrange » : on GARDE,
+        # la proposition de créneau est dedans.
+        return m.group(0) if _CLAUSE_UTILE_RE.search(m.group(0)) else " "
+
+    out = _FILLER_PHRASE_RE.sub(_remplace, text)
     out = re.sub(r"[ \t]{2,}", " ", out).strip()
     return out if len(out) >= 12 else text
 
@@ -300,11 +349,9 @@ def strip_false_booking_confirmation(text: str, *, booking_confirmed: bool) -> s
     if booking_confirmed or not text.strip():
         return text
     sentences = re.split(r"(?<=[.!?…])\s+", text.strip())
-    kept = [
-        s
-        for s in sentences
-        if not (_BOOKING_CONFIRM_PHRASE_RE.search(s) and _BOOKING_WHEN_RE.search(s))
-    ]
+    # Avant on exigeait aussi un horaire dans LA MÊME phrase : « Je vous bloque
+    # ce créneau » passait donc, alors que la réservation avait échoué.
+    kept = [s for s in sentences if not _BOOKING_CONFIRM_PHRASE_RE.search(s)]
     result = " ".join(kept).strip()
     if len(result) < 15:
         return (
@@ -332,6 +379,8 @@ def polish_response(
     out = cap_paragraphs(out)
     if already_spoke:
         out = strip_repeated_greeting(out)
+    # en dernier : aucun filtre ne doit pouvoir retirer la divulgation
+    out = ensure_ai_disclosure(out, already_spoke=already_spoke)
     return out.strip()
 
 

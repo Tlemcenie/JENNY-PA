@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import ClassVar
 from uuid import UUID
 
+from jenny.db.conflicts import is_slot_taken
 from jenny.actions.base import BaseAction
 from jenny.core.logging import get_logger
 
@@ -186,7 +187,18 @@ class ManageAppointmentAction(BaseAction):
             await notify_waitlist_for_freed_slot(
                 db, business_id=bid, service=appt.title, when_label=when
             )
-            await db.commit()
+            try:
+                await db.commit()
+            except Exception as exc:  # créneau pris entre-temps (course)
+                if not is_slot_taken(exc):
+                    raise
+                await db.rollback()
+                return {
+                    "success": False,
+                    "operation": "reschedule",
+                    "conflict": True,
+                    "message": "Ce créneau vient d'être pris, proposez-en un autre.",
+                }
             new_when = (
                 f"{_WD[new_local.weekday()]} {new_local.day:02d}/{new_local.month:02d} "
                 f"à {new_local.strftime('%Hh%M')}"

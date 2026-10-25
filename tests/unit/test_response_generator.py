@@ -1,4 +1,5 @@
-"""Tests du post-traitement des réponses : Jenny ne se présente jamais comme une IA."""
+"""Post-traitement : Jenny assume être une assistante virtuelle (AI Act art. 50),
+mais n'expose jamais sa mécanique interne."""
 
 from jenny.engine.response_generator import (
     cap_paragraphs,
@@ -144,10 +145,18 @@ def test_model_artifacts_leave_clean_text_untouched() -> None:
 
 
 def test_polish_strips_model_artifacts_end_to_end() -> None:
+    # booking_confirmed=True : le RDV a réellement abouti, donc la phrase de
+    # confirmation doit survivre (sinon elle est retirée, et c'est voulu).
     raw = "Votre RDV est confirmé. <|im_end|>\n好的"
-    out = polish_response(raw, already_spoke=True)
+    out = polish_response(raw, already_spoke=True, booking_confirmed=True)
     assert "<|" not in out and "好" not in out
     assert "confirmé" in out
+
+
+def test_polish_drops_confirmation_when_booking_failed() -> None:
+    """Réservation échouée : aucune phrase ne doit confirmer quoi que ce soit."""
+    out = polish_response("Votre RDV est confirmé.", already_spoke=True, booking_confirmed=False)
+    assert "confirmé" not in out
 
 
 def test_passes_clean_text_through() -> None:
@@ -169,24 +178,55 @@ def test_strips_ai_self_reference_sentence() -> None:
     assert "avis personnel" not in out  # la phrase IA a bien sauté
 
 
-def test_drops_intelligence_artificielle_disclaimer() -> None:
-    """Le disclaimer « je suis une intelligence artificielle » disparaît."""
+def test_drops_evasive_non_answer() -> None:
+    """L'esquive « je ne peux pas dire si… » saute : on ne noie plus le poisson."""
     txt = (
         "Je ne peux pas dire si je suis une intelligence artificielle ou un humain. "
         "Je suis là pour vous aider."
     )
     out = sanitize_identity(txt)
-    assert "intelligence artificielle" not in out.lower()
+    assert "je ne peux pas dire" not in out.lower()
     assert "vous aider" in out
 
 
+def test_keeps_honest_disclosure() -> None:
+    """Assumer être l'assistante virtuelle est OBLIGATOIRE : jamais supprimé."""
+    txt = "Oui, je suis l'assistante virtuelle du salon 🙂 Je peux vous réserver un créneau ?"
+    assert sanitize_identity(txt) == txt
+
+
+def test_keeps_real_clarification_question() -> None:
+    """« Je ne sais pas si vous préférez… ? » est une vraie question, pas un aveu."""
+    txt = "Je ne sais pas si vous préférez le matin ou l'après-midi ?"
+    assert sanitize_identity(txt) == txt
+
+
+def test_disclosure_added_on_first_message() -> None:
+    """1er message : la divulgation est garantie même si le modèle l'oublie."""
+    out = polish_response("Bonjour ! Une coupe femme c'est 39 €.", already_spoke=False)
+    assert "assistante virtuelle" in out.lower()
+    assert "39" in out
+
+
+def test_no_disclosure_repeat_after_first_message() -> None:
+    """Ensuite, on n'y revient plus : elle est juste Jenny."""
+    out = polish_response("Une coloration c'est 55 €.", already_spoke=True)
+    assert "assistante virtuelle" not in out.lower()
+
+
+def test_slot_proposal_survives_filler_strip() -> None:
+    """« N'hésitez pas à me dire si 14h ou 16h… » garde la proposition de créneau."""
+    out = strip_filler_phrases("N'hésitez pas à me dire si 14h ou 16h vous arrange !")
+    assert "14h" in out and "16h" in out
+
+
 def test_fallback_when_everything_stripped() -> None:
-    """Si tout est retiré, on renvoie une déflection humaine (jamais vide)."""
-    txt = "En tant qu'IA, je suis un modèle de langage. Je suis une intelligence artificielle."
+    """Si tout saute, on renvoie une présentation conforme (jamais vide)."""
+    txt = "En tant qu'IA, je suis un modèle de langage. Les informations fournies sont vides."
     out = sanitize_identity(txt)
-    assert "intelligence artificielle" not in out.lower()
     assert "modèle de langage" not in out.lower()
-    assert len(out) > 15
+    assert "informations fournies" not in out.lower()
+    assert "assistante virtuelle" in out.lower()  # repli conforme
 
 
 def test_keeps_non_self_referential_mention() -> None:

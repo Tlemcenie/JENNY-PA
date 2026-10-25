@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from jenny.api.dependencies import CurrentUser, DbSession
 from jenny.core.logging import get_logger
+from jenny.db.conflicts import is_slot_taken
 from jenny.domain.models.appointment import Appointment
 from jenny.domain.models.customer import Customer
 from jenny.services.audit_service import record_audit
@@ -144,7 +145,13 @@ async def create_appointment(
         entity_id=appt.id,
         summary=f"RDV « {appt.title} » créé le {appt.start_at:%d/%m %H:%M}",
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as exc:  # créneau déjà occupé
+        if not is_slot_taken(exc):
+            raise
+        await db.rollback()
+        raise HTTPException(409, "Ce créneau chevauche un rendez-vous existant") from exc
     await db.refresh(appt)
     customer_name = None
     if appt.customer_id:

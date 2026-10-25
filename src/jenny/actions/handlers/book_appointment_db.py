@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 from uuid import UUID
 
+from jenny.db.conflicts import is_slot_taken
 from jenny.actions.base import BaseAction
 from jenny.core.logging import get_logger
 
@@ -37,6 +38,12 @@ class BookAppointmentDBAction(BaseAction):
         try:
             return await self._book(UUID(str(business_id)), params)
         except Exception as exc:  # pragma: no cover
+            if is_slot_taken(exc):
+                return {
+                    "success": False,
+                    "conflict": True,
+                    "message": "Ce créneau vient d'être pris.",
+                }
             logger.error("action.book_db.error", error=str(exc))
             return {
                 "success": False,
@@ -225,7 +232,20 @@ class BookAppointmentDBAction(BaseAction):
                 created_by="Jenny",
             )
             db.add(appt)
-            await db.flush()
+            try:
+                await db.flush()
+            except Exception as exc:  # créneau pris entre-temps (course)
+                if not is_slot_taken(exc):
+                    raise
+                await db.rollback()
+                alts = await next_free_slots(db, bid, duration, from_day=day)
+                return {
+                    "success": False,
+                    "conflict": True,
+                    "service": service_name,
+                    "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
+                    "message": "Ce créneau vient d'être pris.",
+                }
 
             local_start = start.astimezone(tz)
             day_label = f"{_WEEKDAYS_FR[local_start.weekday()]} {local_start.day:02d}/{local_start.month:02d}"
@@ -272,7 +292,20 @@ class BookAppointmentDBAction(BaseAction):
                     meta={"appointment_id": str(appt.id)},
                 )
             )
-            await db.commit()
+            try:
+                await db.commit()
+            except Exception as exc:  # créneau pris entre-temps (course)
+                if not is_slot_taken(exc):
+                    raise
+                await db.rollback()
+                alts = await next_free_slots(db, bid, duration, from_day=day)
+                return {
+                    "success": False,
+                    "conflict": True,
+                    "service": service_name,
+                    "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
+                    "message": "Ce créneau vient d'être pris.",
+                }
             await db.refresh(appt)
 
             # notif live → cloche + calendrier
