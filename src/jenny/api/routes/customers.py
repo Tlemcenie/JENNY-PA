@@ -21,6 +21,7 @@ from sqlalchemy import func, or_, select
 
 from jenny.api.dependencies import CurrentUser, DbSession
 from jenny.core.logging import get_logger
+from jenny.db.loading import NO_REL, get_light
 from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.customer_transaction import CustomerTransaction
@@ -102,7 +103,8 @@ class Customer360(BaseModel):
 
 
 async def _load_customer(db: DbSession, customer_id: UUID, business_id: UUID | None) -> Customer:
-    cust = await db.get(Customer, customer_id)
+    # fiche seule, pas l'historique
+    cust = await get_light(db, Customer, customer_id)
     if cust is None or cust.business_id != business_id:
         raise HTTPException(404, "Client introuvable")
     return cust
@@ -175,6 +177,7 @@ async def list_customers(
             .order_by(func.coalesce(Customer.last_seen_at, Customer.created_at).desc())
             .limit(limit)
             .offset(offset)
+            .options(NO_REL)
         )
     ).all()
 
@@ -280,6 +283,7 @@ async def export_customers_csv(
                 .where(Customer.business_id == bid)
                 .order_by(func.coalesce(Customer.last_seen_at, Customer.created_at).desc())
                 .limit(5000)
+                .options(NO_REL)
             )
         ).all()
 
@@ -328,6 +332,8 @@ async def get_customer_360(
                 func.coalesce(Conversation.last_message_at, Conversation.created_at).desc()
             )
             .limit(50)
+            # sans les messages
+            .options(NO_REL)
         )
     ).scalars().all()
 
@@ -337,6 +343,7 @@ async def get_customer_360(
             .where(Order.customer_id == customer_id)
             .order_by(Order.created_at.desc())
             .limit(50)
+            .options(NO_REL)
         )
     ).scalars().all()
 
@@ -350,6 +357,7 @@ async def get_customer_360(
             .where(CustomerTransaction.customer_id == customer_id)
             .order_by(CustomerTransaction.occurred_at.desc())
             .limit(50)
+            .options(NO_REL)
         )
     ).all()
 
@@ -359,35 +367,39 @@ async def get_customer_360(
             .where(SupportTicket.customer_id == customer_id)
             .order_by(SupportTicket.created_at.desc())
             .limit(50)
+            .options(NO_REL)
         )
     ).scalars().all()
 
     # ── Statistiques de synthèse (calculées en base, pas en Python) ──
-    messages_total = (
+    # une seule requête, sans plafond 50
+    conv_total, messages_total, orders_total, open_tickets, total_spent = (
         await db.execute(
-            select(func.coalesce(func.sum(Conversation.message_count), 0)).where(
-                Conversation.customer_id == customer_id
+            select(
+                select(func.count(Conversation.id))
+                .where(Conversation.customer_id == customer_id)
+                .scalar_subquery(),
+                select(func.coalesce(func.sum(Conversation.message_count), 0))
+                .where(Conversation.customer_id == customer_id)
+                .scalar_subquery(),
+                select(func.count(Order.id))
+                .where(Order.customer_id == customer_id)
+                .scalar_subquery(),
+                select(func.count(SupportTicket.id))
+                .where(
+                    SupportTicket.customer_id == customer_id,
+                    SupportTicket.status.notin_(["closed", "resolved"]),
+                )
+                .scalar_subquery(),
+                select(func.coalesce(func.sum(CustomerTransaction.amount_minor), 0))
+                .where(
+                    CustomerTransaction.customer_id == customer_id,
+                    CustomerTransaction.status.in_(_PAID_STATES),
+                )
+                .scalar_subquery(),
             )
         )
-    ).scalar_one()
-
-    open_tickets = (
-        await db.execute(
-            select(func.count(SupportTicket.id)).where(
-                SupportTicket.customer_id == customer_id,
-                SupportTicket.status.notin_(["closed", "resolved"]),
-            )
-        )
-    ).scalar_one()
-
-    total_spent = (
-        await db.execute(
-            select(func.coalesce(func.sum(CustomerTransaction.amount_minor), 0)).where(
-                CustomerTransaction.customer_id == customer_id,
-                CustomerTransaction.status.in_(_PAID_STATES),
-            )
-        )
-    ).scalar_one()
+    ).one()
 
     currency = next((o.currency for o in orders), None) or next(
         (tx.currency for tx, _ in tx_rows), "EUR"
@@ -405,9 +417,9 @@ async def get_customer_360(
         last_seen_at=cust.last_seen_at,
         created_at=cust.created_at,
         stats=CustomerStats(
-            conversations=len(convs),
+            conversations=int(conv_total or 0),
             messages=int(messages_total or 0),
-            orders=len(orders),
+            orders=int(orders_total or 0),
             open_tickets=int(open_tickets or 0),
             total_spent_minor=int(total_spent or 0),
             currency=currency,
@@ -492,8 +504,8 @@ async def update_customer(
     fields = body.model_dump(exclude_unset=True)
     for key, value in fields.items():
         setattr(cust, key, value)
+    # valeurs déjà à jour en mémoire
     await db.commit()
-    await db.refresh(cust)
 
     logger.info(
         "customer.updated", customer_id=str(cust.id), fields=sorted(fields.keys())

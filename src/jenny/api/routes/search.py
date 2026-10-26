@@ -67,9 +67,15 @@ async def global_search(
     conv_by_msg = select(Message.conversation_id).where(
         Message.business_id == bid, Message.content_text.ilike(pattern)
     )
+    # colonnes utiles seulement
     conv_rows = (
         await db.execute(
-            select(Conversation, Customer.full_name)
+            select(
+                Conversation.id,
+                Conversation.channel,
+                Conversation.last_message_preview,
+                Customer.full_name,
+            )
             .outerjoin(Customer, Conversation.customer_id == Customer.id)
             .where(
                 Conversation.business_id == bid,
@@ -86,18 +92,13 @@ async def global_search(
         )
     ).all()
     conversations = [
-        SearchConversation(
-            id=str(c.id),
-            customer_name=name,
-            channel=c.channel,
-            preview=c.last_message_preview,
-        )
-        for c, name in conv_rows
+        SearchConversation(id=str(cid), customer_name=name, channel=channel, preview=preview)
+        for cid, channel, preview, name in conv_rows
     ]
 
     cust_rows = (
         await db.execute(
-            select(Customer)
+            select(Customer.id, Customer.full_name, Customer.email)
             .where(
                 Customer.business_id == bid,
                 or_(
@@ -108,14 +109,14 @@ async def global_search(
             )
             .limit(limit)
         )
-    ).scalars().all()
+    ).all()
     customers = [
-        SearchCustomer(id=str(c.id), full_name=c.full_name, email=c.email) for c in cust_rows
+        SearchCustomer(id=str(cid), full_name=name, email=email) for cid, name, email in cust_rows
     ]
 
     appt_rows = (
         await db.execute(
-            select(Appointment)
+            select(Appointment.id, Appointment.title, Appointment.start_at)
             .where(
                 Appointment.business_id == bid,
                 or_(
@@ -126,9 +127,10 @@ async def global_search(
             .order_by(Appointment.start_at.desc())
             .limit(limit)
         )
-    ).scalars().all()
+    ).all()
     appointments = [
-        SearchAppointment(id=str(a.id), title=a.title, start_at=a.start_at) for a in appt_rows
+        SearchAppointment(id=str(aid), title=title, start_at=start)
+        for aid, title, start in appt_rows
     ]
 
     return GlobalSearchResponse(
