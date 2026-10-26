@@ -13,7 +13,7 @@ from sqlalchemy import text
 from jenny.core.logging import get_logger
 from jenny.rag import rerank as _rr
 from jenny.rag.ingestion import reassemble
-from jenny.rag.lexique import expansions, fold
+from jenny.rag.lexique import STOPWORDS, expansions, fold
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# candidats par voie
+# candidats par voie (repli)
 POOL_SIZE = 30
 # ordre final : "mix", "rrf" ou "score"
 FUSION = "mix"
@@ -32,10 +32,23 @@ TS_CONFIG = "jenny_fr"
 # capacités revues toutes les 5 min
 _CAPS_TTL = 300.0
 _TSQ_WORD_RE = re.compile(r"^[a-z0-9]+$")
+# mots accentués (config french)
+_RAW_WORD_RE = re.compile(r"[^\W\d_]{3,}")
 
 
 class VectorSearchError(RuntimeError):
     """Échec de la recherche pgvector."""
+
+
+def default_pool() -> int:
+    """Candidats par voie (réglage)."""
+    from jenny.core.config import get_settings
+
+    try:
+        n = int(get_settings().rag_rerank_candidates)
+    except (TypeError, ValueError):
+        n = 0
+    return n if n > 0 else POOL_SIZE
 
 
 @dataclass
@@ -79,9 +92,13 @@ def _with_index(contents, metas, idx) -> list[tuple[str, dict]]:
     return out
 
 
-def build_tsquery(query: str, max_terms: int = 40) -> str:
+def build_tsquery(query: str, max_terms: int = 40, keep_accents: bool = False) -> str:
     """Requête OR (mots + synonymes)."""
     words = [w for w in (fold(x) for x in expansions(query)) if _TSQ_WORD_RE.match(w)]
+    if keep_accents:
+        # index sans unaccent
+        raw = [w for w in _RAW_WORD_RE.findall((query or "").lower()) if fold(w) not in STOPWORDS]
+        words = list(dict.fromkeys([*raw, *words]))
     return " | ".join(words[:max_terms])
 
 
@@ -232,13 +249,16 @@ class PgVectorStore:
             caps = await self._caps(session)
         except Exception as e:
             logger.error("vector_store.caps.error", error=str(e), exc_info=True)
-            raise VectorSearchError(str(e)) from e
+            # pas de SQL dans l'erreur
+            raise VectorSearchError(f"recherche impossible ({type(e).__name__})") from e
         if not caps.postgres:
             logger.debug("vector_store.search.no_pgvector", business_id=str(business_id))
             return []
 
-        pool = max(pool_size or POOL_SIZE, top_k)
-        tsq = build_tsquery(query_text) if (query_text and caps.fts) else ""
+        pool = max(pool_size or default_pool(), top_k)
+        tsq = ""
+        if query_text and caps.fts:
+            tsq = build_tsquery(query_text, keep_accents=caps.ts_config != TS_CONFIG)
         params = {
             "embedding": _vector_literal(query_embedding),
             "business_id": str(business_id),
@@ -297,7 +317,8 @@ class PgVectorStore:
                 error=str(e),
                 exc_info=True,
             )
-            raise VectorSearchError(str(e)) from e
+            # pas de SQL dans l'erreur
+            raise VectorSearchError(f"recherche impossible ({type(e).__name__})") from e
 
         docs = self._fuse(rows, query_text or "")
         kept = [d for d in docs if d.score >= score_threshold]
