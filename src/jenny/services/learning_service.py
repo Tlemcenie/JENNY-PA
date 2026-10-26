@@ -76,29 +76,32 @@ async def load_customer_context(
         from jenny.domain.models.appointment import Appointment
         from jenny.domain.models.customer import Customer
 
-        cust = await db.get(Customer, customer_id)
-        if cust is not None and (cust.full_name or "").strip():
-            first_name = cust.full_name.strip().split()[0]
+        # juste le nom, pas l'historique
+        full_name = await db.scalar(
+            select(Customer.full_name).where(
+                Customer.id == customer_id, Customer.business_id == business_id
+            )
+        )
+        if (full_name or "").strip():
+            first_name = full_name.strip().split()[0]
             extra.append(
                 f"Ce client s'appelle {first_name} — tu peux l'appeler par son prénom, "
                 "naturellement (une fois suffit, n'en fais pas trop)."
             )
-        last = (
-            await db.execute(
-                select(Appointment)
-                .where(
-                    Appointment.business_id == business_id,
-                    Appointment.customer_id == customer_id,
-                    Appointment.status.notin_(["cancelled", "blocked"]),
-                    Appointment.start_at < datetime.now(UTC),
-                )
-                .order_by(Appointment.start_at.desc())
-                .limit(1)
+        last_title = await db.scalar(
+            select(Appointment.title)
+            .where(
+                Appointment.business_id == business_id,
+                Appointment.customer_id == customer_id,
+                Appointment.status.notin_(["cancelled", "blocked"]),
+                Appointment.start_at < datetime.now(UTC),
             )
-        ).scalar_one_or_none()
-        if last is not None:
+            .order_by(Appointment.start_at.desc())
+            .limit(1)
+        )
+        if last_title is not None:
             extra.append(
-                f"Client déjà venu — dernière prestation : « {last.title} ». Tu peux "
+                f"Client déjà venu — dernière prestation : « {last_title} ». Tu peux "
                 "lui proposer la même (« comme la dernière fois ? ») si pertinent."
             )
     except Exception as exc:  # pragma: no cover - dépend de l'environnement DB
