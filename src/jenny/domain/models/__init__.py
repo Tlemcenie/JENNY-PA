@@ -30,6 +30,7 @@ from jenny.domain.models.pending_question import PendingQuestion
 from jenny.domain.models.prestation import Prestation
 from jenny.domain.models.quote import Quote
 from jenny.domain.models.review import Review
+from jenny.domain.models.staff import Staff, StaffSkill
 from jenny.domain.models.support_ticket import SupportTicket
 from jenny.domain.models.transaction_type import TransactionType
 from jenny.domain.models.user import User
@@ -63,6 +64,8 @@ __all__ = [
     "Prestation",
     "Quote",
     "Review",
+    "Staff",
+    "StaffSkill",
     "SupportTicket",
     "TransactionType",
     "User",
