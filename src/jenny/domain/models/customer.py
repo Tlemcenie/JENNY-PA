@@ -7,7 +7,7 @@ Un CustomerProfile centralise les informations d'un client
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -53,6 +53,22 @@ class Customer(Base, TimestampMixin):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # RGPD : date d'anonymisation (droit à l'effacement). None = données actives.
     anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    # ── Plafond anti-spam ──
+    # dernière offre commerciale
+    last_offer_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # début de la fenêtre 7 jours
+    offer_window_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    # offres dans la fenêtre
+    offer_window_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    # a répondu STOP
+    marketing_opt_out_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
 
     # Relations
     business = relationship("Business", back_populates="customers")
