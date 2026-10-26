@@ -77,8 +77,8 @@ class Settings(BaseSettings):
     # tête mpnet ou lstm
     intent_model_kind: Literal["lstm", "head"] = "head"
     intent_head_path: str = "checkpoints/intent_head/head.npz"
-    # ner actif : slots service, date
-    enable_ner_model: bool = True
+    # ner coupé : écrase la presta
+    enable_ner_model: bool = False
 
     # embeddings RAG
     # multilingue, 100 % en-process

@@ -41,8 +41,8 @@ class TestReglages:
         monkeypatch.delenv("JENNY_ENABLE_NER_MODEL", raising=False)
         s = Settings(_env_file=None)
         assert s.intent_model_kind == "head"
-        # ner remis par défaut
-        assert s.enable_ner_model is True
+        # ner coupé, slot pas protégé
+        assert s.enable_ner_model is False
         assert s.intent_head_path == "checkpoints/intent_head/head.npz"
 
     def test_type_inconnu_refuse(self) -> None:

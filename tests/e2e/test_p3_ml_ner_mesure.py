@@ -1,4 +1,4 @@
-"""ner gardé : la mesure le prouve."""
+"""ner coupé : la mesure le prouve."""
 
 import importlib.util
 from pathlib import Path
@@ -47,20 +47,22 @@ class TestGold:
         assert ev.gap_kind("coupe", None) == "servi_seul"
 
 
-def test_ner_actif_par_defaut() -> None:
-    assert Settings(_env_file=None).enable_ner_model is True
+def test_ner_coupe_par_defaut() -> None:
+    # écrase la presta du rdv
+    assert Settings(_env_file=None).enable_ner_model is False
 
 
 @pytest.mark.skipif(not all(p.exists() for p in CKPTS), reason="checkpoints absents")
 @pytest.mark.asyncio
-async def test_ner_remplit_plus_sans_se_tromper(ev) -> None:
+async def test_ner_remplit_plus_mais_risque(ev) -> None:
     engines = ev.build_engines()
     convs = [(m, ev.CATALOG) for m in ev.scenario_messages()]
     gold = ev.load_gold()
-    res = {}
+    res, risk = {}, {}
     for name, eng in engines.items():
         runs = await ev.replay(eng, convs)
         res[name] = ev.score(runs, gold, ev.RDV_INTENTS)
+        risk[name] = ev.risks(runs, [c for _, c in convs])
     avec, sans = res["avec_ner"], res["sans_ner"]
     # mesuré : 88,9 contre 55,6
     assert avec["service"]["rappel_pct"] > sans["service"]["rappel_pct"]
@@ -68,3 +70,43 @@ async def test_ner_remplit_plus_sans_se_tromper(ev) -> None:
     # mesuré : 83,3 contre 66,7
     assert avec["date"]["rappel_pct"] > sans["date"]["rappel_pct"]
     assert avec["time"]["rappel_pct"] >= sans["time"]["rappel_pct"]
+    # mais : presta écrasée, hors catalogue
+    assert risk["avec_ner"]["ecrase_hors_rdv"]["service"] > 0
+    assert risk["avec_ner"]["hors_catalogue"] > 0
+    # sans ner : aucun risque
+    assert risk["sans_ner"]["pose_hors_rdv"] == 0
+    assert risk["sans_ner"]["hors_catalogue"] == 0
+    assert set(risk["sans_ner"]["ecrase_hors_rdv"].values()) == {0}
+
+
+class TestRisques:
+    """compteurs de risques."""
+
+    def test_ecrase_pendant_question(self, ev) -> None:
+        conv = [
+            {
+                "intent": "appointment",
+                "slots": {"service": "Coupe homme"},
+                "state": {"service": "Coupe homme"},
+            },
+            {
+                "intent": "pricing",
+                "slots": {"service": "coupe femme"},
+                "state": {"service": "coupe femme"},
+            },
+            {
+                "intent": "appointment",
+                "slots": {"time": "14:00"},
+                "state": {"service": "coupe femme", "time": "14:00"},
+            },
+        ]
+        r = ev.risks([conv], [ev.CATALOG])
+        assert r["ecrase_hors_rdv"] == {"service": 1, "date": 0, "time": 0}
+        assert r["pose_hors_rdv"] == 1
+        assert r["hors_catalogue"] == 0
+
+    def test_hors_catalogue(self, ev) -> None:
+        conv = [{"intent": "appointment", "slots": {"service": "lissage brésilien"}, "state": {}}]
+        r = ev.risks([conv], [ev.CATALOG])
+        assert r["hors_catalogue"] == 1
+        assert r["exemples_hors_catalogue"] == ["lissage brésilien"]

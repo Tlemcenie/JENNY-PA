@@ -164,18 +164,17 @@ class TestMpnetUnique:
 
 
 class TestNerParDefaut:
-    """le ner remplit les slots."""
+    """ner coupé, réactivable."""
 
-    def test_defaut_actif(self, monkeypatch) -> None:
+    def test_defaut_coupe(self, monkeypatch) -> None:
         monkeypatch.delenv("JENNY_ENABLE_NER_MODEL", raising=False)
         s = Settings(_env_file=None)
-        assert s.enable_ner_model is True
+        assert s.enable_ner_model is False
         assert s.intent_head_path == "checkpoints/intent_head/head.npz"
 
     @pytest.mark.skipif(not (HEAD_OK and NER_OK), reason="checkpoints absents")
-    def test_charge_avec_head(self, monkeypatch, env) -> None:
-        monkeypatch.delenv("JENNY_ENABLE_NER_MODEL", raising=False)
-        env(enable_ml_models="true", intent_model_kind="head")
+    def test_charge_avec_head(self, env) -> None:
+        env(enable_ml_models="true", intent_model_kind="head", enable_ner_model="true")
         intent, ner = factory.load_ml_predictors()
         assert isinstance(intent, EmbeddingIntentPredictor)
         assert isinstance(ner, NERPredictor)

@@ -1,4 +1,4 @@
-"""réglages de service : head + ner, vraie résa."""
+"""head + ner réactivé, vraie résa."""
 
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -55,10 +55,11 @@ def _jour_ouvert() -> tuple[str, date]:
 
 @pytest.fixture
 def engine(monkeypatch):
-    """moteur de service : head + ner."""
+    """head + ner, réactivé à la main."""
     monkeypatch.setenv("JENNY_ENABLE_ML_MODELS", "true")
     monkeypatch.delenv("JENNY_INTENT_MODEL_KIND", raising=False)
-    monkeypatch.delenv("JENNY_ENABLE_NER_MODEL", raising=False)
+    # coupé par défaut
+    monkeypatch.setenv("JENNY_ENABLE_NER_MODEL", "true")
     get_settings.cache_clear()
     eng = factory.build_engine(state_manager=StateManager())
     eng.response_generator = None
@@ -102,7 +103,7 @@ async def _send(eng, bid, cid, text):
 
 
 class TestServiceParNer:
-    """« coupe » sans nom complet."""
+    """presta du catalogue, phrase libre."""
 
     def test_reglages_de_service(self, engine) -> None:
         assert type(engine.intent_predictor).__name__ == "EmbeddingIntentPredictor"
@@ -111,7 +112,10 @@ class TestServiceParNer:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "modele",
-        ["jvoudrais un rdv coupe {jour} 15h svp", "je veux reserver une coupe pour {jour} 11h"],
+        [
+            "jvoudrais un rdv coupe homme {jour} 15h svp",
+            "je veux reserver une coupe homme pour {jour} 11h",
+        ],
     )
     async def test_coupe_reservee(self, db_tables, engine, modele) -> None:
         bid, cid = await _salon()
@@ -123,7 +127,8 @@ class TestServiceParNer:
             appt = (
                 await s.execute(select(Appointment).where(Appointment.business_id == bid))
             ).scalar_one()
-        assert appt.title.startswith("Coupe")
+        # « coupe » seule : voir test_p3_ml_ner_resa
+        assert appt.title.startswith("Coupe homme"), appt.title
         assert appt.start_at.astimezone(PARIS).date() == d
 
 

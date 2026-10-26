@@ -119,7 +119,7 @@ def load_ml_predictors() -> tuple[object | None, object | None]:
         return None, None
 
     intent_predictor = load_intent_predictor()
-    # le ner remplit service et date
+    # ner optionnel, coupé par défaut
     ner_predictor = load_ner_predictor() if settings.enable_ner_model else None
     return intent_predictor, ner_predictor
 
