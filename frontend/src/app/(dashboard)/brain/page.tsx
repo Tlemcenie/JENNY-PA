@@ -8,7 +8,18 @@ import {
   type KeyboardEvent,
 } from "react";
 import { motion } from "framer-motion";
-import { Plus, Check, Sparkles, X, Wallet, BellRing, CalendarOff, Trash } from "lucide-react";
+import {
+  Plus,
+  Check,
+  Sparkles,
+  X,
+  Wallet,
+  BellRing,
+  CalendarOff,
+  Trash,
+  CloudCheck,
+  CloudAlert,
+} from "lucide-react";
 import {
   getBusiness,
   updateBusiness,
@@ -63,6 +74,68 @@ const DEFAULT_RULES: Rule[] = [
   { label: "Transférer à un humain si réclamation sérieuse", on: true },
   { label: "Ne jamais mentionner les concurrents", on: false },
 ];
+
+type SaveState = "idle" | "pending" | "saving" | "saved" | "error";
+
+// texte d'état de sauvegarde
+function saveLabel(state: SaveState, savedAt: Date | null): string {
+  if (state === "pending") return "Modifications en attente…";
+  if (state === "saving") return "Enregistrement…";
+  if (state === "error") return "Échec de l'enregistrement";
+  if (state === "saved" && savedAt) {
+    return `Enregistré à ${savedAt.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`;
+  }
+  return "Sauvegarde automatique";
+}
+
+// pastille d'état visible
+function SaveStatus({
+  state,
+  savedAt,
+  onRetry,
+}: {
+  state: SaveState;
+  savedAt: Date | null;
+  onRetry: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "inline-flex items-center gap-1.5 h-8 px-3 rounded-full border text-[12px] font-medium shadow-sm transition-colors",
+        state === "error"
+          ? "bg-jenny-error/10 border-jenny-error/30 text-jenny-error"
+          : state === "saved"
+            ? "bg-jenny-success/10 border-jenny-success/25 text-jenny-success"
+            : "bg-jenny-surface border-jenny-divider text-jenny-text-secondary"
+      )}
+    >
+      {state === "saving" ? (
+        <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+      ) : state === "pending" ? (
+        <span className="w-1.5 h-1.5 rounded-full bg-jenny-warning animate-pulse" aria-hidden="true" />
+      ) : state === "error" ? (
+        <CloudAlert className="w-3.5 h-3.5" aria-hidden="true" />
+      ) : (
+        <CloudCheck className="w-3.5 h-3.5" aria-hidden="true" />
+      )}
+      <span>{saveLabel(state, savedAt)}</span>
+      {state === "error" && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="ml-1 underline underline-offset-2 font-semibold hover:no-underline"
+        >
+          Réessayer
+        </button>
+      )}
+    </div>
+  );
+}
 
 function extractError(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
@@ -135,6 +208,12 @@ export default function BrainPage() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // empreinte du dernier état sauvé
   const lastSaved = useRef<string>("");
+  // retour visuel de sauvegarde
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
+  // modifs pas encore envoyées
+  const dirty = useRef(false);
+  const inFlight = useRef(false);
 
   const applyBusiness = useCallback((b: BusinessConfig) => {
     setName(b.name || "");
@@ -219,16 +298,26 @@ export default function BrainPage() {
   const persist = useCallback(
     async (opts: { silent?: boolean } = {}) => {
       const payload = buildPayload();
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      dirty.current = false;
+      inFlight.current = true;
       setSaving(true);
+      setSaveState("saving");
       try {
         const updated = await updateBusiness(payload);
         // fige l'empreinte avant de réappliquer
         lastSaved.current = JSON.stringify(payload);
-        applyBusiness(updated);
+        // garde la saisie en cours
+        if (!dirty.current) applyBusiness(updated);
+        setSavedAt(new Date());
+        setSaveState(dirty.current ? "pending" : "saved");
         if (!opts.silent) toast.success("Personnalité de Jenny enregistrée.");
       } catch (err) {
+        dirty.current = true;
+        setSaveState("error");
         toast.error(extractError(err, "Échec de l'enregistrement."));
       } finally {
+        inFlight.current = false;
         setSaving(false);
       }
     },
@@ -246,6 +335,8 @@ export default function BrainPage() {
     }
     if (snapshot === lastSaved.current) return; // écho serveur, on ignore
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    dirty.current = true;
+    setSaveState("pending");
     saveTimer.current = setTimeout(() => {
       void persist({ silent: true });
     }, 1200);
@@ -270,6 +361,35 @@ export default function BrainPage() {
     dayReminderLeadHours,
     loyaltyThreshold,
   ]);
+
+  // dernière version de persist
+  const persistRef = useRef(persist);
+  useEffect(() => {
+    persistRef.current = persist;
+  }, [persist]);
+
+  // envoie avant de quitter
+  useEffect(() => {
+    const onUnload = (e: BeforeUnloadEvent) => {
+      if (!dirty.current && !inFlight.current) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    // ctrl+s enregistre direct
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && hydrated.current) {
+        e.preventDefault();
+        void persistRef.current();
+      }
+    };
+    window.addEventListener("beforeunload", onUnload);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("keydown", onKey);
+      if (dirty.current) void persistRef.current({ silent: true });
+    };
+  }, []);
 
   // fermetures : chargement + actions
   const loadClosures = useCallback(async () => {
@@ -433,8 +553,12 @@ export default function BrainPage() {
         <div className="grid lg:grid-cols-[1fr_360px] gap-7 items-start">
           {/* colonne formulaire */}
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-            <div className="font-mono text-[11px] tracking-[0.22em] uppercase text-jenny-coral mb-3">
-              — le cerveau de jenny —
+            {/* barre collante + état */}
+            <div className="sticky top-0 z-20 -mx-3 px-3 py-2 mb-1 flex items-center justify-between gap-3 bg-jenny-bg/90 backdrop-blur-sm">
+              <div className="font-mono text-[11px] tracking-[0.22em] uppercase text-jenny-coral">
+                — le cerveau de jenny —
+              </div>
+              <SaveStatus state={saveState} savedAt={savedAt} onRetry={() => void persist()} />
             </div>
             <h1 className="font-display font-normal text-[clamp(34px,5vw,48px)] leading-[1.05] tracking-[-0.02em] mb-3.5">
               Apprenez-lui à <span className="italic text-jenny-coral">vous ressembler.</span>
@@ -518,8 +642,8 @@ export default function BrainPage() {
                       className={cn(
                         "text-left p-3.5 rounded-xl transition-all",
                         active
-                          ? "bg-jenny-coral-tint border-2 border-jenny-coral"
-                          : "bg-white border border-jenny-divider hover:border-jenny-coral/40"
+                          ? "bg-jenny-coral/10 border-2 border-jenny-coral"
+                          : "bg-jenny-surface border border-jenny-divider hover:border-jenny-coral/40"
                       )}
                     >
                       <div className="text-sm font-semibold mb-0.5 text-jenny-text">{t.name}</div>
@@ -588,7 +712,7 @@ export default function BrainPage() {
                   {vocab.map((w) => (
                     <span
                       key={w}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-jenny-divider rounded-full text-[12.5px] text-jenny-text"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-jenny-surface border border-jenny-divider rounded-full text-[12.5px] text-jenny-text"
                     >
                       {w}
                       <button
@@ -1037,8 +1161,9 @@ export default function BrainPage() {
                 )}
                 Enregistrer
               </button>
-              <span className="text-[12px] font-mono text-jenny-text-secondary/70">
-                {saving ? "Enregistrement…" : "Sauvegarde automatique active"}
+              <span className="text-[12px] font-mono text-jenny-text-secondary/70" aria-hidden="true">
+                {saveLabel(saveState, savedAt)}
+                <span className="hidden sm:inline"> · Ctrl+S</span>
               </span>
             </div>
           </motion.div>
