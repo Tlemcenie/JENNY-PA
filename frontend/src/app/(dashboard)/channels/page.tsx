@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  apiDetail,
   connectChannel,
   disconnectChannel,
   getChannelFields,
@@ -220,9 +221,8 @@ function ChannelDialog({
       onSaved();
       onClose();
     } catch (e) {
-      const detail =
-        (e as { data?: { detail?: string } })?.data?.detail || "Échec de l'enregistrement.";
-      setMsg({ kind: "err", text: detail });
+      // 409/503 : message du serveur
+      setMsg({ kind: "err", text: apiDetail(e) || humanError(e, "Échec de l'enregistrement.") });
     } finally {
       setSaving(false);
     }
@@ -234,8 +234,11 @@ function ChannelDialog({
     try {
       const r = await testChannel(channel.channel);
       setMsg({ kind: r.ok ? "ok" : "err", text: r.detail });
-    } catch {
-      setMsg({ kind: "err", text: "Test impossible (enregistrez d'abord les identifiants)." });
+    } catch (e) {
+      setMsg({
+        kind: "err",
+        text: apiDetail(e) || humanError(e, "Test impossible (enregistrez d'abord les identifiants)."),
+      });
     } finally {
       setTesting(false);
     }
@@ -248,8 +251,8 @@ function ChannelDialog({
       await disconnectChannel(channel.channel);
       onSaved();
       onClose();
-    } catch {
-      setMsg({ kind: "err", text: "Échec de la déconnexion." });
+    } catch (e) {
+      setMsg({ kind: "err", text: humanError(e, "Échec de la déconnexion.") });
     } finally {
       setSaving(false);
     }
