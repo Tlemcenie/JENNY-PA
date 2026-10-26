@@ -7,11 +7,16 @@ puis les clients dont la relance est due) et on leur propose la place.
 Garde-fous : plafond anti-spam par client, jamais deux fois le même
 créneau au même client, un créneau proposé reste « tenu » quelques
 heures, et rien ne part la nuit. Chaque offre est enregistrée.
+
+Le message ne cite qu'une prestation du catalogue (jamais le titre
+libre d'un RDV, qui peut contenir un nom ou une note interne).
+Une seule passe à la fois par salon (verrou en mémoire).
 """
 
 from __future__ import annotations
 
 import asyncio
+import time as _clock
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
@@ -20,6 +25,8 @@ from uuid import uuid4
 from sqlalchemy import select, update
 from sqlalchemy.orm import lazyload
 
+# trace des créneaux libérés
+import jenny.services.freed_slots  # noqa: F401
 from jenny.core.logging import get_logger
 from jenny.domain.models.appointment import Appointment
 from jenny.domain.models.business import Business
@@ -90,12 +97,29 @@ class Candidate:
     name: str | None = None
     window: str | None = None
     score: float = 0.0
+    # nom sûr pour le message
+    label: str | None = None
 
     @property
     def recipient_key(self) -> str:
-        if self.customer is not None:
-            return str(self.customer.id)
-        return f"conv:{self.conversation_id}"
+        return recipient_key(self.customer.id if self.customer else None, self.conversation_id)
+
+
+def recipient_key(customer_id: UUID | None, conversation_id: UUID | None) -> str:
+    """Clé d'idempotence d'une offre."""
+    if customer_id is not None:
+        return str(customer_id)
+    return f"conv:{conversation_id}"
+
+
+def catalogue_label(prestations: list, text: str | None) -> str | None:
+    """Nom catalogue, jamais le texte libre."""
+    from jenny.services.prestation_service import find_prestation
+
+    if not text or not prestations:
+        return None
+    p = find_prestation(prestations, text)
+    return p.name[:60] if p is not None and p.name else None
 
 
 @dataclass(slots=True)
@@ -160,7 +184,7 @@ def offer_text(c: Candidate, *, salon: str, when: str, link: str | None) -> str:
     prenom = first_name(c.name)
     hello = f"Bonjour {prenom} !" if prenom else "Bonjour !"
     # sans « » : SMS moins cher
-    svc = f" ({c.service})" if c.service else ""
+    svc = f" ({c.label})" if c.label else ""
     if c.source == "waitlist":
         body = f"Bonne nouvelle : une place s'est libérée {when}{svc}, comme vous l'attendiez."
     else:
@@ -270,17 +294,20 @@ async def waitlist_candidates(
     out: list[Candidate] = []
     for e in entries:
         cust = None
-        conv_ok = await _direct_conv(db, business.id, e.conversation_id)
-        if e.customer_id is not None:
-            cust = await db.get(Customer, e.customer_id, options=[lazyload("*")])
+        conv = await _direct_conv(db, business.id, e.conversation_id)
+        # fiche liée au fil ?
+        cust_id = e.customer_id or (conv.customer_id if conv is not None else None)
+        if cust_id is not None:
+            cust = await db.get(Customer, cust_id, options=[lazyload("*")])
             if cust is None or cust.business_id != business.id:
                 continue
             if not can_offer(cust, now):
+                # plafond ou STOP
                 continue
-            convs = {cust.id: e.conversation_id} if conv_ok else {}
+            convs = {cust.id: e.conversation_id} if conv is not None else {}
             if not is_reachable(cust, convs):
                 continue
-        elif not conv_ok:
+        elif conv is None:
             # anonyme sans canal direct
             continue
         out.append(
@@ -293,29 +320,44 @@ async def waitlist_candidates(
                 entry=e,
                 name=(cust.full_name if cust else None) or e.customer_name,
                 window=e.desired_window,
+                # ses propres mots
+                label=catalogue_label(prestations, e.service) or _short(e.service),
             )
         )
     return out
 
 
-async def _direct_conv(db: AsyncSession, business_id: UUID, conv_id: UUID | None) -> bool:
-    """Fil WhatsApp/Insta joignable ?"""
+def _short(text: str | None, n: int = 60) -> str | None:
+    """Texte court ou rien."""
+    t = (text or "").strip()
+    return t[:n] if t else None
+
+
+async def _direct_conv(db: AsyncSession, business_id: UUID, conv_id: UUID | None):
+    """Fil WhatsApp/Insta joignable, ou None."""
     from jenny.domain.models.conversation import Conversation
     from jenny.services.campaigns import DIRECT_CHANNELS
 
     if conv_id is None:
-        return False
+        return None
     conv = await db.get(Conversation, conv_id, options=[lazyload("*")])
-    return (
+    if (
         conv is not None
         and conv.business_id == business_id
         and conv.channel in DIRECT_CHANNELS
         and bool(conv.external_conversation_id)
-    )
+    ):
+        return conv
+    return None
 
 
 async def rebook_candidates(
-    db: AsyncSession, business: Business, now: datetime, *, pool: int = REBOOK_POOL
+    db: AsyncSession,
+    business: Business,
+    now: datetime,
+    *,
+    pool: int = REBOOK_POOL,
+    prestations: list | None = None,
 ) -> list[Candidate]:
     """Clients dont la relance est due, plus en retard d'abord."""
     vs = visit_stats(business.id, now)
@@ -367,15 +409,18 @@ async def rebook_candidates(
         if appt is not None:
             mins = int((_aware(appt.end_at) - _aware(appt.start_at)).total_seconds() // 60)
             duration = max(15, min(240, mins))
+        title = appt.title if appt is not None else None
         out.append(
             Candidate(
                 source="rebook",
                 duration=duration,
-                service=appt.title if appt is not None else None,
+                service=title,
                 customer=cust,
                 conversation_id=convs.get(cust.id),
                 name=cust.full_name,
                 score=round(score, 2),
+                # titre libre : jamais tel quel
+                label=catalogue_label(prestations or [], title),
             )
         )
     return out
@@ -475,7 +520,7 @@ async def fill_gaps_for_business(
     tz = business_tz(business)
     prestations = await load_active_prestations(db, business.id)
     candidates = await waitlist_candidates(db, business, prestations, now)
-    candidates += await rebook_candidates(db, business, now)
+    candidates += await rebook_candidates(db, business, now, prestations=prestations)
     report.candidates = len(candidates)
 
     gaps = await find_gaps(db, business, {30} | {c.duration for c in candidates}, now)
@@ -540,7 +585,7 @@ async def _send_offer(
         "recipient_key": c.recipient_key,
         "slot_start": p.slot_start,
         "duration_minutes": c.duration,
-        "service": c.service[:120] if c.service else None,
+        "service": (c.label or c.service or "")[:120] or None,
         "source": c.source,
         "reason": reason,
     }
@@ -629,7 +674,7 @@ async def run_gap_filler(now: datetime | None = None) -> dict[str, int]:
     stats["businesses"] = len(ids)
     for bid in ids:
         try:
-            async with async_session_factory() as db:
+            async with business_lock(bid), async_session_factory() as db:
                 biz = await db.get(Business, bid)
                 if biz is None:
                     continue
@@ -650,50 +695,130 @@ async def run_gap_filler(now: datetime | None = None) -> dict[str, int]:
     return stats
 
 
-# ── après annulation, sans worker ──
+# ── une passe à la fois ──
+
+_locks: dict[UUID, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
+
+
+def business_lock(business_id: UUID) -> asyncio.Lock:
+    """Verrou de passe d'un salon."""
+    loop = asyncio.get_running_loop()
+    cur = _locks.get(business_id)
+    if cur is None or cur[0] is not loop:
+        # nouvelle boucle (tests)
+        cur = (loop, asyncio.Lock())
+        _locks[business_id] = cur
+    return cur[1]
+
+
+# ── worker ARQ vivant ? ──
+
+# clé posée par arq
+WORKER_HEALTH_KEY = "arq:queue:health-check"
+_WORKER_TTL = 60.0
+_worker_seen: dict[str, tuple[float, bool]] = {}
+
+
+async def worker_alive() -> bool:
+    """Un worker ARQ tourne-t-il ?"""
+    from jenny.core.config import get_settings
+
+    url = get_settings().redis_url
+    if not url:
+        return False
+    hit = _worker_seen.get(url)
+    if hit is not None and _clock.monotonic() - hit[0] < _WORKER_TTL:
+        return hit[1]
+    alive = False
+    try:
+        from redis.asyncio import from_url
+
+        client = from_url(url, socket_connect_timeout=1, socket_timeout=1)
+        try:
+            alive = bool(await client.exists(WORKER_HEALTH_KEY))
+        finally:
+            await client.aclose()
+    except Exception:  # Redis absent
+        alive = False
+    _worker_seen[url] = (_clock.monotonic(), alive)
+    return alive
+
+
+# ── après annulation ──
 
 _pending: dict[UUID, asyncio.Task] = {}
+# changement pendant une passe
+_again: set[UUID] = set()
+
+
+async def run_for_business(business_id: UUID, *, reason: str = "annulation") -> GapReport | None:
+    """Passe pour un salon, sous verrou."""
+    from jenny.db.session import async_session_factory
+
+    async with business_lock(business_id), async_session_factory() as db:
+        biz = await db.get(Business, business_id)
+        if biz is None or not biz.is_active:
+            return None
+        return await fill_gaps_for_business(db, biz, reason=reason)
 
 
 async def _run_soon(business_id: UUID, delay: float) -> None:
-    """Passe « annulation » pour un salon."""
-    from jenny.db.session import async_session_factory
-
+    """Passe « annulation », worker ou ici."""
     try:
         await asyncio.sleep(delay)
-        async with async_session_factory() as db:
-            biz = await db.get(Business, business_id)
-            if biz is not None and biz.is_active:
-                await fill_gaps_for_business(db, biz, reason="annulation")
+        if await worker_alive() and await _enqueue(business_id):
+            return
+        while True:
+            _again.discard(business_id)
+            await run_for_business(business_id)
+            if business_id not in _again:
+                break
     except Exception as exc:  # jamais bloquant
         logger.error("gap_filler.after_change_failed", error=str(exc))
     finally:
         _pending.pop(business_id, None)
+        _again.discard(business_id)
 
 
-def schedule_after_change(db: AsyncSession, business_id: UUID, *, delay: float = 2.0) -> bool:
-    """Lance une passe après le commit.
+async def _enqueue(business_id: UUID) -> bool:
+    """Confie la passe au worker."""
+    try:
+        from jenny.workers.queue import get_arq_pool
 
-    Avec Redis, le worker s'en charge (cron) : on ne fait rien ici.
-    """
+        pool = await get_arq_pool()
+        await pool.enqueue_job("fill_gaps_after_change", str(business_id))
+        return True
+    except Exception as exc:  # repli ici
+        logger.warning("gap_filler.enqueue_failed", error=str(exc))
+        return False
+
+
+def _launch(business_id: UUID, delay: float) -> bool:
+    """Crée la tâche, une par salon."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    task = _pending.get(business_id)
+    if task is not None and not task.done() and task.get_loop() is loop:
+        # elle repassera
+        _again.add(business_id)
+        return True
+    _pending[business_id] = loop.create_task(_run_soon(business_id, delay))
+    return True
+
+
+async def schedule_after_change(db: AsyncSession, business_id: UUID, *, delay: float = 2.0) -> bool:
+    """Passe de remplissage juste après le commit."""
     from sqlalchemy import event
 
-    from jenny.core.config import get_settings
-
-    if get_settings().redis_url:
-        return False
-    sync = getattr(db, "sync_session", None)
-    if sync is None:
-        return False
+    sync = getattr(db, "sync_session", db)
+    if not sync.in_transaction():
+        # déjà commité
+        return _launch(business_id, delay)
 
     def _go(_session) -> None:
-        if business_id in _pending:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        _pending[business_id] = loop.create_task(_run_soon(business_id, delay))
+        _launch(business_id, delay)
 
     event.listen(sync, "after_commit", _go, once=True)
     return True
@@ -750,10 +875,15 @@ async def offer_stats(
 
 __all__ = [
     "GapReport",
+    "business_lock",
+    "catalogue_label",
     "fill_gaps_for_business",
     "offer_stats",
     "plan_offers",
+    "recipient_key",
+    "run_for_business",
     "run_gap_filler",
     "schedule_after_change",
     "window_ok",
+    "worker_alive",
 ]

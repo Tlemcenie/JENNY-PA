@@ -15,10 +15,10 @@ from jenny.connectors.email.imap_utils import fetch_unseen_mails_sync, parse_mim
 from jenny.connectors.email.service import EmailConnectorService
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
-from jenny.notifications.outbound import notify_customer
 from jenny.db.repositories.message_event_repo import MessageEventRepository
 from jenny.db.repositories.message_repo import MessageRepository
 from jenny.db.session import async_session_factory
+from jenny.notifications.outbound import notify_customer
 from jenny.services.text_clean import clean_message_text, detect_language_safe
 
 logger = get_logger(__name__)
@@ -441,12 +441,25 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
 
 async def fill_agenda_gaps(ctx: dict[str, Any]) -> dict[str, str]:
     """cron : remplit les trous d'agenda."""
+    from jenny.services.campaigns import resume_stale_campaigns
     from jenny.services.gap_filler import run_gap_filler
 
-    stats = await run_gap_filler()
-    if stats.get("sent") or stats.get("failed"):
+    stats: dict[str, Any] = dict(await run_gap_filler())
+    # campagnes coupées net
+    stats["resumed"] = await resume_stale_campaigns()
+    if stats.get("sent") or stats.get("failed") or stats.get("resumed"):
         logger.info("task.fill_agenda_gaps.done", **stats)
     return {k: str(v) for k, v in stats.items()}
+
+
+async def fill_gaps_after_change(ctx: dict[str, Any], business_id: str) -> dict[str, str]:
+    """passe après annulation."""
+    from jenny.services.gap_filler import run_for_business
+
+    rep = await run_for_business(UUID(business_id))
+    if rep is None:
+        return {"status": "skipped"}
+    return {"sent": str(rep.sent), "failed": str(rep.failed)}
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -475,9 +488,12 @@ class WorkerSettings:
         poll_imap_mailbox,
         sweep_conversations,
         fill_agenda_gaps,
+        fill_gaps_after_change,
     ]
     on_startup = startup
     on_shutdown = shutdown
+    # clé de vie courte
+    health_check_interval = 60
 
     cron_jobs: ClassVar[list] = [
         cron(poll_imap_mailbox, minute=_imap_cron_minutes()),
