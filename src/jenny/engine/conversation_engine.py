@@ -1052,6 +1052,10 @@ class ConversationEngine:
         if mgmt_op:
             state.set_slot("operation", mgmt_op)
             state.pending_intent = None
+        elif intent == "manage_appointment" and not _filled(state, "operation"):
+            # sans opération : pas d'annulation
+            intent = "general"
+            state.set_intent(intent, intent_confidence)
 
         # 3. entités, liste blanche
         entities = await self._extract_entities(msg_text, state)
