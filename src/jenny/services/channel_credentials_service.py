@@ -1,10 +1,17 @@
-"""Identifiants de canal par business."""
+"""Identifiants de canal par business.
+
+Chiffrés au repos (Fernet, ``JENNY_MASTER_KEY``). Sans clé : refus net, sauf
+opt-in explicite hors prod (``JENNY_ALLOW_PLAINTEXT_CREDENTIALS=true``).
+"""
 
 from __future__ import annotations
 
+import hmac
 import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from fastapi import HTTPException
 
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
@@ -111,6 +118,13 @@ def _has_token(channel: str, data: dict) -> bool:
     return False
 
 
+class CredentialsStorageError(HTTPException):
+    """Stockage sûr impossible (503)."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=503, detail=detail)
+
+
 # chiffrement au repos
 def _fernet():
     key = (get_settings().master_key or "").strip()
@@ -121,14 +135,30 @@ def _fernet():
 
         return Fernet(key.encode())
     except Exception as exc:  # clé invalide
-        logger.warning("channel_creds.fernet_init_failed", error=str(exc))
-        return None
+        logger.error("channel_creds.fernet_init_failed", error=str(exc))
+        raise CredentialsStorageError(
+            "JENNY_MASTER_KEY invalide : clé Fernet attendue."
+        ) from exc
+
+
+def _plaintext_allowed() -> bool:
+    """Clair permis ? (dev, opt-in)"""
+    s = get_settings()
+    return s.allow_plaintext_credentials and not s.is_prod
 
 
 def encrypt_credentials(data: dict) -> dict:
-    """Chiffre si clé maître."""
+    """Chiffre, jamais de clair muet."""
     f = _fernet()
     if f is None:
+        if not _plaintext_allowed():
+            logger.error("channel_creds.no_master_key")
+            raise CredentialsStorageError(
+                "JENNY_MASTER_KEY manquante : les identifiants ne peuvent pas être "
+                "stockés en sécurité. En dev seulement : "
+                "JENNY_ALLOW_PLAINTEXT_CREDENTIALS=true."
+            )
+        logger.warning("channel_creds.stored_plaintext")
         return dict(data)
     token = f.encrypt(json.dumps(data, ensure_ascii=False).encode()).decode()
     return {"__enc__": token}
@@ -139,7 +169,10 @@ def decrypt_credentials(stored: dict | None) -> dict:
     if not stored:
         return {}
     if "__enc__" in stored:
-        f = _fernet()
+        try:
+            f = _fernet()
+        except CredentialsStorageError:
+            return {}
         if f is None:
             logger.warning("channel_creds.decrypt_no_key")
             return {}
@@ -264,14 +297,21 @@ async def matches_verify_token(session: AsyncSession, channel: str, token: str) 
     if not token:
         return False
     env = _creds_from_env(channel)
-    if env and env.get("verify_token") == token:
+    if env and _same(env.get("verify_token"), token):
         return True
     repo = ChannelAccountRepository(session)
     for acc in await repo.list_with_credentials(channel):
         data = decrypt_credentials(acc.credentials_)
-        if data.get("verify_token") == token:
+        if _same(data.get("verify_token"), token):
             return True
     return False
+
+
+def _same(expected: object, given: str) -> bool:
+    """Comparaison à temps constant."""
+    if not isinstance(expected, str) or not expected:
+        return False
+    return hmac.compare_digest(expected.encode(), given.encode())
 
 
 def normalize_connect_payload(channel: str, raw: dict) -> tuple[str, dict, list[str]]:

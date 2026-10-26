@@ -8,8 +8,9 @@ from jenny.services import channel_credentials_service as svc
 
 
 def test_encrypt_plaintext_roundtrip_without_master_key(monkeypatch):
-    """Sans clé maître : stockage en clair, déchiffrement transparent."""
+    """Sans clé maître + opt-in dev : stockage en clair, déchiffrement transparent."""
     monkeypatch.setattr(svc, "_fernet", lambda: None)
+    monkeypatch.setattr(svc, "_plaintext_allowed", lambda: True)
     data = {"access_token": "tok123", "phone_number_id": "555"}
     stored = svc.encrypt_credentials(data)
     assert stored == data  # clair
