@@ -1,11 +1,8 @@
-"""Fiches KB réelles suivies après un changement du salon.
+"""KB réelle remise à jour après un changement du salon.
 
-Horaires, acompte, rappels, contact ou équipe modifiés : après le
-commit, les fiches générées (tag kb_coiffeur_reel) sont remises à jour
-en tâche de fond. Un changement de prestation retire les vieilles
-fiches prix (le catalogue est lu en direct). Les fiches du gérant (écrites, retouchées ou
-supprimées par lui) ne bougent pas. Rien si le salon n'a jamais été
-seedé, ou hors Postgres (tests SQLite).
+Après le commit (horaires, acompte, rappels, contact, équipe, prix),
+nos fiches (tag kb_coiffeur_reel) sont resynchronisées en fond.
+Fiches du gérant intactes. Rien hors Postgres ou sans seed.
 """
 
 from __future__ import annotations
@@ -97,7 +94,7 @@ def _forget(session: Session, previous: Any) -> None:
 def _after_commit(session: Session) -> None:
     """Commit final : synchro en fond."""
     if session.in_nested_transaction():
-        # savepoint : on attend la fin
+        # savepoint : on attend
         return
     found = session.info.pop(_KEY, None)
     if not found or not _app_engine(session):
@@ -116,7 +113,7 @@ def _app_engine(session: Session) -> bool:
         return False
     from jenny.db.session import engine
 
-    # même base que la tâche de fond
+    # même base que la tâche
     return bind.url == engine.sync_engine.url
 
 

@@ -58,7 +58,7 @@ class Report:
 
 
 async def _rows(session, business_id: str | None):
-    # traces de suppression : jamais vectorisées
+    # traces jamais vectorisées
     where = f"WHERE {NOT_TOMBSTONE_SQL}"
     if business_id:
         where += " AND business_id = :bid"

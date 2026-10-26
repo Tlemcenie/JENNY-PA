@@ -260,7 +260,7 @@ async def seed_coiffeur(db: DbSession, principal: CurrentUser) -> SeedCoiffeurRe
     if bid is None:
         raise HTTPException(400, "Aucun business associé")
 
-    # deux onglets : pas de catalogue en double
+    # pas de catalogue en double
     await _lock_seed(db, bid)
     existing = int(
         (

@@ -487,7 +487,7 @@ class PgVectorStore:
 
     async def add_tombstone(self, session: AsyncSession, business_id: UUID | str, key: str) -> None:
         """Note une fiche générée supprimée."""
-        # ni vecteur, ni texte, ni knowledge_id
+        # sans vecteur ni texte
         await session.execute(
             text(
                 f"""

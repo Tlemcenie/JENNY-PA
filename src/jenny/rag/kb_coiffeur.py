@@ -1061,7 +1061,7 @@ def is_edited(entry) -> bool:
     meta = getattr(entry, "metadata", None) or {}
     stamp = meta.get("gen_hash")
     if not stamp:
-        # ancienne fiche : on ne sait pas
+        # vieille fiche : on ignore
         return False
     return stamp != gen_hash(entry.title, entry.category, entry.content)
 
