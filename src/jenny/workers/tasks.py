@@ -439,6 +439,16 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
     }
 
 
+async def fill_agenda_gaps(ctx: dict[str, Any]) -> dict[str, str]:
+    """cron : remplit les trous d'agenda."""
+    from jenny.services.gap_filler import run_gap_filler
+
+    stats = await run_gap_filler()
+    if stats.get("sent") or stats.get("failed"):
+        logger.info("task.fill_agenda_gaps.done", **stats)
+    return {k: str(v) for k, v in stats.items()}
+
+
 async def startup(ctx: dict[str, Any]) -> None:
     """démarrage worker."""
     logger.info("worker.startup")
@@ -464,6 +474,7 @@ class WorkerSettings:
         sync_connector,
         poll_imap_mailbox,
         sweep_conversations,
+        fill_agenda_gaps,
     ]
     on_startup = startup
     on_shutdown = shutdown
@@ -472,6 +483,8 @@ class WorkerSettings:
         cron(poll_imap_mailbox, minute=_imap_cron_minutes()),
         # balaye chaque minute
         cron(sweep_conversations, minute=set(range(60))),
+        # matin + après annulation
+        cron(fill_agenda_gaps, minute=set(range(0, 60, 10)), timeout=540),
     ]
 
     # arq veut une instance RedisSettings

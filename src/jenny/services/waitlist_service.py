@@ -129,8 +129,8 @@ async def notify_waitlist_for_freed_slot(
     le contact du client et la prestation, pour un rappel prioritaire. Renvoie
     l'entrée prévenue, ou None si la file est vide / aucune entrée compatible.
 
-    Note : l'envoi automatique au client (WhatsApp/Insta) viendra plus tard ; pour
-    l'instant le salon est notifié et rappelle lui-même — c'est réel et exploitable.
+    Le client reçoit aussi un message (offre : plafond anti-spam). Si
+    personne n'attend, une passe de remplissage d'agenda est lancée.
     """
     waiting = (
         await db.execute(
@@ -145,6 +145,10 @@ async def notify_waitlist_for_freed_slot(
 
     match = next((e for e in waiting if _services_match(e.service, service)), None)
     if match is None:
+        # personne n'attend : on cherche d'autres clients
+        from jenny.services.gap_filler import schedule_after_change
+
+        schedule_after_change(db, business_id)
         return None
 
     match.status = "notified"
@@ -154,31 +158,11 @@ async def notify_waitlist_for_freed_slot(
     contact = f" ({match.customer_contact})" if match.customer_contact else ""
     svc_label = match.service or service or "une prestation"
     slot_txt = f" du {when_label}" if when_label else ""
-    db.add(
-        Notification(
-            business_id=business_id,
-            recipient=None,
-            kind="waitlist_match",
-            title="Place libérée — client en liste d'attente",
-            body=(
-                f"Le créneau{slot_txt} s'est libéré pour « {svc_label} ». "
-                f"Recontacte en priorité {who}{contact}, en liste d'attente."
-            ),
-            conversation_id=match.conversation_id,
-            meta={
-                "waitlist_entry_id": str(match.id),
-                "customer_id": str(match.customer_id) if match.customer_id else None,
-                "conversation_id": str(match.conversation_id)
-                if match.conversation_id
-                else None,
-                "service": match.service,
-            },
-        )
-    )
-    # on prévient LE CLIENT, pas seulement le salon
+
+    # on prévient LE CLIENT, plafond anti-spam compris
     from jenny.notifications.outbound import notify_customer
 
-    await notify_customer(
+    canal = await notify_customer(
         db,
         business_id=business_id,
         customer_id=match.customer_id,
@@ -188,6 +172,34 @@ async def notify_waitlist_for_freed_slot(
             f"pour « {svc_label} ». Ça vous intéresse ? Répondez-moi et je vous le bloque."
         ),
         subject="Un créneau s'est libéré",
+        commercial=True,
+    )
+    auto = (
+        f" Jenny l'a déjà prévenu par {canal}."
+        if canal
+        else " Pas de message auto (déjà sollicité cette semaine, STOP ou injoignable)."
+    )
+    db.add(
+        Notification(
+            business_id=business_id,
+            recipient=None,
+            kind="waitlist_match",
+            title="Place libérée — client en liste d'attente",
+            body=(
+                f"Le créneau{slot_txt} s'est libéré pour « {svc_label} ». "
+                f"Recontacte en priorité {who}{contact}, en liste d'attente.{auto}"
+            ),
+            conversation_id=match.conversation_id,
+            meta={
+                "waitlist_entry_id": str(match.id),
+                "customer_id": str(match.customer_id) if match.customer_id else None,
+                "conversation_id": str(match.conversation_id)
+                if match.conversation_id
+                else None,
+                "service": match.service,
+                "client_notified_via": canal,
+            },
+        )
     )
     logger.info(
         "waitlist.notified",
