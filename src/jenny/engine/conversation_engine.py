@@ -8,6 +8,7 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from jenny.agents.faq_agent import FAQ_MAX_DOCS, FAQ_MIN_SCORE, select_documents
 from jenny.core.logging import get_logger
 from jenny.engine.datetime_fr import (
     SOFT,
@@ -19,7 +20,6 @@ from jenny.engine.datetime_fr import (
     today_in,
 )
 from jenny.engine.intelligence import (
-    GAP_SCORE_HARD_FLOOR,
     clean_question,
     decide_clarification,
     detect_language,
@@ -52,6 +52,9 @@ def _ml_call(fn: Callable[[str], object], text: str) -> object:
 # seuil de confiance ML
 ML_CONFIDENCE_FLOOR = 0.5
 
+# réponse fixe au STOP
+STOP_REPLY_TEXT = "C'est noté, vous ne recevrez plus nos offres. Je reste là pour vos rendez-vous."
+
 # intentions de politesse
 GREETING_INTENTS = frozenset({"greeting", "small_talk"})
 # messages d'attente (« je regarde »)
@@ -71,26 +74,45 @@ _CLOSING_RE = re.compile(
     re.I,
 )
 
-# avant « à demain » : début, virgule, merci
-_BYE_LEAD = r"(?:^|[,;.!]|\b(?:merci|ok|super|parfait|top|alors|et|bon(?:ne)?\s+\w+))\s*"
+# avant « à demain »
+_BYE_LEAD = (
+    # pas « jusqu'à demain »
+    r"(?:^|[^\w\s'’]|\b(?:merci|ok|super|parfait|top|alors|et|bisous|bises|bcp|beaucoup|vous|"  # noqa: RUF001
+    r"toi|encore|bon(?:ne)?\s+\w+))\s*"
+)
+_WD_FR = r"lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche"
+_HOUR_FR = r"\d{1,2}\s*h(?:\s*\d{2})?"
+# fin d'au revoir : merci, bisous
+_BYE_TAIL = (
+    rf"(?:alors|donc|matin|soir|midi|sans\s+faute|bisous|bises|bisou|{_HOUR_FR}|"
+    r"(?:et\s+)?(?:encore\s+)?merci(?:\s+(?:encore|beaucoup|bcp|bien|infiniment|"
+    r"[àa]\s+vous|pour\s+tout))?|j['’]ai\s+h[âa]te|[àa]\s+(?:vous|toi|tous)|"  # noqa: RUF001
+    r"pour\s+(?:mon|ma|le|la|notre|votre)\s+(?:rdv|rendez[\s-]?vous|r[ée]servation)|"
+    r"(?:et\s+)?bonne\s+(?:journ[ée]e|soir[ée]e|nuit|fin\s+de\s+journ[ée]e))"
+)
 # « merci, à jeudi 10h ! »
 _FAREWELL_WHEN_RE = re.compile(
-    rf"{_BYE_LEAD}[àa]\s+(?:demain|apr[èe]s[\s-]?demain|lundi|mardi|mercredi|jeudi|vendredi|"
-    r"samedi|dimanche|midi|tout\s+[àa]\s+l['’]heure)(?:\s+prochain)?"  # noqa: RUF001
-    r"(?:[\s,]+(?:[àa]\s+)?(?:\d{1,2}\s*h(?:\s*\d{2})?|midi))?"
-    r"(?:[\s,]+(?:alors|donc|matin|soir|midi))*\s*[!.]*\s*$",
+    rf"{_BYE_LEAD}[àa]\s+(?:demain|apr[èe]s[\s-]?demain|{_WD_FR}|"
+    r"midi|tout\s+[àa]\s+l['’]heure)(?:\s+prochain)?(?:\s+en\s+(?:huit|quinze))?"  # noqa: RUF001
+    rf"(?:[\s,]+(?:[àa]\s+)?(?:{_HOUR_FR}|midi))?"
+    rf"(?:[^\w?]+{_BYE_TAIL})*[^\w?]*$",
     re.I,
 )
 # « bon week-end » : un souhait
 _WISH_RE = re.compile(
     r"\bbon(?:ne)?\s+(?:week[\s-]?end|soir[ée]e|nuit|semaine|vacances|"
-    r"apr[èe]s[\s-]?midi|aprem|fin\s+de\s+(?:journ[ée]e|semaine|soir[ée]e))\b",
+    r"apr[èe]s[\s-]?midi|aprem|fin\s+de\s+(?:journ[ée]e|semaine|soir[ée]e))\b"
+    # « bon dimanche ! » seul
+    rf"|\bbon(?:ne)?\s+(?:{_WD_FR})\b(?=\s*(?:$|[^\w\s?]|et\b|[àa]\s+(?:vous|toi|tous)\b))",
     re.I,
 )
 # « à ce soir », « à la prochaine »
 _SEE_YOU_RE = re.compile(
-    r"\b[àa]\s+(?:ce\s+(?:soir|midi|matin)|cet\s+apr[èe]s[\s-]?midi|tout\s+[àa]\s+l['’]heure|"  # noqa: RUF001
-    r"la\s+semaine\s+prochaine|la\s+prochaine|plus\s+tard|tr[èe]s\s+vite)\b",
+    r"\b[àa]\s+(?:ce\s+(?:soir|midi|matin)|cet\s+apr[èe]s[\s-]?midi|cet\s+aprem|"
+    r"tout\s+[àa]\s+l['’]heure|la\s+semaine\s+prochaine|la\s+prochaine|plus\s+tard|"  # noqa: RUF001
+    r"tr[èe]s\s+vite|dans\s+(?:\d{1,2}|une?|deux|trois|quinze|huit)\s+(?:jours?|semaines?|mois))\b"
+    # « à ce soir 18h »
+    rf"(?:[\s,]+(?:[àa]\s+|vers\s+)?{_HOUR_FR})?",
     re.I,
 )
 # vrai signal de report
@@ -160,16 +182,32 @@ _YES_RE = re.compile(
     r"ok\s+pour\s+moi|avec\s+plaisir|je\s+veux\s+bien)\b",
     re.I,
 )
-# accord léger, pas un oui
-_ACK_RE = re.compile(
-    r"^\s*(?:ok|okay|d['’]accord|dac|[çc]a\s+marche|parfait|super|top|nickel|"  # noqa: RUF001
-    r"pourquoi\s+pas|go)\b",
+# « ok » tout seul
+_ACK_ONLY_RE = re.compile(
+    r"^\s*(?:ok|okay|oki|d['’]accord|dac|[çc]a\s+marche|parfait|super|top|nickel|"  # noqa: RUF001
+    r"pourquoi\s+pas|go|allez|vas[\s-]y|allez[\s-]y)"
+    r"(?:[^\w?]+(?:merci(?:\s+beaucoup)?|alors|go|super|parfait|top|ok|d['’]accord))*"  # noqa: RUF001
+    r"[^\w?]*$",
     re.I,
 )
 # refus
 _DECLINE_RE = re.compile(
     r"^\s*(?:non|nan|nope|pas\s+la\s+peine|pas\s+besoin|sans\s+fa[çc]on|"
     r"laisse[zr]?\s+tomber|tant\s+pis)\b|\bpas\s+int[ée]ress",
+    re.I,
+)
+# « ok, inscrivez-moi »
+_OPT_IN_RE = re.compile(
+    r"\b(?:inscri(?:s|vez|re)|mett(?:ez|re)|note[zr]?|pr[ée]ven(?:ez|ir))[\s-]*moi\b"
+    r"|\bje\s+veux\s+bien\b|\bvolontiers\b",
+    re.I,
+)
+# refus poli, n'importe où
+_DECLINE_ANY_RE = re.compile(
+    r"\b(?:tant\s+pis|merci\s+quand\s+m[êe]me|quand\s+m[êe]me\s+merci|voir\s+ailleurs|"
+    r"(?:aller|irai|vais)\s+ailleurs|pas\s+la\s+peine|pas\s+besoin|sans\s+fa[çc]on|"
+    r"laisse[zr]?\s+tomber|non\s+merci|une\s+autre\s+fois|"
+    r"pas\s+pour\s+(?:moi|l['’]instant|le\s+moment))\b",  # noqa: RUF001
     re.I,
 )
 
@@ -180,10 +218,18 @@ def is_confirmation(message: str) -> bool:
     return bool(_YES_RE.search(m)) and not _DECLINE_RE.search(m)
 
 
-def accepts_offer(message: str) -> bool:
-    """Accepte une proposition ?"""
+def declines_offer(message: str) -> bool:
+    """Refuse la proposition ?"""
     m = message or ""
-    return bool(_YES_RE.search(m) or _ACK_RE.search(m)) and not _DECLINE_RE.search(m)
+    return bool(_DECLINE_RE.search(m) or _DECLINE_ANY_RE.search(m))
+
+
+def accepts_offer(message: str) -> bool:
+    """Vrai oui, ou « ok » tout seul."""
+    m = message or ""
+    if declines_offer(m):
+        return False
+    return is_confirmation(m) or bool(_ACK_ONLY_RE.match(m) or _OPT_IN_RE.search(m))
 
 
 # signaux de prise de rdv
@@ -235,9 +281,15 @@ _NOT_NAME_TEXT = """
     avec un une les en au aux fin debut journee soiree nuit heure heures apresmidi plutot
     finalement possible dispo disponible libre place jenny gentil gentille sympa adorable
     degrade pointes carre chignon tresse tresses boucles racines keratine defrisage
-    decoloration mise pli plis volume
+    decoloration mise pli plis volume mille mercis bisous bisou bises bise importe nimporte
+    pareil aucune aucun idee arrive tant pis laissez laisse tomber excellent formidable
+    impeccable parfaitement magnifique merveilleux trop bravo chouette extra courage
+    enchante enchantee hate cimer thx thanks sinon indifferent egal preference sans grave
+    souci soucis probleme vraiment certainement evidemment meme grand gros enorme immense
 """
 _NOT_NAME_WORDS = frozenset(_NOT_NAME_TEXT.split())
+# « Jenny Martin » : un nom
+_SOFT_NOT_NAME = frozenset({"jenny"})
 # de, la, van...
 _NAME_PARTICLES = frozenset(
     {"de", "du", "des", "la", "le", "van", "von", "der", "den", "el", "al", "da", "di", "dos"}
@@ -252,6 +304,12 @@ _THANKS_RE = re.compile(r"\bmerci\b", re.I)
 _LEAD_FILLER_RE = re.compile(
     r"^\s*(?:(?:oui|ouais|ok|okay|d['’]accord|parfait|super|top|merci|alors|euh|bah|bon|"  # noqa: RUF001
     r"voil[àa]|tr[èe]s\s+bien|c['’]est\s+(?:bon|parfait|not[ée]))\b[\s,!.]*)+",  # noqa: RUF001
+    re.I,
+)
+# « Marie merci » : merci en fin
+_TRAIL_THANKS_RE = re.compile(
+    r"\s+(?:merci(?:\s+(?:beaucoup|bien|bcp|infiniment|encore))?|"
+    r"bonne\s+(?:journ[ée]e|soir[ée]e))[\s!.]*$",
     re.I,
 )
 # découpe en morceaux
@@ -281,8 +339,16 @@ def looks_like_name(text: str) -> bool:
     core = [w for w in words if _word_key(w) not in skip]
     if not 1 <= len(core) <= 3 or len(words) > 5 or not _NAME_RE.match(t):
         return False
+    # « Jenny » seul : c'est le bot
+    soft_ok = len(core) >= 2
+
+    def _blocked(word: str) -> bool:
+        # « j'arrive » : on teste « arrive »
+        keys = {_word_key(word), _word_key(re.split(r"['’]", word)[-1])}  # noqa: RUF001
+        return any(k in _NOT_NAME_WORDS and not (soft_ok and k in _SOFT_NOT_NAME) for k in keys)
+
     # politesse, jour, prestation
-    return not any(_word_key(w) in _NOT_NAME_WORDS for w in words)
+    return not any(_blocked(w) for w in words)
 
 
 def _split_lead(part: str) -> tuple[str, str]:
@@ -304,10 +370,12 @@ def extract_customer_name(
     parts.sort(key=lambda p: 0 if _NAME_INTRO_RE.match(_split_lead(p)[1]) else 1)
     for part in parts:
         lead, cand = _split_lead(part)
+        cand = _TRAIL_THANKS_RE.sub("", cand).strip()
         if not cand or (services and match_catalog_services(cand, services)):
             continue
-        # « merci X » remercie X
-        if _THANKS_RE.search(lead) and not _NAME_INTRO_RE.match(cand):
+        # « merci Léa » remercie Léa
+        core = [w for w in cand.split() if _word_key(w) not in _NAME_PARTICLES | _CIVILITIES]
+        if _THANKS_RE.search(lead) and not _NAME_INTRO_RE.match(cand) and len(core) < 2:
             continue
         if parse_fr_date(cand) or parse_fr_time(cand):
             continue
@@ -352,7 +420,7 @@ def detect_appointment_mgmt(message: str, awaiting_confirmation: bool) -> str | 
     return None
 
 
-def strip_farewell(message: str) -> str:
+def strip_farewell(message: str, *, keep_days: bool = False) -> str:
     """Retire « bon week-end », « à demain »."""
     m = _WISH_RE.sub(" ", message or "")
     # « décaler à jeudi » : on garde
@@ -363,13 +431,16 @@ def strip_farewell(message: str) -> str:
         or re.search(r"\bavanc", m, re.I)
     )
     if not keep:
-        m = _FAREWELL_WHEN_RE.sub(" ", _SEE_YOU_RE.sub(" ", m))
+        m = _SEE_YOU_RE.sub(" ", m)
+        # créneau proposé : on garde
+        if not keep_days:
+            m = _FAREWELL_WHEN_RE.sub(" ", m)
     return m
 
 
-def is_farewell(message: str, *, today: date | None = None) -> bool:
+def is_farewell(message: str, *, today: date | None = None, keep_days: bool = False) -> bool:
     """Juste un au revoir ?"""
-    rest = strip_farewell(message)
+    rest = strip_farewell(message, keep_days=keep_days)
     if rest == (message or ""):
         return False
     return not (parse_fr_date(rest, today=today) or parse_fr_time(rest))
@@ -427,7 +498,9 @@ def is_implicit_reschedule(
         or intent in _BYE_INTENTS
     ):
         return cue
-    return cue or bool(_ALT_LEAD_RE.match(m)) or _when_only(m)
+    # « sinon jeudi ? » seulement
+    alt = _ALT_LEAD_RE.match(m)
+    return cue or bool(alt and _when_only(m[alt.end() :])) or _when_only(m)
 
 
 # clés NER gardées en slot
@@ -624,6 +697,12 @@ class ConversationEngine:
             state.business_hours_text = request.hours_text
         if request.timezone:
             state.business_timezone = request.timezone
+
+        # STOP : désinscription, sans LLM
+        stopped = await self._handle_stop(request, state)
+        if stopped is not None:
+            return stopped
+
         # consignes du tour d'avant
         state.clarification_instruction = None
         state.knowledge_gap = False
@@ -631,6 +710,11 @@ class ConversationEngine:
         state.expire_latches(LATCH_MAX_TURNS)
         today = today_in(state.business_timezone)
         prev_pending = state.pending_intent
+        # créneaux proposés au tour d'avant
+        _prev_ar = state.action_result or {}
+        _offered = prev_pending in ("appointment", "manage_appointment") and bool(
+            _prev_ar.get("propose_slots") or _prev_ar.get("alternatives_text")
+        )
 
         # 2. intention
         intent_result = await self._detect_intent(request.message_text, state)
@@ -644,8 +728,10 @@ class ConversationEngine:
             "escalation",
         ) or (_model_intent == "complaint" and _COMPLAINT_SIGNAL_RE.search(_msg_txt))
         # « bon week-end » : pas un jour
-        _when_txt = strip_farewell(_msg_txt)
-        _farewell = is_farewell(_msg_txt, today=today)
+        _when_txt = strip_farewell(_msg_txt, keep_days=_offered)
+        _farewell = is_farewell(_msg_txt, today=today, keep_days=_offered)
+        # jour ou heure dans le message
+        _slot_in_msg = bool(parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt))
         # rdv sans mot-clé
         _has_when = False
         if not _blocks_appt_override:
@@ -730,6 +816,26 @@ class ConversationEngine:
                 "needs_clarification": False,
             }
 
+        # au revoir seul : pas un rdv
+        _bye_only = (
+            _farewell
+            and "?" not in _msg_txt
+            and not _STRONG_APPOINTMENT_RE.search(_when_txt)
+            and len(re.findall(r"\w+", _when_txt)) <= 4
+        )
+        if _bye_only and intent_result["intent"] in (
+            "appointment",
+            "manage_appointment",
+            "planning",
+        ):
+            logger.info("engine.intent.farewell_to_closing", was=intent_result["intent"])
+            intent_result = {
+                **intent_result,
+                "intent": "closing",
+                "confidence": max(intent_result.get("confidence", 0.0), 0.8),
+                "needs_clarification": False,
+            }
+
         intent = intent_result["intent"]
         intent_confidence = intent_result["confidence"]
         detected_intents = intent_result.get("detected_intents", [])
@@ -741,11 +847,12 @@ class ConversationEngine:
         if state.pending_intent and state.pending_intent != intent:
             msg_l = request.message_text or ""
             real_closing = (intent == "closing" and bool(_CLOSING_RE.search(msg_l))) or _farewell
+            # il choisit un créneau proposé
+            if _offered and _slot_in_msg:
+                real_closing = False
             hard_interrupt = intent in _INTERRUPTING_INTENTS or real_closing
             # complète une prise de rdv ?
-            provides_appt_info = state.pending_intent == "appointment" and bool(
-                parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt)
-            )
+            provides_appt_info = state.pending_intent == "appointment" and _slot_in_msg
             # question d'info pendant un rdv
             info_interrupt = intent in _INFO_REQUEST_INTENTS and not provides_appt_info
             real_complaint = intent == "complaint" and bool(_COMPLAINT_SIGNAL_RE.search(msg_l))
@@ -770,15 +877,15 @@ class ConversationEngine:
         # vrai changement de sujet ?
         new_topic = len(re.findall(r"\w+", msg_text)) > 3 and intent not in _FILLER_INTENTS
 
-        # liste d'attente
-        joining_waitlist = state.awaiting_waitlist and accepts_offer(msg_text)
+        # un créneau n'est pas un oui
+        joining_waitlist = state.awaiting_waitlist and not _slot_in_msg and accepts_offer(msg_text)
         if joining_waitlist:
             state.disarm_latch("awaiting_waitlist")
             intent = "join_waitlist"
             intent_confidence = 0.95
             state.pending_intent = None
-        elif state.awaiting_waitlist and (_DECLINE_RE.search(msg_text) or new_topic):
-            # refus ou autre sujet
+        elif state.awaiting_waitlist and (declines_offer(msg_text) or new_topic or _slot_in_msg):
+            # refus, autre sujet ou autre jour
             state.disarm_latch("awaiting_waitlist")
 
         # nom attendu ?
@@ -794,6 +901,10 @@ class ConversationEngine:
             if joining_waitlist
             else detect_appointment_mgmt(msg_text, state.awaiting_confirmation and not name_value)
         )
+        # « je confirme, c'est Marie » : les deux
+        confirm_too = bool(name_value) and mgmt_op == "confirm"
+        if confirm_too:
+            mgmt_op = None
 
         # report implicite sans mot-clé
         if mgmt_op is None and not joining_waitlist and not name_value:
@@ -898,6 +1009,9 @@ class ConversationEngine:
         state.agent_used = agent_result.get("agent", "fallback")
         state.action_result = agent_result.get("action_result")
         state.retrieved_documents = agent_result.get("documents", [])
+        # nom noté, puis on confirme
+        if confirm_too and (state.action_result or {}).get("success"):
+            await self._confirm_after_name(state)
 
         # grounding RAG transverse
         if (
@@ -907,22 +1021,25 @@ class ConversationEngine:
             and not (state.action_result or {}).get("success")
         ):
             try:
-                # même seuil que les lacunes
+                # même seuil que la FAQ
                 _hits = await self.retriever.search(
                     request.message_text,
                     business_id=state.business_id,
-                    top_k=3,
-                    score_threshold=GAP_SCORE_HARD_FLOOR,
+                    top_k=FAQ_MAX_DOCS,
+                    score_threshold=FAQ_MIN_SCORE,
                 )
-                if _hits:
-                    state.retrieved_documents = [
+                _docs = select_documents(
+                    [
                         {"content": h.content, "score": h.score, "metadata": h.metadata}
-                        for h in _hits
+                        for h in _hits or []
                     ]
+                )
+                if _docs:
+                    state.retrieved_documents = _docs
                     logger.info(
                         "engine.rag_grounded",
-                        results=len(_hits),
-                        top_score=round(_hits[0].score, 3),
+                        results=len(_docs),
+                        top_score=round(_docs[0]["score"], 3),
                     )
             except Exception as _e:  # pragma: no cover
                 logger.warning("engine.rag_ground_failed", error=str(_e))
@@ -933,13 +1050,14 @@ class ConversationEngine:
         _booked = _ok and intent == "appointment" and not _ar.get("operation")
         if _ok and _ar.get("appointment_id") and not _ar.get("operation"):
             state.arm_latch("awaiting_confirmation")
-        elif _ar.get("operation") in {"confirm", "cancel"}:
+        elif _ar.get("operation") in {"confirm", "cancel"} or _ar.get("confirmed"):
             state.disarm_latch("awaiting_confirmation")
 
         # salon complet: liste d'attente
         if _ar.get("no_slots"):
             state.arm_latch("awaiting_waitlist")
-        elif _booked:
+        elif intent == "appointment" and state.action_result is not None:
+            # autre réponse : offre caduque
             state.disarm_latch("awaiting_waitlist")
         # client sans nom
         if _ar.get("ask_name"):
@@ -1091,6 +1209,54 @@ class ConversationEngine:
             extracted_facts=extracted_facts or None,
         )
 
+    async def _handle_stop(
+        self, request: EngineRequest, state: ConversationState
+    ) -> EngineResponse | None:
+        """STOP : plus d'offres, réponse fixe."""
+        from jenny.services.offer_cap import apply_stop_reply, is_stop_reply
+
+        customer_id = request.customer_id or state.customer_id
+        if customer_id is None or not is_stop_reply(request.message_text):
+            return None
+        try:
+            from jenny.db.session import async_session_factory
+
+            async with async_session_factory() as db:
+                done = await apply_stop_reply(
+                    db,
+                    business_id=request.business_id,
+                    customer_id=customer_id,
+                    text=request.message_text,
+                )
+                if done:
+                    await db.commit()
+        except Exception as e:
+            logger.error("engine.stop_reply_error", error=str(e))
+            return None
+        if not done:
+            return None
+
+        logger.info("engine.stop_reply", customer_id=str(customer_id))
+        state.set_intent("opt_out", 1.0)
+        state.pending_intent = None
+        state.agent_used = "opt_out"
+        state.action_result = {"success": True, "opted_out": True}
+        state.retrieved_documents = []
+        state.phase = ConversationPhase.CLOSING
+        state.suggested_response = STOP_REPLY_TEXT
+        state.add_assistant_message(STOP_REPLY_TEXT)
+        await self.state_manager.asave(state)
+        return EngineResponse(
+            response_text=STOP_REPLY_TEXT,
+            intent="opt_out",
+            intent_confidence=1.0,
+            detected_intents=[{"intent": "opt_out", "confidence": 1.0}],
+            agent_used="opt_out",
+            action_result=dict(state.action_result),
+            conversation_phase=state.phase.value,
+            detected_language=state.detected_language,
+        )
+
     async def _detect_intent(self, text: str, state: ConversationState) -> dict:
         """Détecte l'intention, politesse démasquée."""
         result = await self._classify_text(text)
@@ -1124,39 +1290,35 @@ class ConversationEngine:
 
     async def _classify_text(self, text: str) -> dict:
         """Classifie un texte en intention."""
-        if self.intent_predictor is not None:
+        # lstm ou tête mpnet : même api
+        predict_multi = getattr(self.intent_predictor, "predict_multi", None)
+        if callable(predict_multi):
             try:
-                from ml.models.intent.predict import IntentPredictor
+                # hors boucle d'événements
+                result = await asyncio.to_thread(_ml_call, predict_multi, text)
+                ml_intent = result["primary_intent"]
+                ml_conf = float(result["primary_confidence"])
 
-                if isinstance(self.intent_predictor, IntentPredictor):
-                    # hors boucle d'événements
-                    result = await asyncio.to_thread(
-                        _ml_call, self.intent_predictor.predict_multi, text
-                    )
-                    ml_intent = result["primary_intent"]
-                    ml_conf = result["primary_confidence"]
+                if ml_conf < ML_CONFIDENCE_FLOOR:
+                    rule_intent, rule_conf = self._rule_based_intent(text)
+                    if rule_intent != "general" and rule_conf > ml_conf:
+                        return {
+                            "intent": rule_intent,
+                            "confidence": rule_conf,
+                            "detected_intents": [{"intent": rule_intent, "confidence": rule_conf}],
+                            "is_multi_intent": False,
+                            "needs_clarification": False,
+                        }
 
-                    if ml_conf < ML_CONFIDENCE_FLOOR:
-                        rule_intent, rule_conf = self._rule_based_intent(text)
-                        if rule_intent != "general" and rule_conf > ml_conf:
-                            return {
-                                "intent": rule_intent,
-                                "confidence": rule_conf,
-                                "detected_intents": [
-                                    {"intent": rule_intent, "confidence": rule_conf}
-                                ],
-                                "is_multi_intent": False,
-                                "needs_clarification": False,
-                            }
-
-                    return {
-                        "intent": ml_intent,
-                        "confidence": ml_conf,
-                        "detected_intents": result["intents"],
-                        "is_multi_intent": result["is_multi_intent"],
-                        "needs_clarification": result["needs_clarification"],
-                    }
-            except (ImportError, Exception) as e:
+                return {
+                    "intent": ml_intent,
+                    "confidence": ml_conf,
+                    "detected_intents": result.get("intents")
+                    or [{"intent": ml_intent, "confidence": ml_conf}],
+                    "is_multi_intent": bool(result.get("is_multi_intent", False)),
+                    "needs_clarification": bool(result.get("needs_clarification", False)),
+                }
+            except Exception as e:
                 logger.warning("engine.intent.model_error", error=str(e))
 
         # fallback: règles mots-clés
@@ -1214,19 +1376,17 @@ class ConversationEngine:
     async def _extract_entities(self, text: str, state: ConversationState) -> dict[str, str]:
         """Extrait les entités du message."""
         regex_entities = self._regex_entity_extraction(text)
-        if self.ner_predictor is not None:
+        predict = getattr(self.ner_predictor, "predict", None)
+        if callable(predict):
             try:
-                from ml.models.ner.predict import NERPredictor
-
-                if isinstance(self.ner_predictor, NERPredictor):
-                    # hors boucle d'événements
-                    found = await asyncio.to_thread(_ml_call, self.ner_predictor.predict, text)
-                    entities = dict(found or {})
-                    # regex en complément
-                    for key, value in regex_entities.items():
-                        entities.setdefault(key, value)
-                    return entities
-            except (ImportError, Exception) as e:
+                # hors boucle d'événements
+                found = await asyncio.to_thread(_ml_call, predict, text)
+                entities = dict(found or {})
+                # regex en complément
+                for key, value in regex_entities.items():
+                    entities.setdefault(key, value)
+                return entities
+            except Exception as e:
                 logger.warning("engine.ner.model_error", error=str(e))
 
         return regex_entities
@@ -1271,6 +1431,21 @@ class ConversationEngine:
                 logger.warning("engine.router.error", error=str(e))
 
         return {"agent": "fallback", "documents": [], "action_result": None}
+
+    async def _confirm_after_name(self, state: ConversationState) -> None:
+        """Confirme le rdv après le nom."""
+        named = dict(state.action_result or {})
+        intent, confidence = state.current_intent, state.intent_confidence
+        state.current_intent, state.intent_confidence = "manage_appointment", 0.9
+        state.set_slot("operation", "confirm")
+        try:
+            done = (await self._route_to_agent(state)).get("action_result") or {}
+        finally:
+            state.slots.pop("operation", None)
+            state.current_intent, state.intent_confidence = intent, confidence
+        if done.get("success") and done.get("operation") == "confirm":
+            named.update(confirmed=True, confirmed_when=done.get("when"))
+        state.action_result = named
 
     async def _generate_response(
         self, state: ConversationState, on_token: TokenCallback | None = None

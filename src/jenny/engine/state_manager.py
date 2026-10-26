@@ -5,14 +5,25 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from jenny.core.logging import get_logger
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 logger = get_logger(__name__)
+
+# cache mémoire borné (widget)
+MEMORY_MAX_STATES = 5000
+MEMORY_TTL_SECONDS = 48 * 3600
 
 # verrous oui/nom/téléphone
 LATCHES = ("awaiting_confirmation", "awaiting_waitlist", "awaiting_name", "awaiting_phone")
@@ -353,6 +364,80 @@ def _dumps(state: ConversationState) -> str:
     return json.dumps(state.to_dict(), ensure_ascii=False, default=str)
 
 
+class StateCache:
+    """Cache LRU + TTL des états."""
+
+    def __init__(
+        self,
+        max_items: int = MEMORY_MAX_STATES,
+        ttl: float = MEMORY_TTL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.max_items = max(1, int(max_items))
+        self.ttl = float(ttl)
+        self._clock = clock
+        # clé -> (dernier accès, état)
+        self._data: OrderedDict[str, tuple[float, ConversationState]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def _expired(self, seen: float, now: float) -> bool:
+        return self.ttl > 0 and now - seen > self.ttl
+
+    def _prune(self, now: float) -> None:
+        # les plus vieux sont devant
+        while self._data:
+            key, (seen, _) = next(iter(self._data.items()))
+            if len(self._data) <= self.max_items and not self._expired(seen, now):
+                break
+            del self._data[key]
+
+    def get(self, key: str) -> ConversationState | None:
+        """État vivant, sinon None."""
+        now = self._clock()
+        with self._lock:
+            item = self._data.get(key)
+            if item is None:
+                return None
+            if self._expired(item[0], now):
+                del self._data[key]
+                return None
+            # touché : repart à zéro
+            self._data[key] = (now, item[1])
+            self._data.move_to_end(key)
+            return item[1]
+
+    def __getitem__(self, key: str) -> ConversationState:
+        state = self.get(key)
+        if state is None:
+            raise KeyError(key)
+        return state
+
+    def __setitem__(self, key: str, state: ConversationState) -> None:
+        now = self._clock()
+        with self._lock:
+            self._data[key] = (now, state)
+            self._data.move_to_end(key)
+            self._prune(now)
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and self.get(key) is not None
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._data)
+
+    def pop(self, key: str, default: ConversationState | None = None) -> ConversationState | None:
+        """Retire un état."""
+        with self._lock:
+            item = self._data.pop(key, None)
+        return item[1] if item is not None else default
+
+    def clear(self) -> None:
+        """Vide le cache."""
+        with self._lock:
+            self._data.clear()
+
+
 class StateManager:
     """Gère les états de conversation."""
 
@@ -360,8 +445,15 @@ class StateManager:
     REDIS_PREFIX = "jenny:conv:"
     REDIS_TTL = 3600 * 24  # 24h
 
-    def __init__(self, redis_url: str | None = None) -> None:
-        self._states: dict[str, ConversationState] = {}
+    def __init__(
+        self,
+        redis_url: str | None = None,
+        *,
+        max_memory_states: int = MEMORY_MAX_STATES,
+        memory_ttl: float = MEMORY_TTL_SECONDS,
+    ) -> None:
+        # borné : un état par visiteur
+        self._states = StateCache(max_memory_states, memory_ttl)
         self._redis = None  # client sync
         self._redis_url: str | None = None
         self._aredis = None  # client async
@@ -427,8 +519,9 @@ class StateManager:
     def _local_get_or_create(
         self, key: str, conversation_id: UUID, business_id: UUID | None, channel: str
     ) -> ConversationState:
-        if key in self._states:
-            return self._states[key]
+        cached = self._states.get(key)
+        if cached is not None:
+            return cached
         state = ConversationState(
             conversation_id=conversation_id,
             business_id=business_id,
@@ -494,8 +587,9 @@ class StateManager:
         key = str(conversation_id)
 
         # cache mémoire d'abord
-        if key in self._states:
-            return self._states[key]
+        cached = self._states.get(key)
+        if cached is not None:
+            return cached
 
         # puis Redis
         if self._redis is not None:
@@ -538,8 +632,9 @@ class StateManager:
     async def aget(self, conversation_id: UUID) -> ConversationState | None:
         """Version async de get."""
         key = str(conversation_id)
-        if key in self._states:
-            return self._states[key]
+        cached = self._states.get(key)
+        if cached is not None:
+            return cached
         client = self._async_client()
         if client is not None:
             with contextlib.suppress(Exception):
