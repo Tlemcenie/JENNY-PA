@@ -20,10 +20,13 @@ interface StoredLog {
   at: number;
   human: boolean;
   messages: StoredMessage[];
+  // ids équipe déjà vus
+  team?: string[];
 }
 
 const TTL_MS = 7 * 24 * 3600 * 1000; // une semaine
 const MAX_KEPT = 60;
+const MAX_TEAM = 300;
 // repli en mémoire
 const memory = new Map<string, string>();
 
@@ -95,16 +98,28 @@ export function newVisitorId(): string {
 
 const VID_RE = /^[A-Za-z0-9_-]{16,64}$/;
 
-export function loadSession(slug: string): { visitorId: string; messages: StoredMessage[]; human: boolean } {
+export interface WidgetSession {
+  visitorId: string;
+  messages: StoredMessage[];
+  human: boolean;
+  teamSeen: string[];
+}
+
+export function loadSession(slug: string): WidgetSession {
   let visitorId = read(vidKey(slug)) || "";
   let messages: StoredMessage[] = [];
   let human = false;
+  let teamSeen: string[] = [];
   try {
     const raw = read(logKey(slug));
     const log = raw ? (JSON.parse(raw) as StoredLog) : null;
     if (log && log.v === 1 && Date.now() - log.at < TTL_MS && Array.isArray(log.messages)) {
       messages = log.messages.filter((m) => m && typeof m.text === "string" && typeof m.id === "string");
       human = log.human === true;
+      const fromLog = Array.isArray(log.team) ? log.team.filter((t) => typeof t === "string") : [];
+      // anciens logs : ids des messages
+      const fromMessages = messages.filter((m) => m.role === "team").map((m) => m.id);
+      teamSeen = Array.from(new Set([...fromLog, ...fromMessages])).slice(-MAX_TEAM);
     } else if (log) {
       // trop vieux : on repart
       visitorId = "";
@@ -118,12 +133,19 @@ export function loadSession(slug: string): { visitorId: string; messages: Stored
     write(logKey(slug), null);
     messages = [];
     human = false;
+    teamSeen = [];
   }
-  return { visitorId, messages, human };
+  return { visitorId, messages, human, teamSeen };
 }
 
-export function saveLog(slug: string, messages: StoredMessage[], human: boolean): void {
-  const log: StoredLog = { v: 1, at: Date.now(), human, messages: messages.slice(-MAX_KEPT) };
+export function saveLog(slug: string, messages: StoredMessage[], human: boolean, teamSeen: string[] = []): void {
+  const log: StoredLog = {
+    v: 1,
+    at: Date.now(),
+    human,
+    messages: messages.slice(-MAX_KEPT),
+    team: teamSeen.slice(-MAX_TEAM),
+  };
   write(logKey(slug), JSON.stringify(log));
 }
 

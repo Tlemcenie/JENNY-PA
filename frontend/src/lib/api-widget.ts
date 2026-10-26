@@ -1,5 +1,5 @@
 // client api du widget public
-import { ApiError, request } from "./api";
+import { ApiError } from "./api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -57,6 +57,7 @@ async function bareRequest<T>(endpoint: string, { method = "GET", body, signal }
     method,
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
+    credentials: "omit",
     signal,
   });
   if (!res.ok) {
@@ -71,20 +72,9 @@ async function bareRequest<T>(endpoint: string, { method = "GET", body, signal }
   return res.json() as Promise<T>;
 }
 
-// stockage lisible ?
-function storageOk(): boolean {
-  try {
-    if (typeof window === "undefined" || !window.localStorage) return false;
-    window.localStorage.getItem("jw-probe");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// stockage bloqué : repli direct
+// toujours anonyme, sans jeton
 function call<T>(endpoint: string, options: CallOptions = {}): Promise<T> {
-  return storageOk() ? request<T>(endpoint, options) : bareRequest<T>(endpoint, options);
+  return bareRequest<T>(endpoint, options);
 }
 
 export function getWidgetConfig(slug: string, signal?: AbortSignal): Promise<WidgetConfig> {
@@ -122,6 +112,8 @@ export function widgetErrorText(err: unknown): { text: string; retryAfter: numbe
       return { text, retryAfter: Math.max(1, retry) };
     }
     if (err.status === 404) return { text: "Ce salon n'est pas disponible pour le moment.", retryAfter: 0 };
+    if (err.status === 403)
+      return { text: "Cette discussion n'est plus disponible, démarrez-en une nouvelle.", retryAfter: 0 };
     if (err.status === 413 || err.status === 422)
       return { text: "Message trop long ou invalide, raccourcissez-le un peu.", retryAfter: 0 };
     if (err.status >= 500) {
