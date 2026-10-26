@@ -105,7 +105,7 @@ async def _fake_webhook(request_factory, nested_factory) -> None:  # type: ignor
             await s.execute(text("SELECT 1"))
 
 
-async def _burst(request_factory, nested_factory) -> tuple[list, float]:  # type: ignore[no-untyped-def]
+async def _burst(request_factory, nested_factory):  # type: ignore[no-untyped-def]
     start = time.monotonic()
     out = await asyncio.gather(
         *(_fake_webhook(request_factory, nested_factory) for _ in range(BURST)),

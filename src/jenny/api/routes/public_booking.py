@@ -73,6 +73,8 @@ _MAX_DURATION = 240
 _MAX_DAYS_AHEAD = 120
 _TOO_LONG = "Cette prestation est trop longue pour la réservation en ligne, appelez le salon"
 _FREE_TOO_LONG = f"Sans prestation, {_MAX_DURATION} minutes au maximum"
+_CLOSED_HOURS = "Ce créneau est hors des horaires du salon, choisissez-en un autre"
+
 
 def _business_tz(b: Business) -> ZoneInfo:
     try:
@@ -415,7 +417,7 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
         raise HTTPException(400, "Le salon est fermé ce jour-là, choisissez un autre jour")
     # solo : horaires du salon
     if not pool.has_staff and not _in_opening(b, start, end):
-        raise HTTPException(400, "Ce créneau est hors des horaires du salon, choisissez-en un autre")
+        raise HTTPException(400, _CLOSED_HOURS)
 
     async def _pick() -> Staff | None:
         """Par coiffeur s'il y en a, sinon tout le salon."""

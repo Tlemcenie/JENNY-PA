@@ -220,7 +220,9 @@ async def _handle_report(db: AsyncSession, bid: UUID) -> dict:
 
 # blocage salon demandé
 _SALON_RE = re.compile(
-    r"\b(salon|tout\s+le\s+monde|toute\s+l['’]?\s*[ée]quipe|tous|ferm)",  # noqa: RUF001
+    r"\b(tout\s+le\s+salon|(?:bloqu|ferm)\w*\s+(?:tout\s+)?le\s+salon"
+    r"|salon\s+(?:est\s+|sera\s+)?ferm|tout\s+le\s+monde"
+    r"|toute\s+l['’]?\s*[ée]quipe|fermeture)",  # noqa: RUF001
     re.I,
 )
 # mot à majuscule

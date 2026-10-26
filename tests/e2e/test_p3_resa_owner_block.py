@@ -146,6 +146,9 @@ class TestCoiffeurFlou:
         assert await _blocks(biz) == []
         out = await _say(biz, f"Jade est en congé le {_txt(_day())}")
         assert out["data"].get("unknown_staff") == "Jade" and await _blocks(biz) == []
+        # « au salon » : pas tout le salon
+        out = await _say(biz, f"Jade est en congé, pas au salon le {_txt(_day())}")
+        assert out["data"].get("unknown_staff") == "Jade" and await _blocks(biz) == []
 
     async def test_prenom_ambigu(self, db_tables) -> None:
         biz, members = await _salon(("Marie Dupont", True), ("Marie Leroy", True))

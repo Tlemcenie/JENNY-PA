@@ -108,7 +108,9 @@ def _headers(biz: Business) -> dict[str, str]:
 
 async def _biz(*staff: tuple[str, bool]) -> tuple[Business, dict[str, Staff]]:
     async with async_session_factory() as s, s.begin():
-        b = Business(id=uuid4(), name="Salon Zoé", slug=f"s-{uuid4().hex[:6]}", business_hours=_OPEN)
+        b = Business(
+            id=uuid4(), name="Salon Zoé", slug=f"s-{uuid4().hex[:6]}", business_hours=_OPEN
+        )
         s.add(b)
         members = {}
         for i, (name, active) in enumerate(staff):
