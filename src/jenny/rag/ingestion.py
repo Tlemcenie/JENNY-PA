@@ -177,7 +177,11 @@ class DocumentIngester:
                 sections.append((m.group(1).strip(), []))
                 continue
             sections[-1][1].append(line)
-        return [(t, lines) for t, lines in sections if lines]
+        kept = [(t, lines) for t, lines in sections if lines]
+        if not kept:
+            # que des titres : on garde
+            kept = [("", [ln.strip() for ln in text.splitlines() if ln.strip()])]
+        return [(t, lines) for t, lines in kept if lines]
 
     def _overlap(self, units: list[_Unit], max_tok: int, max_chars: int) -> str:
         """Fin du fragment à répéter."""

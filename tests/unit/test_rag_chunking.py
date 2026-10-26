@@ -163,3 +163,11 @@ async def test_sans_pgvector_echoue_vite_sans_modele() -> None:
     with pytest.raises(RuntimeError):
         await kb.add_text("Ouvert le mardi.", title="Horaires")
     assert await kb.search("horaires") == []
+
+
+def test_texte_vide_ou_que_des_titres() -> None:
+    ing = DocumentIngester()
+    assert ing.chunk_text("") == []
+    assert ing.chunk_text("   \n\n") == []
+    only = ing.chunk_text("## Parking gratuit")
+    assert [c.content for c in only] == ["## Parking gratuit"]
