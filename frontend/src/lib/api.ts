@@ -352,6 +352,8 @@ export interface KnowledgeEntry {
   id: string;
   business_id: string;
   title: string;
+  // texte complet
+  content?: string;
   content_preview?: string;
   category: string;
   source: string;
