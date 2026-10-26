@@ -20,6 +20,8 @@ const pageTitleKeys: Record<string, string> = {
   "/assistant": "nav.assistant",
   "/conversations": "nav.conversations",
   "/calendar": "nav.calendar",
+  "/team": "nav.team",
+  "/campaigns": "nav.campaigns",
   "/prestations": "nav.prestations",
   "/brain": "nav.brain",
   "/knowledge": "nav.knowledge",
@@ -101,7 +103,7 @@ export function Topbar() {
         <ThemeToggle />
         <div className="hidden sm:flex items-center gap-2 text-xs">
           <Activity className="w-3.5 h-3.5 text-jenny-text-secondary" />
-          <span className="text-jenny-text-secondary hidden sm:inline">API</span>
+          <span className="text-jenny-text-secondary hidden sm:inline">{t("topbar.api")}</span>
           <span
             className={`w-2 h-2 rounded-full transition-colors ${
               apiStatus === "ok"
@@ -113,7 +115,7 @@ export function Topbar() {
           />
           {apiStatus === "error" && (
             <span className="text-jenny-error text-[10px] font-semibold bg-jenny-error/10 rounded-full px-2 py-0.5 hidden sm:inline">
-              Hors ligne
+              {t("topbar.offline")}
             </span>
           )}
         </div>

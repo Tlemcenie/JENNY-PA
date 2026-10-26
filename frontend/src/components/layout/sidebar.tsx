@@ -10,12 +10,14 @@ import {
   MessageCircle,
   MessagesSquare,
   Users,
+  Contact,
   Radio,
   BookOpen,
   Brain,
   BarChart3,
   TrendingUp,
   Lightbulb,
+  Megaphone,
   Gauge,
   Cpu,
   Scissors,
@@ -51,6 +53,8 @@ const mainItems: NavItem[] = [
   { href: "/assistant", icon: Sparkles, labelKey: "nav.assistant" },
   { href: "/conversations", icon: MessagesSquare, labelKey: "nav.conversations" },
   { href: "/calendar", icon: CalendarDays, labelKey: "nav.calendar" },
+  { href: "/team", icon: Users, labelKey: "nav.team" },
+  { href: "/campaigns", icon: Megaphone, labelKey: "nav.campaigns" },
   { href: "/prestations", icon: Scissors, labelKey: "nav.prestations" },
   { href: "/brain", icon: Brain, labelKey: "nav.brain" },
   { href: "/knowledge", icon: BookOpen, labelKey: "nav.knowledge" },
@@ -68,7 +72,7 @@ const labItems: NavItem[] = [
 
 // section compte
 const accountItems: NavItem[] = [
-  { href: "/customers", icon: Users, labelKey: "nav.customers" },
+  { href: "/customers", icon: Contact, labelKey: "nav.customers" },
   { href: "/profile", icon: Settings, labelKey: "nav.settings" },
 ];
 
@@ -238,7 +242,7 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
           type="button"
           onClick={toggleLab}
           aria-expanded={showLab}
-          title={expanded ? undefined : t("nav.labGroup", { defaultValue: "Labo" })}
+          title={expanded ? undefined : t("nav.labGroup")}
           className={cn(
             "w-full flex items-center gap-3 px-3 pt-4 pb-1.5 rounded-xl text-white/30 hover:text-white/60 transition-colors",
             !expanded && "justify-center px-0"
@@ -248,7 +252,7 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
           {expanded && (
             <>
               <span className="font-mono text-[10px] tracking-[0.16em] uppercase font-semibold">
-                {t("nav.labGroup", { defaultValue: "Labo" })}
+                {t("nav.labGroup")}
               </span>
               <ChevronDown
                 className={cn("w-3.5 h-3.5 ml-auto transition-transform", showLab ? "rotate-0" : "-rotate-90")}
@@ -284,7 +288,7 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
           >
             <div className="flex items-center justify-between gap-2 mb-2">
               <span className="font-mono text-[10px] tracking-[0.14em] uppercase text-jenny-coral font-semibold">
-                {t("nav.liveTitle", { defaultValue: "Suivi en direct" })}
+                {t("nav.liveTitle")}
               </span>
               <span
                 className={cn(
@@ -301,21 +305,18 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
                   <span className="relative inline-flex w-1.5 h-1.5 rounded-full bg-current" />
                 </span>
                 {live
-                  ? t("nav.liveOn", { defaultValue: "Connecté" })
-                  : t("nav.liveOff", { defaultValue: "Reconnexion…" })}
+                  ? t("nav.liveOn")
+                  : t("nav.liveOff")}
               </span>
             </div>
             <p className="text-white/70 text-[12px] leading-snug">
               {awaiting === null
                 ? statsFailed
-                  ? t("nav.liveError", { defaultValue: "Serveur injoignable pour le moment." })
-                  : t("nav.liveUnknown", { defaultValue: "Chargement des conversations…" })
+                  ? t("nav.liveError")
+                  : t("nav.liveUnknown")
                 : awaiting > 0
-                  ? t("nav.liveAwaiting", {
-                      count: awaiting,
-                      defaultValue: `${awaiting} conversation${awaiting > 1 ? "s" : ""} sans réponse.`,
-                    })
-                  : t("nav.liveClear", { defaultValue: "Aucune conversation en attente." })}
+                  ? t("nav.liveAwaiting", { count: awaiting })
+                  : t("nav.liveClear")}
             </p>
           </div>
         )}
