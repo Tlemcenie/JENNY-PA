@@ -103,7 +103,7 @@ export function pollWidgetTeam(slug: string, visitorId: string, signal?: AbortSi
 }
 
 // message d'erreur lisible
-export function widgetErrorText(err: unknown): { text: string; retryAfter: number } {
+export function widgetErrorText(err: unknown): { text: string; retryAfter: number; gone?: boolean } {
   if (err instanceof ApiError) {
     const data = (err.data ?? {}) as { detail?: unknown; retry_after?: unknown };
     const retry = typeof data.retry_after === "number" ? data.retry_after : 0;
@@ -112,8 +112,9 @@ export function widgetErrorText(err: unknown): { text: string; retryAfter: numbe
       return { text, retryAfter: Math.max(1, retry) };
     }
     if (err.status === 404) return { text: "Ce salon n'est pas disponible pour le moment.", retryAfter: 0 };
+    // conv fermée : en refaire une
     if (err.status === 403)
-      return { text: "Cette discussion n'est plus disponible, démarrez-en une nouvelle.", retryAfter: 0 };
+      return { text: "Cette discussion n'est plus disponible, démarrez-en une nouvelle.", retryAfter: 0, gone: true };
     if (err.status === 413 || err.status === 422)
       return { text: "Message trop long ou invalide, raccourcissez-le un peu.", retryAfter: 0 };
     if (err.status >= 500) {

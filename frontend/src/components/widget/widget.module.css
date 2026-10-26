@@ -395,6 +395,20 @@
   margin-top: 1px;
 }
 
+.errorAction {
+  margin-left: auto;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
 /* saisie */
 
 .composer {
