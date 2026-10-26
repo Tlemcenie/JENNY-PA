@@ -282,6 +282,8 @@ class TestRateLimit:
 
     async def test_salon_budget(self, client: AsyncClient, db_tables, monkeypatch) -> None:
         monkeypatch.setattr(public_chat._SALON, "limit", 1)
+        # sans réserve
+        monkeypatch.setattr(public_chat._SPARE, "limit", 0)
         biz = await _salon()
         url = f"/api/v1/public/chat/{biz.slug}"
         assert (
