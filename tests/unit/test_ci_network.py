@@ -21,10 +21,12 @@ ROOT = Path(__file__).resolve().parents[2]
 FAR_IP = "192.0.2.10"
 
 
-def _run_pytest(tmp_path: Path, body: str, *args: str) -> tuple[int, str]:
+def _run_pytest(
+    tmp_path: Path, body: str, *args: str, extra_env: dict[str, str] | None = None
+) -> tuple[int, str]:
     """Lance un mini pytest isolé."""
     (tmp_path / "test_mini.py").write_text(textwrap.dedent(body))
-    env = {**os.environ, "PYTHONPATH": f"{ROOT / 'src'}{os.pathsep}{ROOT}"}
+    env = {**os.environ, **(extra_env or {}), "PYTHONPATH": f"{ROOT / 'src'}{os.pathsep}{ROOT}"}
     proc = subprocess.run(
         [
             sys.executable,
@@ -92,7 +94,16 @@ async def test_httpx_externe_refuse(blocked_network) -> None:
     assert "dns:graph.facebook.com" in blocked_network.targets
 
 
-def test_services_locaux_refuses(blocked_network) -> None:
+@pytest.fixture
+def no_test_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sans URL de test déclarée."""
+    from tests import conftest
+
+    # cache réel laissé intact
+    monkeypatch.setattr(conftest, "_service_endpoints", frozenset)
+
+
+def test_services_locaux_refuses(blocked_network, no_test_services) -> None:
     """Postgres/Redis/Ollama/API locaux : coupés."""
     for port in (5432, 5433, 6379, 6381, 11434, 8000):
         with pytest.raises(ConnectionRefusedError, match="réseau coupé"):
@@ -145,13 +156,62 @@ def test_services_de_test_permis(monkeypatch: pytest.MonkeyPatch) -> None:
     """URL de test déclarée : permise."""
     from tests import conftest
 
-    monkeypatch.setenv("JENNY_TEST_POSTGRES_URL", "postgresql+asyncpg://u:p@127.0.0.1:55432/x")
-    conftest._service_endpoints.cache_clear()
     try:
-        assert _net_refused(("127.0.0.1", 55432)) is None
+        with monkeypatch.context() as mp:
+            mp.setenv("JENNY_TEST_POSTGRES_URL", "postgresql+asyncpg://u:p@127.0.0.1:55432/x")
+            mp.setenv("JENNY_TEST_REDIS_URL", "redis://localhost:56379/0")
+            conftest._service_endpoints.cache_clear()
+            assert _net_refused(("127.0.0.1", 55432)) is None
+            assert _net_refused(("127.0.0.1", 56379)) is None
     finally:
-        monkeypatch.delenv("JENNY_TEST_POSTGRES_URL")
+        # env remis avant le recalcul
         conftest._service_endpoints.cache_clear()
+
+
+def test_services_declares_sans_effet_sur_le_reste(blocked_network, monkeypatch) -> None:
+    """Services CI déclarés : reste coupé."""
+    from tests import conftest
+
+    # comme le job CI
+    try:
+        with monkeypatch.context() as mp:
+            mp.setenv("JENNY_TEST_POSTGRES_URL", "postgresql+asyncpg://u:p@localhost:5432/jenny")
+            mp.setenv("JENNY_TEST_REDIS_URL", "redis://localhost:6379/0")
+            conftest._service_endpoints.cache_clear()
+            assert _net_refused(("127.0.0.1", 5432)) is None
+            assert _net_refused(("127.0.0.1", 6379)) is None
+            assert _net_refused(("localhost", 6379)) is None
+            for port in (5433, 6381, 11434, 8000):
+                assert _net_refused(("127.0.0.1", port))
+            assert _net_refused((FAR_IP, 5432))
+    finally:
+        conftest._service_endpoints.cache_clear()
+    assert blocked_network.targets == [
+        "127.0.0.1:5433",
+        "127.0.0.1:6381",
+        "127.0.0.1:11434",
+        "127.0.0.1:8000",
+        f"{FAR_IP}:5432",
+    ]
+
+
+def test_services_locaux_refuses_sous_env_ci(tmp_path: Path) -> None:
+    """Env du job CI : test vert."""
+    ci_env = {
+        "JENNY_TEST_POSTGRES_URL": "postgresql+asyncpg://u:p@localhost:5432/jenny",
+        "JENNY_TEST_REDIS_URL": "redis://localhost:6379/0",
+    }
+    code, out = _run_pytest(
+        tmp_path,
+        """
+        from tests.unit.test_ci_network import *  # noqa: F403
+        """,
+        "-k",
+        "services_locaux_refuses and not sous_env_ci",
+        extra_env=ci_env,
+    )
+    assert code == 0, out
+    assert "1 passed" in out
 
 
 def test_hf_hors_ligne() -> None:
