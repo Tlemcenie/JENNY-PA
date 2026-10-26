@@ -1,0 +1,327 @@
+[
+  {
+    "text": "Quels sont les moyens de paiement que vous acceptez ?",
+    "votes": {
+      "payment_question": 1,
+      "faq": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "Salut comment ça va",
+    "votes": {
+      "greeting": 1,
+      "small_talk": 1
+    },
+    "label": "small_talk",
+    "regle": "centroide"
+  },
+  {
+    "text": "tout va bien merci",
+    "votes": {
+      "small_talk": 2,
+      "closing": 1
+    },
+    "label": "small_talk",
+    "regle": "majorite"
+  },
+  {
+    "text": "carte bancaire ok ?",
+    "votes": {
+      "payment_question": 1,
+      "payment": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "Mrc pour le rdv de demain",
+    "votes": {
+      "small_talk": 1,
+      "appointment": 1
+    },
+    "label": "small_talk",
+    "regle": "centroide"
+  },
+  {
+    "text": "Slt",
+    "votes": {
+      "greeting": 1,
+      "general": 1
+    },
+    "label": "general",
+    "regle": "centroide"
+  },
+  {
+    "text": "Bonne journée à vous",
+    "votes": {
+      "small_talk": 2,
+      "closing": 1
+    },
+    "label": "small_talk",
+    "regle": "majorite"
+  },
+  {
+    "text": "Prix pour une manucure",
+    "votes": {
+      "quote": 1,
+      "pricing": 1
+    },
+    "label": "pricing",
+    "regle": "centroide"
+  },
+  {
+    "text": "Vous êtes ouvert le dimanche ?",
+    "votes": {
+      "faq": 1,
+      "planning": 1
+    },
+    "label": "planning",
+    "regle": "centroide"
+  },
+  {
+    "text": "Rdv bientot",
+    "votes": {
+      "closing": 2,
+      "general": 1
+    },
+    "label": "closing",
+    "regle": "majorite"
+  },
+  {
+    "text": "Carte bancaire acceptée ?",
+    "votes": {
+      "payment": 1,
+      "payment_question": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "Mrc",
+    "votes": {
+      "greeting": 1,
+      "general": 1
+    },
+    "label": "general",
+    "regle": "centroide"
+  },
+  {
+    "text": "Prix pour un soin du corps",
+    "votes": {
+      "pricing": 1,
+      "quote": 1
+    },
+    "label": "pricing",
+    "regle": "centroide"
+  },
+  {
+    "text": "Paiement en plusieurs fois ?",
+    "votes": {
+      "payment": 1,
+      "payment_question": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "Paiement en espèces seulement ?",
+    "votes": {
+      "payment": 1,
+      "payment_question": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "Paiement en espèces uniquement ?",
+    "votes": {
+      "payment": 1,
+      "payment_question": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "slt tout va bien ?",
+    "votes": {
+      "small_talk": 2,
+      "greeting": 1
+    },
+    "label": "small_talk",
+    "regle": "majorite"
+  },
+  {
+    "text": "Mrc pour tout",
+    "votes": {
+      "closing": 1,
+      "general": 1,
+      "small_talk": 1
+    },
+    "label": "general",
+    "regle": "centroide"
+  },
+  {
+    "text": "Mrc pour le paiement",
+    "votes": {
+      "payment": 1,
+      "payment_question": 1
+    },
+    "label": "payment",
+    "regle": "centroide"
+  },
+  {
+    "text": "Paiement en plusieurs fois possible ?",
+    "votes": {
+      "payment": 1,
+      "payment_question": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "Paiement CB possible ?",
+    "votes": {
+      "payment_question": 1,
+      "payment": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "Rdv pour demain matin",
+    "votes": {
+      "appointment": 1,
+      "planning": 1
+    },
+    "label": "planning",
+    "regle": "centroide"
+  },
+  {
+    "text": "Est-ce que vous acceptez les cartes de crédit ?",
+    "votes": {
+      "payment": 1,
+      "faq": 1
+    },
+    "label": "payment",
+    "regle": "centroide"
+  },
+  {
+    "text": "slt ça va ?",
+    "votes": {
+      "small_talk": 1,
+      "general": 1
+    },
+    "label": "small_talk",
+    "regle": "centroide"
+  },
+  {
+    "text": "Bjr, tout va bien",
+    "votes": {
+      "closing": 1,
+      "greeting": 1
+    },
+    "label": "closing",
+    "regle": "centroide"
+  },
+  {
+    "text": "Moyen de paiement accepté ?",
+    "votes": {
+      "payment": 1,
+      "payment_question": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "SVP quelles sont vos heures d'ouverture ?",
+    "votes": {
+      "faq": 1,
+      "planning": 1
+    },
+    "label": "planning",
+    "regle": "centroide"
+  },
+  {
+    "text": "rdv demain",
+    "votes": {
+      "small_talk": 1,
+      "general": 1
+    },
+    "label": "small_talk",
+    "regle": "centroide"
+  },
+  {
+    "text": "Paiement en 2 fois possible ?",
+    "votes": {
+      "payment": 1,
+      "payment_question": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "mrc pour le rdv",
+    "votes": {
+      "general": 1,
+      "closing": 1
+    },
+    "label": "general",
+    "regle": "centroide"
+  },
+  {
+    "text": "Quels sont les moyens de paiement acceptés ?",
+    "votes": {
+      "payment_question": 1,
+      "faq": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "Mrc, tout va bien",
+    "votes": {
+      "small_talk": 1,
+      "greeting": 1
+    },
+    "label": "small_talk",
+    "regle": "centroide"
+  },
+  {
+    "text": "paiement possible avec mon téléphone ?",
+    "votes": {
+      "payment_question": 1,
+      "payment": 1
+    },
+    "label": "payment",
+    "regle": "centroide"
+  },
+  {
+    "text": "Paiement par chèque possible ?",
+    "votes": {
+      "payment": 1,
+      "payment_question": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  },
+  {
+    "text": "Pouvez-vous me donner vos horaires de travail ?",
+    "votes": {
+      "faq": 1,
+      "planning": 1
+    },
+    "label": "planning",
+    "regle": "centroide"
+  },
+  {
+    "text": "Paiement en plusieurs fois avec des intérêts ?",
+    "votes": {
+      "payment_question": 1,
+      "payment": 1
+    },
+    "label": "payment_question",
+    "regle": "centroide"
+  }
+]

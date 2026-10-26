@@ -1,0 +1,125 @@
+{
+  "encoder": "paraphrase-multilingual-mpnet-base-v2",
+  "data": "data/generated/intents.jsonl",
+  "data_sha256": "926883c8c0d34bf22fdd4a7965499c5ab822478d1dc3ff301c7feea6ca2f6021",
+  "split": {
+    "train": 3542,
+    "val": 759,
+    "test": 760
+  },
+  "train_lignes": 3542,
+  "train_textes_uniques": 3407,
+  "doublons_retires": 135,
+  "conflits_train": 36,
+  "conflits_majorite": 4,
+  "conflits_centroide": 32,
+  "train_augmente": 11543,
+  "char_vocab": 9081,
+  "alpha": 0.5,
+  "C": 4.0,
+  "grille": [
+    {
+      "alpha": 0.0,
+      "C": 2.0,
+      "val_top1": 85.9,
+      "val_perturbe": 81.69
+    },
+    {
+      "alpha": 0.0,
+      "C": 4.0,
+      "val_top1": 86.17,
+      "val_perturbe": 83.53
+    },
+    {
+      "alpha": 0.0,
+      "C": 8.0,
+      "val_top1": 85.9,
+      "val_perturbe": 84.58
+    },
+    {
+      "alpha": 0.0,
+      "C": 16.0,
+      "val_top1": 85.9,
+      "val_perturbe": 85.38
+    },
+    {
+      "alpha": 0.0,
+      "C": 32.0,
+      "val_top1": 86.17,
+      "val_perturbe": 85.77
+    },
+    {
+      "alpha": 0.5,
+      "C": 2.0,
+      "val_top1": 89.06,
+      "val_perturbe": 88.41
+    },
+    {
+      "alpha": 0.5,
+      "C": 4.0,
+      "val_top1": 89.59,
+      "val_perturbe": 89.06
+    },
+    {
+      "alpha": 0.5,
+      "C": 8.0,
+      "val_top1": 89.59,
+      "val_perturbe": 88.54
+    },
+    {
+      "alpha": 0.5,
+      "C": 16.0,
+      "val_top1": 89.2,
+      "val_perturbe": 88.54
+    },
+    {
+      "alpha": 0.5,
+      "C": 32.0,
+      "val_top1": 88.8,
+      "val_perturbe": 88.8
+    },
+    {
+      "alpha": 1.0,
+      "C": 2.0,
+      "val_top1": 89.46,
+      "val_perturbe": 89.06
+    },
+    {
+      "alpha": 1.0,
+      "C": 4.0,
+      "val_top1": 88.54,
+      "val_perturbe": 88.93
+    },
+    {
+      "alpha": 1.0,
+      "C": 8.0,
+      "val_top1": 88.93,
+      "val_perturbe": 89.06
+    },
+    {
+      "alpha": 1.0,
+      "C": 16.0,
+      "val_top1": 88.67,
+      "val_perturbe": 88.54
+    },
+    {
+      "alpha": 1.0,
+      "C": 32.0,
+      "val_top1": 88.27,
+      "val_perturbe": 88.27
+    }
+  ],
+  "temperature": 0.8039,
+  "ece_val_avant": 4.93,
+  "ece_val_apres": 2.4,
+  "multi_threshold": 0.47,
+  "val_multi_f1": 85.73,
+  "val_faux_multi_pct": 0.61,
+  "val_top1": 89.59,
+  "val_perturbe_top1": 89.06,
+  "val_clarif_pct": 3.16,
+  "val_precision_sous_seuil": 45.83,
+  "val_precision_au_dessus": 91.02,
+  "sklearn": "1.8.0",
+  "duree_s": 229.7
+}
