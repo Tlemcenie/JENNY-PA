@@ -7,7 +7,7 @@ identifiant n'est présent, le canal reste « non connecté » (réception OK, e
 désactivé) — fallback gracieux, jamais d'erreur (même logique que l'acompte).
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -18,9 +18,14 @@ from jenny.connectors.instagram.service import InstagramConnector
 from jenny.connectors.whatsapp.service import WhatsAppConnector
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
-from jenny.db.repositories.channel_account_repo import ChannelAccountRepository
+from jenny.db.repositories.channel_account_repo import (
+    ChannelAccountConflictError,
+    ChannelAccountRepository,
+)
+from jenny.domain.models.audit_log import AuditLog
 from jenny.domain.models.channel_account import ChannelAccount
 from jenny.services import channel_credentials_service as creds_svc
+from jenny.services.audit_service import record_audit
 
 logger = get_logger(__name__)
 
@@ -82,6 +87,88 @@ def _require_business(principal: CurrentUser):
 def _check_configurable(channel: str) -> None:
     if channel not in _CONFIGURABLE:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Canal non configurable : {channel}")
+
+
+_CLAIM_ACTION = "channel.claim_requested"
+_CLAIM_EVERY = timedelta(hours=24)
+
+
+def _mask(external_id: str) -> str:
+    """Fin de l'id seulement."""
+    return "…" + external_id[-4:] if len(external_id) > 4 else "…"
+
+
+def _claim_detail(channel: str) -> str:
+    label = _SPEC_BY_CHANNEL.get(channel, {}).get("label", channel)
+    return (
+        f"Ce compte {label} est déjà relié à un autre salon. Votre demande de "
+        "revendication est enregistrée : contactez le support Jenny pour prouver "
+        "que ce compte est à vous, il sera alors transféré."
+    )
+
+
+async def _record_claim(
+    db,
+    principal: CurrentUser,
+    bid,
+    channel: str,
+    external_id: str,
+    exc: ChannelAccountConflictError,
+) -> None:
+    """Journalise la revendication (1 par jour)."""
+    label = _SPEC_BY_CHANNEL.get(channel, {}).get("label", channel)
+    masked = _mask(external_id)
+    logger.warning(
+        "channel.claim_requested",
+        channel=channel,
+        account=masked,
+        claimant_business_id=str(bid),
+        owner_business_id=str(exc.owner_business_id) if exc.owner_business_id else None,
+    )
+    if exc.account_id is None:
+        return
+    try:
+        since = datetime.now(UTC) - _CLAIM_EVERY
+        seen = (
+            await db.execute(
+                select(AuditLog.id)
+                .where(
+                    AuditLog.business_id == bid,
+                    AuditLog.action == _CLAIM_ACTION,
+                    AuditLog.entity_id == exc.account_id,
+                    AuditLog.created_at >= since,
+                )
+                .limit(1)
+            )
+        ).first()
+        if seen is not None:
+            return
+        meta = {"channel": channel, "account": masked}
+        record_audit(
+            db,
+            business_id=bid,
+            actor=principal.email,
+            action=_CLAIM_ACTION,
+            entity_type="channel_account",
+            entity_id=exc.account_id,
+            summary=f"Demande de revendication du compte {label} {masked}, déjà relié à un autre salon",
+            meta=meta,
+        )
+        # le salon actuel est prévenu
+        record_audit(
+            db,
+            business_id=exc.owner_business_id,
+            actor=None,
+            action="channel.claimed_by_other",
+            entity_type="channel_account",
+            entity_id=exc.account_id,
+            summary=f"Un autre salon a demandé à relier votre compte {label} {masked}",
+            meta=meta,
+        )
+        await db.commit()
+    except Exception as err:  # journal best-effort
+        await db.rollback()
+        logger.error("channel.claim_log_failed", error=str(err))
 
 
 @router.get("", response_model=list[ChannelStatus])
@@ -182,13 +269,17 @@ async def connect_channel(
 
     stored = creds_svc.encrypt_credentials(creds)
     repo = ChannelAccountRepository(db)
-    acc = await repo.upsert(
-        business_id=bid,
-        channel=channel,
-        external_account_id=external_id,
-        display_name=payload.display_name or external_id,
-        credentials=stored,
-    )
+    try:
+        acc = await repo.upsert(
+            business_id=bid,
+            channel=channel,
+            external_account_id=external_id,
+            display_name=payload.display_name or external_id,
+            credentials=stored,
+        )
+    except ChannelAccountConflictError as exc:
+        await _record_claim(db, principal, bid, channel, external_id, exc)
+        raise ChannelAccountConflictError(_claim_detail(channel)) from None
     acc.webhook_verified_at = None
     await db.commit()
     logger.info("channel.connected", channel=channel, business_id=str(bid))

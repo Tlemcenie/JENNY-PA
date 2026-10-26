@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from jenny.api.dependencies import DbSession, TenantUser, resolve_business_id
 from jenny.core.logging import get_logger
-from jenny.rag.knowledge_base import KnowledgeBase, KnowledgeEntry
+from jenny.rag.knowledge_base import PREVIEW_CHARS, KnowledgeBase, KnowledgeEntry
 
 logger = get_logger(__name__)
 
@@ -38,6 +38,8 @@ class KnowledgeEntryResponse(BaseModel):
     id: str
     business_id: str
     title: str
+    # texte complet, pour l'édition
+    content: str
     content_preview: str
     source: str
     category: str
@@ -59,11 +61,13 @@ class KnowledgeStatsResponse(BaseModel):
 
 
 def _to_response(entry: KnowledgeEntry) -> KnowledgeEntryResponse:
-    preview = entry.content[:200] + "..." if len(entry.content) > 200 else entry.content
+    text = entry.content or ""
+    preview = text[:PREVIEW_CHARS] + "..." if len(text) > PREVIEW_CHARS else text
     return KnowledgeEntryResponse(
         id=entry.id,
         business_id=str(entry.business_id),
         title=entry.title,
+        content=text,
         content_preview=preview,
         source=entry.source,
         category=entry.category,

@@ -19,6 +19,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request, Response
+from sqlalchemy import select
 
 # gardé au runtime (FastAPI)
 from jenny.api.dependencies import DbSession  # noqa: TC001
@@ -114,7 +115,7 @@ def _get_engine() -> ConversationEngine:
 
 
 async def _engine_context(business_id, customer_id):
-    """charge faits + catalogue."""
+    """charge faits + catalogue + fuseau."""
     from jenny.services.learning_service import load_customer_context
     from jenny.services.prestation_service import format_catalog, load_active_prestations
 
@@ -123,10 +124,16 @@ async def _engine_context(business_id, customer_id):
             facts = await load_customer_context(session, business_id, customer_id)
             prestations = await load_active_prestations(session, business_id)
             catalog = format_catalog(prestations)
-        return facts, (catalog or None), ([p.name for p in prestations] or None)
+            # fuseau du salon
+            tz = (
+                await session.execute(
+                    select(Business.timezone).where(Business.id == business_id)
+                )
+            ).scalar_one_or_none()
+        return facts, (catalog or None), ([p.name for p in prestations] or None), tz
     except Exception as e:  # pragma: no cover
         logger.warning("webhook.engine_context_failed", error=str(e))
-        return None, None, None
+        return None, None, None, None
 
 
 async def _persist_engine_signals_safe(
@@ -209,7 +216,7 @@ async def _ingest_and_reply(
         message_in.business_id, conversation_id=conv_id, kind="processing", channel=channel
     )
     persona, business_name = await load_business_persona_fresh(message_in.business_id)
-    facts, catalog, services = await _engine_context(message_in.business_id, customer_id)
+    facts, catalog, services, tz = await _engine_context(message_in.business_id, customer_id)
     try:
         out = await _get_engine().process(
             EngineRequest(
@@ -223,6 +230,7 @@ async def _ingest_and_reply(
                 customer_facts=facts,
                 catalog=catalog,
                 catalog_services=services,
+                timezone=tz,
             )
         )
         sent = await send_reply(reply_recipient, out.response_text)
@@ -439,7 +447,7 @@ async def _whatsapp_ingest_and_reply(
     )
     engine = _get_engine()
     persona, business_name = await load_business_persona_fresh(business_id)
-    facts, catalog, services = await _engine_context(business_id, customer_id)
+    facts, catalog, services, tz = await _engine_context(business_id, customer_id)
     req = EngineRequest(
         conversation_id=conv_id,
         business_id=business_id,
@@ -451,6 +459,7 @@ async def _whatsapp_ingest_and_reply(
         customer_facts=facts,
         catalog=catalog,
         catalog_services=services,
+        timezone=tz,
     )
     try:
         out = await engine.process(req)
@@ -525,7 +534,7 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
     )
     engine = _get_engine()
     persona, business_name = await load_business_persona_fresh(business_id)
-    facts, catalog, services = await _engine_context(business_id, customer_id)
+    facts, catalog, services, tz = await _engine_context(business_id, customer_id)
     req = EngineRequest(
         conversation_id=conv_id,
         business_id=business_id,
@@ -537,6 +546,7 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
         customer_facts=facts,
         catalog=catalog,
         catalog_services=services,
+        timezone=tz,
     )
     try:
         out = await engine.process(req)

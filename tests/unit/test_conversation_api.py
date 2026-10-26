@@ -1,14 +1,25 @@
 """Tests pour la route API de conversation."""
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from jenny.api.main import create_app
+from jenny.db.session import async_session_factory
+from jenny.domain.models.business import Business
 
 # schéma pour tous les tests
 pytestmark = pytest.mark.usefixtures("db_tables")
+
+
+async def _biz() -> str:
+    """Salon réel (sinon 404)."""
+    async with async_session_factory() as s, s.begin():
+        biz = Business(name="Salon", slug=f"s-{uuid4().hex[:8]}")
+        s.add(biz)
+        await s.flush()
+        return str(biz.id)
 
 
 @pytest.fixture
@@ -30,7 +41,7 @@ class TestConversationAPI:
             "/api/v1/conversation/chat",
             json={
                 "conversation_id": str(uuid4()),
-                "business_id": str(uuid4()),
+                "business_id": await _biz(),
                 "message": "Bonjour !",
             },
         )
@@ -46,7 +57,7 @@ class TestConversationAPI:
             "/api/v1/conversation/chat",
             json={
                 "conversation_id": str(uuid4()),
-                "business_id": str(uuid4()),
+                "business_id": await _biz(),
                 "message": "Où en est ma commande CMD-12345 ?",
             },
         )
@@ -61,7 +72,7 @@ class TestConversationAPI:
             "/api/v1/conversation/chat",
             json={
                 "conversation_id": str(uuid4()),
-                "business_id": str(uuid4()),
+                "business_id": await _biz(),
                 "message": "Je veux parler à un humain",
             },
         )
@@ -99,7 +110,7 @@ class TestConversationAPI:
         par son business (un token d'un AUTRE tenant obtient « not_found »)."""
         from jenny.api.auth.jwt_utils import create_access_token
 
-        biz_a = uuid4()
+        biz_a = UUID(await _biz())
         conv = str(uuid4())
         # Crée un état pour le business A (business_id dans le corps, sans auth).
         await client.post(
@@ -129,7 +140,7 @@ class TestConversationAPI:
     async def test_multiturn_conversation(self, client: AsyncClient) -> None:
         """Conversation multi-tour — le contexte persiste."""
         conv_id = str(uuid4())
-        business_id = str(uuid4())
+        business_id = await _biz()
 
         # Tour 1
         r1 = await client.post(

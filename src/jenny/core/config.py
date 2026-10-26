@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = 60
     # POST /auth/* par IP
     rate_limit_auth_max_requests: int = 20
+    # login par IP, échecs à part
+    rate_limit_login_max_requests: int = 60
     # chat par IP
     rate_limit_chat_max_requests: int = 30
     # chat par salon
@@ -220,7 +222,9 @@ def check_prod_secrets(settings: Settings) -> None:
     if not settings.is_prod:
         return
     errors: list[str] = []
-    if not settings.jwt_secret.strip() or settings.jwt_secret == DEFAULT_JWT_SECRET:
+    secret = settings.jwt_secret.strip()
+    # valeur d'exemple du .env
+    if not secret or secret == DEFAULT_JWT_SECRET or secret.upper().startswith("CHANGE_ME"):
         errors.append("JENNY_JWT_SECRET doit être défini (valeur par défaut interdite)")
     key = settings.master_key.strip()
     if not key:
