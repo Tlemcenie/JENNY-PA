@@ -163,6 +163,20 @@ class TestRefusApresReservationRatee:
         assert await _appts(biz) == []
 
     @pytest.mark.asyncio
+    async def test_deuxieme_rdv_jour_du_premier(self, db_tables) -> None:  # noqa: F811
+        # 2e rdv : son 1er ne compte pas
+        biz = await _seed(block=(2, 12, 17))
+        chat = _Chat(biz)
+        r1 = await chat.say("je réserve une coupe femme demain à 10h")
+        assert (r1.action_result or {}).get("success") is True
+        r2 = await chat.say("je voudrais réserver une autre coupe femme après-demain à 14h")
+        assert (r2.action_result or {}).get("conflict") is True
+        r3 = await chat.say("demain alors")
+        assert (r3.action_result or {}).get("success") is True
+        starts = sorted(_local(a.start_at) for a in await _appts(biz))
+        assert starts == [_at(1, 10), _at(1, 14)]
+
+    @pytest.mark.asyncio
     async def test_refus_puis_report_du_vieux_rdv(self, db_tables) -> None:  # noqa: F811
         # « non, plutôt décaler » : on redemande
         biz = await _seed(block=(1, 9, 12))

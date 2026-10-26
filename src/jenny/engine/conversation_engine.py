@@ -861,10 +861,12 @@ class ConversationEngine:
         _when_txt = strip_farewell(_msg_txt, keep_days=_keep_days)
         _farewell = is_farewell(_msg_txt, today=today, keep_days=_keep_days)
         # « non merci, je garde demain »
+        # rdv actuel : seulement en report
+        _cur = _booked_now if prev_pending == "manage_appointment" else [(None, None)]
         _stays = (
             _offered
             and not _farewell
-            and any(keeps_current_slot(_when_txt, today=today, booked=b) for b in _booked_now)
+            and any(keeps_current_slot(_when_txt, today=today, booked=b) for b in _cur)
         )
         if _offered and (_farewell or _stays):
             # offre close : vieux créneau oublié
