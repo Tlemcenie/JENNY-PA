@@ -88,8 +88,17 @@
       "color:#626875;font-size:16px;line-height:1;cursor:pointer;padding:0}" +
       ".teaser button:focus-visible{outline:2px solid #1A1D26;outline-offset:2px}" +
       "@keyframes jwIn{from{opacity:0;transform:translateY(6px)}}" +
+      ".hclose{position:absolute;top:10px;right:10px;z-index:2;width:40px;height:40px;margin:0;padding:0;border:0;border-radius:12px;" +
+      "background:rgba(26,29,38,.08);color:#1A1D26;display:none;align-items:center;justify-content:center;cursor:pointer}" +
+      ".hclose svg{width:20px;height:20px;display:block}" +
+      ".hclose:focus-visible,.fallback a:focus-visible,.fallback button:focus-visible{outline:2px solid #1A1D26;outline-offset:2px}" +
+      ".fallback{position:absolute;top:0;left:0;right:0;bottom:0;display:none;flex-direction:column;align-items:center;justify-content:center;" +
+      "gap:14px;padding:24px;text-align:center;background:#fff;color:#1A1D26;font-size:15px;line-height:1.45}" +
+      ".fallback a{color:#1A1D26;font-weight:600}" +
+      ".fallback button{border:1px solid #D5D8DE;background:#fff;color:#1A1D26;border-radius:999px;padding:8px 18px;font:inherit;font-size:14px;cursor:pointer}" +
+      ".failed .fallback{display:flex}.failed .panel iframe{visibility:hidden}" +
       "@media (max-width:480px){.panel{top:0;left:0;right:0;bottom:0;width:100%;max-width:none;height:100%;max-height:none;border-radius:0}" +
-      ".open .bubble{display:none}}" +
+      ".open .bubble{display:none}.open:not(.ready) .hclose{display:flex}}" +
       "@media (prefers-reduced-motion:reduce){.bubble,.panel,.open .panel{transition:none}.teaser{animation:none}.bubble:hover{transform:none}}";
 
     var svgChat =
@@ -97,10 +106,13 @@
     var svgClose =
       '<svg class="ic-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
-    var host, root, wrap, bubble, panel, badge, teaser, iframe;
+    var host, root, wrap, bubble, panel, badge, teaser, iframe, fallback;
     var isOpen = false;
     var ready = false;
+    var teaserDone = false;
+    var loadTimer = null;
     var savedOverflow = null;
+    var LOAD_MS = 10000;
     var teaserKey = "jw-teaser:" + slug;
     var mobile = window.matchMedia ? window.matchMedia("(max-width: 480px)") : null;
 
@@ -113,6 +125,25 @@
       }
     }
 
+    // iframe muette : plan B
+    function watchLoad() {
+      clearTimeout(loadTimer);
+      loadTimer = setTimeout(function () {
+        if (ready) return;
+        wrap.classList.add("failed");
+        if (isOpen) focusFallback();
+      }, LOAD_MS);
+    }
+
+    function focusFallback() {
+      var btn = fallback && fallback.querySelector("button");
+      try {
+        if (btn) btn.focus();
+      } catch {
+        // ignore
+      }
+    }
+
     function ensureFrame() {
       if (iframe) return;
       iframe = doc.createElement("iframe");
@@ -120,6 +151,15 @@
       iframe.title = "Discussion avec Jenny, assistante virtuelle";
       iframe.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
       panel.appendChild(iframe);
+      watchLoad();
+    }
+
+    // on retente au prochain clic
+    function retryFrame() {
+      if (!iframe || ready || !wrap.classList.contains("failed")) return;
+      wrap.classList.remove("failed");
+      iframe.src = src;
+      watchLoad();
     }
 
     // scroll page bloqué sur mobile
@@ -128,7 +168,7 @@
       if (on && mobile && mobile.matches) {
         if (savedOverflow === null) savedOverflow = el.style.overflow;
         el.style.overflow = "hidden";
-      } else if (!on && savedOverflow !== null) {
+      } else if (savedOverflow !== null) {
         el.style.overflow = savedOverflow;
         savedOverflow = null;
       }
@@ -149,6 +189,7 @@
     }
 
     function hideTeaser(remember) {
+      teaserDone = true;
       if (teaser) teaser.hidden = true;
       if (remember) {
         try {
@@ -162,6 +203,7 @@
     function openPanel() {
       if (isOpen) return;
       ensureFrame();
+      retryFrame();
       isOpen = true;
       wrap.classList.add("open");
       panel.removeAttribute("inert");
@@ -170,10 +212,13 @@
       setBadge(0);
       hideTeaser(true);
       lockScroll(true);
-      try {
-        iframe.focus();
-      } catch {
-        // ignore
+      if (wrap.classList.contains("failed")) focusFallback();
+      else {
+        try {
+          iframe.focus();
+        } catch {
+          // ignore
+        }
       }
       post("open");
     }
@@ -197,6 +242,9 @@
       if (!d || d.jw !== 1) return;
       if (d.type === "ready") {
         ready = true;
+        clearTimeout(loadTimer);
+        wrap.classList.remove("failed");
+        wrap.classList.add("ready");
         if (isOpen) {
           try {
             iframe.focus();
@@ -235,6 +283,39 @@
       panel.setAttribute("aria-label", "Discussion avec Jenny, assistante virtuelle");
       panel.setAttribute("aria-hidden", "true");
       panel.setAttribute("inert", "");
+
+      // fermer même sans iframe
+      var hclose = doc.createElement("button");
+      hclose.type = "button";
+      hclose.className = "hclose";
+      hclose.setAttribute("aria-label", "Fermer la discussion");
+      hclose.innerHTML = svgClose.replace('class="ic-close" ', "");
+      hclose.addEventListener("click", function () {
+        closePanel(true);
+      });
+      panel.appendChild(hclose);
+
+      fallback = doc.createElement("div");
+      fallback.className = "fallback";
+      fallback.setAttribute("role", "alert");
+      var msg = doc.createElement("p");
+      msg.style.margin = "0";
+      msg.textContent = "Jenny n'a pas pu se charger ici.";
+      var tab = doc.createElement("a");
+      tab.href = origin + "/widget/" + encodeURIComponent(slug) + "?c=" + encodeURIComponent(color) + "&t=" + theme;
+      tab.target = "_blank";
+      tab.rel = "noopener noreferrer";
+      tab.textContent = "Ouvrir la discussion dans un nouvel onglet";
+      var shut = doc.createElement("button");
+      shut.type = "button";
+      shut.textContent = "Fermer";
+      shut.addEventListener("click", function () {
+        closePanel(true);
+      });
+      fallback.appendChild(msg);
+      fallback.appendChild(tab);
+      fallback.appendChild(shut);
+      panel.appendChild(fallback);
 
       bubble = doc.createElement("button");
       bubble.type = "button";
@@ -288,7 +369,8 @@
           teaser.appendChild(x);
           wrap.appendChild(teaser);
           setTimeout(function () {
-            if (!isOpen && teaser) teaser.hidden = false;
+            // déjà ouvert ou masqué
+            if (!isOpen && !teaserDone && teaser) teaser.hidden = false;
           }, 6000);
         }
       }
@@ -298,6 +380,14 @@
       doc.body.appendChild(host);
 
       window.addEventListener("message", onMessage);
+      // rotation : scroll à jour
+      if (mobile) {
+        var sync = function () {
+          lockScroll(isOpen);
+        };
+        if (mobile.addEventListener) mobile.addEventListener("change", sync);
+        else if (mobile.addListener) mobile.addListener(sync);
+      }
       doc.addEventListener("keydown", function (e) {
         if (isOpen && (e.key === "Escape" || e.key === "Esc")) closePanel(true);
       });

@@ -23,6 +23,10 @@ const FAST_POLL = 8_000;
 const SLOW_POLL = 30_000;
 const ACTIVE_MS = 3 * 60_000;
 const RECENT_MS = 10 * 60_000;
+// réponse qui parle de RDV
+const BOOK_RE = /rendez-vous|\brdv\b|réserv|créneau|disponib/i;
+// RDV déjà calé
+const DONE_RE = /confirm|c'est noté|enregistr|annul/i;
 
 type Phase = "loading" | "ready" | "notfound" | "error";
 type Theme = "auto" | "light" | "dark";
@@ -161,6 +165,7 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
   const humanRef = useRef(human);
   const lastActivity = useRef(0);
   const unread = useRef(0);
+  const teamSeen = useRef<Set<string>>(new Set());
   const wantFocus = useRef(false);
   const inputId = useId();
   const hintId = useId();
@@ -179,6 +184,7 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
   // session locale
   useEffect(() => {
     const s = loadSession(slug);
+    teamSeen.current = new Set(s.teamSeen);
     setVisitorId(s.visitorId);
     setMessages(s.messages);
     setHuman(s.human);
@@ -205,7 +211,8 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
     saveLog(
       slug,
       messages.filter((m) => !m.failed),
-      human
+      human,
+      Array.from(teamSeen.current)
     );
   }, [slug, visitorId, messages, human]);
 
@@ -293,8 +300,9 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
   const mergeTeam = useCallback((res: WidgetPoll) => {
     setHuman(res.human);
     const known = new Set(messagesRef.current.map((m) => m.id));
+    // déjà vus, même hors log
     const fresh: ChatMessage[] = res.messages
-      .filter((t) => !known.has(`t-${t.id}`))
+      .filter((t) => !known.has(`t-${t.id}`) && !teamSeen.current.has(`t-${t.id}`))
       .map((t) => ({
         id: `t-${t.id}`,
         role: "team",
@@ -302,6 +310,7 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
         at: (t.at && Date.parse(t.at)) || Date.now(),
       }));
     if (!fresh.length) return;
+    for (const m of fresh) teamSeen.current.add(m.id);
     lastActivity.current = Date.now();
     setMessages((prev) => {
       const ids = new Set(prev.map((m) => m.id));
@@ -390,6 +399,7 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
   );
 
   const reset = () => {
+    teamSeen.current = new Set();
     setVisitorId(resetSession(slug));
     setMessages([]);
     setHuman(false);
@@ -402,6 +412,11 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
   const name = config?.name ?? "";
   const last = messages[messages.length - 1];
   const chips = !config ? [] : !started ? config.suggestions : last?.role === "jenny" ? quick : [];
+  // lien de réservation utile ?
+  const bookTalk =
+    last?.role === "jenny" && BOOK_RE.test(last.text) && !DONE_RE.test(last.text) && !quick.includes("Oui");
+  const showBook = !!config && !human && (!started || bookTalk);
+  const bookUrl = `/book/${encodeURIComponent(slug)}`;
   const busy = typing || cooldown > 0;
   const tooLong = input.length > MAX_LEN;
 
@@ -424,7 +439,7 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
         {phase === "ready" && (
           <a
             className={styles.iconBtn}
-            href={`/book/${encodeURIComponent(slug)}`}
+            href={bookUrl}
             target="_blank"
             rel="noopener noreferrer"
             aria-label="Réserver en ligne (nouvel onglet)"
@@ -516,7 +531,7 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
             )}
           </div>
 
-          {chips.length > 0 && !typing && (
+          {(chips.length > 0 || showBook) && !typing && (
             <div className={styles.chips} role="group" aria-label="Réponses rapides">
               {chips.map((c) => (
                 <button
@@ -529,6 +544,13 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
                   {c}
                 </button>
               ))}
+              {showBook && (
+                <a className={`${styles.chip} ${styles.chipBook}`} href={bookUrl} target="_blank" rel="noopener noreferrer">
+                  <CalendarDays size={14} aria-hidden="true" />
+                  Réserver en ligne
+                  <span className={styles.srOnly}> (nouvel onglet)</span>
+                </a>
+              )}
             </div>
           )}
 

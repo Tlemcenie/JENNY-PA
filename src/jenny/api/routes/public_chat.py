@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import time
 import unicodedata
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4, uuid5
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -17,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from sqlalchemy import select
 
 from jenny.api.dependencies import DbSession  # noqa: TC001
-from jenny.api.middleware.rate_limit import _client_ip
+from jenny.api.middleware.rate_limit import _client_ip, enforce_business_chat_limit
 from jenny.api.routes.conversation import _run_engine_chat
 from jenny.core.config import get_settings
 from jenny.core.events import publish_conversation_event
@@ -25,8 +26,12 @@ from jenny.core.logging import get_logger
 from jenny.domain.models.business import Business
 from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.message import Message
+from jenny.engine.factory import get_engine
 
 if TYPE_CHECKING:
+    from sqlalchemy.engine import Row
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from jenny.engine.conversation_engine import EngineResponse
 
 logger = get_logger(__name__)
@@ -57,16 +62,23 @@ class _Window:
         self.max_keys = max_keys
         self._hits: OrderedDict[str, deque[float]] = OrderedDict()
 
-    def wait(self, key: str, now: float) -> int:
-        """Secondes à attendre, 0 si ok."""
+    def used(self, key: str, now: float) -> int:
+        """Requêtes dans la fenêtre."""
         dq = self._hits.get(key)
         if not dq:
             return 0
         cutoff = now - self.seconds
         while dq and dq[0] <= cutoff:
             dq.popleft()
-        if len(dq) < self.limit:
+        return len(dq)
+
+    def wait(self, key: str, now: float) -> int:
+        """Secondes à attendre, 0 si ok."""
+        if self.limit <= 0:
+            return max(1, int(self.seconds))
+        if self.used(key, now) < self.limit:
             return 0
+        dq = self._hits[key]
         return max(1, int(dq[0] + self.seconds - now) + 1)
 
     def add(self, key: str, now: float) -> None:
@@ -87,15 +99,42 @@ class _Window:
         self._hits.clear()
 
 
+SALON_BUDGET = 600  # messages par 10 min
 _VISITOR = _Window(10, 60)
-_IP = _Window(30, 60)
-_SALON = _Window(600, 600, max_keys=2000)
+# par IP, tous salons
+_IP = _Window(20, 60)
+# nouvelles convs par IP
+_NEW_IP = _Window(5, 600)
+# coût LLM du salon
+_SALON = _Window(SALON_BUDGET, 600, max_keys=1000)
+# part max d'une IP
+_SALON_IP = _Window(SALON_BUDGET // 10, 600, max_keys=5000)
+# réserve si salon saturé
+_SPARE = _Window(SALON_BUDGET // 5, 600, max_keys=1000)
+_SPARE_IP = _Window(10, 600, max_keys=5000)
 _POLL_VISITOR = _Window(20, 60)
 _POLL_IP = _Window(120, 60)
 _CONFIG_IP = _Window(60, 60)
-_LIMITS = (_VISITOR, _IP, _SALON, _POLL_VISITOR, _POLL_IP, _CONFIG_IP)
+_LIMITS = (
+    _VISITOR,
+    _IP,
+    _NEW_IP,
+    _SALON,
+    _SALON_IP,
+    _SPARE,
+    _SPARE_IP,
+    _POLL_VISITOR,
+    _POLL_IP,
+    _CONFIG_IP,
+)
 # conversations en cours
 _BUSY: set[UUID] = set()
+# états moteur du widget
+MAX_STATES = 2000
+STATE_IDLE = 2 * 3600.0
+_STATES: OrderedDict[UUID, float] = OrderedDict()
+
+_BUSY_TEXT = "Jenny reçoit beaucoup de messages, réessayez dans un instant."
 
 
 def reset_limits() -> None:
@@ -103,23 +142,85 @@ def reset_limits() -> None:
     for w in _LIMITS:
         w.clear()
     _BUSY.clear()
+    _STATES.clear()
 
 
 def _limits_on() -> bool:
     return get_settings().rate_limit_enabled
 
 
-def _take(checks: list[tuple[_Window, str]]) -> int:
+_Check = tuple[_Window, str]
+
+
+def _wait(checks: list[_Check], now: float) -> int:
+    return max((w.wait(k, now) for w, k in checks), default=0)
+
+
+def _add(checks: list[_Check], now: float) -> None:
+    for w, k in checks:
+        w.add(k, now)
+
+
+def _take(checks: list[_Check]) -> int:
     """Vérifie puis compte, tout ou rien."""
     if not _limits_on():
         return 0
     now = time.monotonic()
-    wait = max(w.wait(k, now) for w, k in checks)
+    wait = _wait(checks, now)
     if wait:
         return wait
-    for w, k in checks:
-        w.add(k, now)
+    _add(checks, now)
     return 0
+
+
+def _peek(checks: list[_Check]) -> int:
+    """Vérifie sans compter."""
+    if not _limits_on():
+        return 0
+    return _wait(checks, time.monotonic())
+
+
+async def _shared_ok(business_id: UUID) -> bool:
+    """Quota salon commun au chat."""
+    try:
+        await enforce_business_chat_limit(business_id)
+    except HTTPException as exc:
+        if exc.status_code != 429:
+            raise
+        return False
+    return True
+
+
+async def _admit(business_id: UUID, ip: str, visitor_key: str, new: bool) -> tuple[int, str | None]:
+    """Laisse passer ou non, avec le texte."""
+    if not _limits_on():
+        return 0, None
+    salon = str(business_id)
+    now = time.monotonic()
+    mine: list[_Check] = [(_IP, ip), (_VISITOR, visitor_key), (_SALON_IP, f"{salon}:{ip}")]
+    wait = _wait(mine, now)
+    if wait:
+        return wait, None
+    if new:
+        mine.append((_NEW_IP, ip))
+        wait = _NEW_IP.wait(ip, now)
+        if wait:
+            return wait, f"Trop de nouvelles conversations, réessayez dans {wait} s."
+    # budget normal du salon
+    if not _SALON.wait(salon, now) and await _shared_ok(business_id):
+        _add([*mine, (_SALON, salon)], now)
+        return 0, None
+    # saturé : réserve, une petite part par IP
+    spare: list[_Check] = [(_SPARE, salon), (_SPARE_IP, f"{salon}:{ip}")]
+    wait = _wait(spare, now)
+    # convs déjà lancées d'abord
+    if not wait and new and _SPARE.used(salon, now) >= _SPARE.limit // 2:
+        wait = 30  # repasser bientôt
+    if wait:
+        logger.warning("public_chat.salon_full", business_id=salon)
+        return wait, _BUSY_TEXT
+    _add([*mine, *spare], now)
+    return 0, None
 
 
 def _too_many(wait: int, text: str | None = None) -> JSONResponse:
@@ -180,8 +281,48 @@ def _check_slug(slug: str) -> None:
 
 
 def _ip(request: Request) -> str:
-    # clé courte, bornée
-    return _client_ip(request)[:64]
+    """IP vue par notre proxy, IPv6 en /64."""
+    raw = _client_ip(request).strip()
+    try:
+        addr = ipaddress.ip_address(raw)
+    except ValueError:
+        return raw[:64]
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped:
+            return str(addr.ipv4_mapped)
+        # une box = un /64
+        return str(ipaddress.ip_network(f"{addr}/64", strict=False))
+    return str(addr)
+
+
+_AUTH_HEADERS = {b"authorization", b"x-api-key", b"cookie"}
+
+
+def _anonymous(request: Request) -> Request:
+    """Même requête, sans jeton."""
+    scope = dict(request.scope)
+    scope["headers"] = [(k, v) for k, v in request.scope["headers"] if k not in _AUTH_HEADERS]
+    # pas de principal en cache
+    scope["state"] = {}
+    return Request(scope)
+
+
+async def _track_state(conv_id: UUID) -> None:
+    """Borne les états moteur du widget."""
+    now = time.monotonic()
+    _STATES[conv_id] = now
+    _STATES.move_to_end(conv_id)
+    while _STATES:
+        oldest, seen = next(iter(_STATES.items()))
+        if len(_STATES) <= MAX_STATES and now - seen < STATE_IDLE:
+            break
+        _STATES.popitem(last=False)
+        if oldest in _BUSY:
+            continue
+        try:
+            await get_engine().state_manager.adelete(oldest)
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.warning("public_chat.state_evict_error", error=str(exc))
 
 
 async def _salon(db, slug: str) -> Business:
@@ -415,6 +556,29 @@ async def _taken_over(db, conv_id: UUID, business_id: UUID) -> bool:
     return bool(who)
 
 
+async def _conv_row(db: AsyncSession, conv_id: UUID) -> Row[Any] | None:
+    """Conv déjà en base ? sinon None."""
+    return (
+        await db.execute(
+            select(
+                Conversation.business_id,
+                Conversation.assigned_to,
+                Conversation.customer_id,
+                Conversation.channel,
+            ).where(Conversation.id == conv_id)
+        )
+    ).one_or_none()
+
+
+def _known_customer(row: Row[Any] | None, business_id: UUID) -> UUID | None:
+    """Client lié à cette conv widget."""
+    # seulement une conv du widget
+    if row is None or row.business_id != business_id or row.channel != CHANNEL:
+        return None
+    cid = row.customer_id
+    return cid if isinstance(cid, UUID) else None
+
+
 async def _save_inbound_only(db, conv_id: UUID, text: str) -> bool:
     """Garde le message, Jenny se tait."""
     try:
@@ -478,30 +642,42 @@ async def public_chat(
     """Message du site vers Jenny."""
     _check_slug(slug)
     body = _parse(PublicChatRequest, await _read_body(request))
-    wait = _take([(_VISITOR, f"{slug}:{body.visitor_id}"), (_IP, _ip(request))])
+    ip = _ip(request)
+    visitor_key = f"{slug}:{body.visitor_id}"
+    # tri rapide avant la base
+    wait = _peek([(_IP, ip), (_VISITOR, visitor_key)])
     if wait:
         return _too_many(wait)
     biz = await _salon(db, slug)
-    wait = _take([(_SALON, str(biz.id))])
-    if wait:
-        return _too_many(wait, "Jenny reçoit beaucoup de messages, réessayez dans un instant.")
-
     conv_id = conversation_id_for(biz.id, body.visitor_id)
+    row = await _conv_row(db, conv_id)
+    wait, text = await _admit(biz.id, ip, visitor_key, new=row is None)
+    if wait:
+        return _too_many(wait, text)
+
     if conv_id in _BUSY:
         return _too_many(2, "Jenny vous répond, un message à la fois.")
     _BUSY.add(conv_id)
+    ran = False
     try:
         # reprise humaine : Jenny se tait
-        if await _taken_over(db, conv_id, biz.id):
+        if row is not None and row.business_id == biz.id and row.assigned_to:
             if await _save_inbound_only(db, conv_id, body.message):
                 publish_conversation_event(
                     biz.id, conversation_id=conv_id, kind="inbound", channel=CHANNEL
                 )
             return PublicChatResponse(response="", handoff=True, human=True)
 
-        engine_body = _EngineBody(conversation_id=conv_id, business_id=biz.id, message=body.message)
+        engine_body = _EngineBody(
+            conversation_id=conv_id,
+            business_id=biz.id,
+            message=body.message,
+            customer_id=_known_customer(row, biz.id),
+        )
+        ran = True
         try:
-            result, message_id = await _run_engine_chat(db, engine_body, request)
+            # toujours anonyme ici
+            result, message_id = await _run_engine_chat(db, engine_body, _anonymous(request))
         except HTTPException:
             raise
         except Exception as exc:
@@ -511,6 +687,8 @@ async def public_chat(
             ) from None
     finally:
         _BUSY.discard(conv_id)
+        if ran:
+            await _track_state(conv_id)
 
     if message_id is not None:
         publish_conversation_event(biz.id, conversation_id=conv_id, kind="inbound", channel=CHANNEL)
