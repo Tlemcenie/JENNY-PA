@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+
 from jenny.actions.handlers.book_appointment_db import BookAppointmentDBAction
 from jenny.actions.handlers.check_planning import CheckPlanningAction
 from jenny.actions.handlers.create_ticket import CreateTicketAction
@@ -45,6 +48,19 @@ def build_retriever() -> VectorRetriever:
     return VectorRetriever(embedder=embedder, vector_store=store)
 
 
+def rag_encoder() -> object | None:
+    """mpnet du rag, si c'est le même."""
+    from ml.models.intent_head.predict import ENCODER_NAME
+
+    embedder = get_default_embedder()
+    if not isinstance(embedder, SentenceTransformerEmbedder):
+        return None
+    if embedder.model_name.split("/")[-1] != ENCODER_NAME:
+        return None
+    # registre rag verrouillé
+    return embedder._load_model()
+
+
 def load_intent_predictor(kind: str | None = None, *, fallback: bool = True) -> object | None:
     """charge l'intention : head ou lstm."""
     settings = get_settings()
@@ -54,7 +70,10 @@ def load_intent_predictor(kind: str | None = None, *, fallback: bool = True) -> 
         try:
             from ml.models.intent_head.predict import EmbeddingIntentPredictor
 
-            head = EmbeddingIntentPredictor.from_checkpoint(settings.intent_head_path)
+            # un seul mpnet en ram
+            head = EmbeddingIntentPredictor.from_checkpoint(
+                settings.intent_head_path, encoder=rag_encoder()
+            )
             logger.info("engine.ml.intent_loaded", kind="head", path=settings.intent_head_path)
             return head
         except Exception as e:
@@ -95,7 +114,7 @@ def load_ml_predictors() -> tuple[object | None, object | None]:
         return None, None
 
     intent_predictor = load_intent_predictor()
-    # sans ner : regex du moteur
+    # le ner remplit service et date
     ner_predictor = load_ner_predictor() if settings.enable_ner_model else None
     return intent_predictor, ner_predictor
 
@@ -108,8 +127,12 @@ def share_encoder(retriever: VectorRetriever, intent_predictor: object | None) -
         return False
     from ml.models.intent_head.predict import ENCODER_NAME
 
-    # même modèle, pas encore chargé
-    if embedder.model_name.split("/")[-1] != ENCODER_NAME or embedder._model is not None:
+    if embedder.model_name.split("/")[-1] != ENCODER_NAME:
+        return False
+    # déjà le même objet
+    if embedder._model is encoder:
+        return True
+    if embedder._model is not None:
         return False
     if not adopt_st_model(embedder.model_name, encoder):
         return False
@@ -206,17 +229,32 @@ def build_engine(
 # singleton partagé
 
 _engine_singleton: ConversationEngine | None = None
+# une seule construction
+_ENGINE_LOCK = threading.Lock()
 
 
 def get_engine() -> ConversationEngine:
-    """moteur partagé, lazy init."""
+    """moteur partagé, construit une fois."""
     global _engine_singleton
-    if _engine_singleton is None:
-        _engine_singleton = build_engine()
-    return _engine_singleton
+    engine = _engine_singleton
+    if engine is not None:
+        return engine
+    with _ENGINE_LOCK:
+        if _engine_singleton is None:
+            _engine_singleton = build_engine()
+        return _engine_singleton
+
+
+async def aget_engine() -> ConversationEngine:
+    """moteur sans geler la boucle."""
+    engine = _engine_singleton
+    if engine is not None:
+        return engine
+    return await asyncio.to_thread(get_engine)
 
 
 def reset_engine() -> None:
     """reset pour les tests."""
     global _engine_singleton
-    _engine_singleton = None
+    with _ENGINE_LOCK:
+        _engine_singleton = None

@@ -49,6 +49,8 @@ class Group:
 
     text: str
     votes: Counter = field(default_factory=Counter)
+    # (primaire, secondaire) vus
+    pairs: Counter = field(default_factory=Counter)
     n: int = 0
     label: str = ""
 
@@ -60,6 +62,17 @@ class Group:
         """étiquettes à égalité."""
         top = max(self.votes.values())
         return sorted(lab for lab, c in self.votes.items() if c == top)
+
+    def label_set(self) -> list[str]:
+        """primaire + secondaires d'accord."""
+        n = self.votes.get(self.label, 0)
+        # au moins une ligne sur deux
+        extra = sorted(
+            s
+            for (p, s), c in self.pairs.items()
+            if p == self.label and s != self.label and 2 * c >= n
+        )
+        return [self.label, *extra]
 
 
 def group_train(rows: list[dict], train_idx: list[int]) -> list[Group]:
@@ -73,6 +86,9 @@ def group_train(rows: list[dict], train_idx: list[int]) -> list[Group]:
         g = groups.get(key)
         if g is None:
             g = groups[key] = Group(text=row["text"])
-        g.votes[labels_of(row)[0]] += 1
+        labs = labels_of(row)
+        g.votes[labs[0]] += 1
+        for sec in labs[1:]:
+            g.pairs[(labs[0], sec)] += 1
         g.n += 1
     return list(groups.values())

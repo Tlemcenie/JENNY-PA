@@ -76,9 +76,9 @@ class Settings(BaseSettings):
     ner_model_path: str = "checkpoints/ner/best_model.pt"
     # tête mpnet ou lstm
     intent_model_kind: Literal["lstm", "head"] = "head"
-    intent_head_path: str = "checkpoints/intent_head/head.joblib"
-    # ner coupé : regex du moteur
-    enable_ner_model: bool = False
+    intent_head_path: str = "checkpoints/intent_head/head.npz"
+    # ner actif : slots service, date
+    enable_ner_model: bool = True
 
     # embeddings RAG
     # multilingue, 100 % en-process
