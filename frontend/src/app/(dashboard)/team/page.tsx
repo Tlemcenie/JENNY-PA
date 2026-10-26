@@ -12,6 +12,7 @@ import {
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AlertTriangle,
   CalendarDays,
   Check,
   Clock,
@@ -25,14 +26,15 @@ import {
 } from "lucide-react";
 import {
   getBusiness,
+  humanError,
   listPrestations,
-  ApiError,
   type BusinessHours,
   type Prestation,
 } from "@/lib/api";
 import {
   createStaff,
   deleteStaff,
+  doesEverything,
   getStaffOccupancy,
   listStaff,
   updateStaff,
@@ -70,15 +72,6 @@ const FALLBACK_HOURS: BusinessHours = {
   sat: ["09:00", "18:00"],
   sun: null,
 };
-
-function extractError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    const detail = (err.data as { detail?: unknown })?.detail;
-    if (typeof detail === "string") return detail;
-    return `Erreur ${err.status}`;
-  }
-  return fallback;
-}
 
 // résumé lisible des horaires
 function hoursSummary(hours: StaffHours | null): string {
@@ -121,6 +114,7 @@ interface StaffForm {
   isActive: boolean;
   followSalon: boolean;
   days: Record<string, DayRow>;
+  allServices: boolean; // sait tout faire
   prestationIds: string[];
 }
 
@@ -143,6 +137,7 @@ function emptyForm(salon: BusinessHours, color: string): StaffForm {
     isActive: true,
     followSalon: true,
     days: daysFrom(null, salon),
+    allServices: true,
     prestationIds: [],
   };
 }
@@ -154,6 +149,7 @@ function formFromStaff(m: StaffMember, salon: BusinessHours): StaffForm {
     isActive: m.is_active,
     followSalon: m.working_hours === null,
     days: daysFrom(m.working_hours, salon),
+    allServices: doesEverything(m),
     prestationIds: [...m.prestation_ids],
   };
 }
@@ -194,7 +190,7 @@ export default function TeamPage() {
       setLoad(Object.fromEntries(occ.staff.map((l) => [l.staff_id, l])));
       if (biz?.business_hours) setSalonHours(biz.business_hours);
     } catch (err) {
-      setError(extractError(err, "Impossible de charger l'équipe. Vérifiez que le backend est démarré."));
+      setError(humanError(err, "Impossible de charger l'équipe."));
     } finally {
       setIsLoading(false);
     }
@@ -246,12 +242,19 @@ export default function TeamPage() {
         working_hours[d.key] = row.on ? [row.start, row.end] : null;
       }
     }
+    // catalogue vide : fait tout
+    const allServices = form.allServices || prestations.length === 0;
+    if (!allServices && !form.prestationIds.some((id) => prestaName[id])) {
+      toast.error("Cochez au moins une prestation, ou « Toutes les prestations ».");
+      return;
+    }
     const payload = {
       display_name: name,
       color: form.color,
       is_active: form.isActive,
       working_hours,
-      prestation_ids: form.prestationIds,
+      all_services: allServices,
+      prestation_ids: allServices ? [] : form.prestationIds,
     };
     setSaving(true);
     try {
@@ -265,7 +268,7 @@ export default function TeamPage() {
       setFormOpen(false);
       await fetchAll();
     } catch (err) {
-      toast.error(extractError(err, "Échec de l'enregistrement."));
+      toast.error(humanError(err, "Échec de l'enregistrement."));
     } finally {
       setSaving(false);
     }
@@ -278,7 +281,7 @@ export default function TeamPage() {
       toast.success(m.is_active ? `${m.display_name} est en pause.` : `${m.display_name} est de retour.`);
       await fetchAll();
     } catch (err) {
-      toast.error(extractError(err, "Échec de la mise à jour."));
+      toast.error(humanError(err, "Échec de la mise à jour."));
     } finally {
       setBusyId(null);
     }
@@ -303,7 +306,7 @@ export default function TeamPage() {
       );
       await fetchAll();
     } catch (err) {
-      toast.error(extractError(err, "Échec de la suppression."));
+      toast.error(humanError(err, "Échec de la suppression."));
     } finally {
       setBusyId(null);
     }
@@ -467,22 +470,31 @@ export default function TeamPage() {
               </div>
 
               {/* prestations */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[12.5px] font-semibold text-jenny-text">Prestations réalisées</span>
-                  <span className="text-[11.5px] text-jenny-text-secondary">
-                    {form.prestationIds.length === 0 ? "aucune cochée = toutes" : `${form.prestationIds.length} cochée(s)`}
-                  </span>
-                </div>
+              <div className="rounded-xl bg-jenny-bg border border-jenny-divider p-3.5">
                 {prestations.length === 0 ? (
-                  <p className="text-[12.5px] text-jenny-text-secondary">
-                    Aucune prestation dans le catalogue : ce coiffeur fera tout.{" "}
-                    <Link href="/prestations" className="text-jenny-coral font-semibold hover:underline">
-                      Créer le catalogue
-                    </Link>
-                  </p>
+                  <>
+                    <div className="text-[12.5px] font-semibold text-jenny-text mb-1">Prestations réalisées</div>
+                    <p className="text-[12.5px] text-jenny-text-secondary">
+                      Aucune prestation dans le catalogue : ce coiffeur fera tout.{" "}
+                      <Link href="/prestations" className="text-jenny-coral font-semibold hover:underline">
+                        Créer le catalogue
+                      </Link>
+                    </p>
+                  </>
                 ) : (
-                  <div className="flex flex-wrap gap-1.5">
+                  <ToggleRow
+                    label="Toutes les prestations"
+                    hint={
+                      form.allServices
+                        ? "Jenny peut lui donner n'importe quel RDV."
+                        : "Décoché : seulement les prestations cochées ci-dessous."
+                    }
+                    on={form.allServices}
+                    onToggle={() => setForm((f) => ({ ...f, allServices: !f.allServices }))}
+                  />
+                )}
+                {prestations.length > 0 && !form.allServices && (
+                  <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Prestations réalisées">
                     {prestations.map((p) => {
                       const on = form.prestationIds.includes(p.id);
                       return (
@@ -495,7 +507,7 @@ export default function TeamPage() {
                             "inline-flex items-center gap-1 h-8 px-3 rounded-full border text-[12.5px] font-medium transition-colors",
                             on
                               ? "bg-jenny-coral text-white border-jenny-coral"
-                              : "bg-jenny-bg text-jenny-text border-jenny-divider hover:border-jenny-coral/40"
+                              : "bg-jenny-surface text-jenny-text border-jenny-divider hover:border-jenny-coral/40"
                           )}
                         >
                           {on && <Check className="w-3.5 h-3.5" />}
@@ -505,6 +517,13 @@ export default function TeamPage() {
                     })}
                   </div>
                 )}
+                {prestations.length > 0 &&
+                  !form.allServices &&
+                  !form.prestationIds.some((id) => prestaName[id]) && (
+                    <p className="mt-2 text-[11.5px] text-jenny-warning">
+                      Cochez au moins une prestation.
+                    </p>
+                  )}
               </div>
 
               {/* horaires */}
@@ -646,10 +665,19 @@ function StaffCard({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1">
-        {skills.length === 0 ? (
+        {doesEverything(member) ? (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-jenny-coral/10 text-jenny-coral text-[11.5px] font-medium">
             <Scissors className="w-3 h-3" />
             Toutes les prestations
+          </span>
+        ) : skills.length === 0 ? (
+          // prestations supprimées : à revoir
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-jenny-warning/12 text-jenny-warning text-[11.5px] font-medium"
+            title="Ses prestations ont été supprimées ou désactivées : Jenny ne lui donne plus de RDV pour une prestation précise."
+          >
+            <AlertTriangle className="w-3 h-3" />
+            Aucune prestation, à compléter
           </span>
         ) : (
           skills.map((s) => (
