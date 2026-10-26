@@ -356,7 +356,7 @@ export function VerifyForm({ initialEmail }: { initialEmail: string }) {
                       e.target.select();
                     }}
                     onBlur={() => setActiveIndex((cur) => (cur === i ? null : cur))}
-                    className={`w-12 h-14 sm:w-[52px] sm:h-16 text-center text-2xl font-bold rounded-2xl bg-white border-2 text-jenny-text transition-all duration-150 focus:outline-none focus:ring-4 focus:ring-jenny-coral/15 focus:border-jenny-coral disabled:opacity-50 ${
+                    className={`w-12 h-14 sm:w-[52px] sm:h-16 text-center text-2xl font-bold rounded-2xl bg-jenny-surface border-2 text-jenny-text transition-all duration-150 focus:outline-none focus:ring-4 focus:ring-jenny-coral/15 focus:border-jenny-coral disabled:opacity-50 ${
                       d ? "border-jenny-coral/60 bg-jenny-coral/[0.04]" : "border-jenny-divider"
                     } ${error ? "border-jenny-error/50" : ""}`}
                   />

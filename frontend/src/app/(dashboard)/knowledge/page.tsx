@@ -945,7 +945,7 @@ export default function KnowledgePage() {
                         borderRadius: 9,
                         flexShrink: 0,
                         background: isPdf ? "#FEE2E2" : "var(--mint)",
-                        color: isPdf ? "#991B1B" : "#1F6A47",
+                        color: isPdf ? "#991B1B" : "var(--mint-ink)",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",

@@ -18,7 +18,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       primary:
         "bg-jenny-coral text-white hover:bg-jenny-coral-dark shadow-sm shadow-jenny-coral/20 hover:shadow-md hover:shadow-jenny-coral/25 active:scale-[0.98]",
       secondary:
-        "bg-white text-jenny-text border border-jenny-divider hover:bg-jenny-bg hover:border-jenny-text-secondary/25 active:scale-[0.98]",
+        "bg-jenny-surface text-jenny-text border border-jenny-divider hover:bg-jenny-bg hover:border-jenny-text-secondary/25 active:scale-[0.98]",
       ghost:
         "text-jenny-text-secondary hover:text-jenny-text hover:bg-jenny-divider/40",
       danger:
