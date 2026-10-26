@@ -243,7 +243,9 @@ class TestReportRateAuRevoir:
         day = parse_fr_date(alt, today=_day(0))
         hour = parse_fr_time(alt)
         assert day and hour
-        r2 = await chat.say(f"Parfait, à {_WD[day.weekday()]} {hour.hour}h{hour.minute:02d} alors !")
+        r2 = await chat.say(
+            f"Parfait, à {_WD[day.weekday()]} {hour.hour}h{hour.minute:02d} alors !"
+        )
         assert (r2.action_result or {}).get("operation") == "reschedule"
         assert (r2.action_result or {}).get("success") is True
         (appt,) = await _appts(biz)

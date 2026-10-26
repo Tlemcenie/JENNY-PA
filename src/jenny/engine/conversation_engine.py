@@ -501,8 +501,11 @@ def picks_offered_slot(
         return True
     # créneaux du jour demandé
     same_day = all(sd == asked_day for sd, _ in slots)
-    return bool(offer.get("propose_slots")) and asked_day is not None and same_day and (
-        d in (None, asked_day)
+    return (
+        bool(offer.get("propose_slots"))
+        and asked_day is not None
+        and same_day
+        and (d in (None, asked_day))
     )
 
 
@@ -1231,10 +1234,7 @@ class ConversationEngine:
         if (
             gap
             and state.business_catalog
-            and (
-                intent in ("pricing", "quote")
-                or _CATALOG_TOPIC_RE.search(_msg_txt)
-            )
+            and (intent in ("pricing", "quote") or _CATALOG_TOPIC_RE.search(_msg_txt))
         ):
             gap = False
         gap_question: str | None = None
