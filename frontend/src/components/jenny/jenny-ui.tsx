@@ -2,6 +2,7 @@
 
 import { useId } from "react";
 import { MessageCircle, AtSign, Mail, Globe, Sparkles, Check } from "lucide-react";
+import { channelLabel } from "@/lib/utils";
 
 /**
  * Primitives visuelles de la refonte « JENNY Front » (handoff design).
@@ -105,10 +106,12 @@ const CH_META: Record<string, { cls: string; label: string; color: string; Icon:
   instagram: { cls: "jchip--ig", label: "Instagram", color: "#E4405F", Icon: AtSign },
   email: { cls: "jchip--em", label: "Email", color: "#3B82F6", Icon: Mail },
   twitter: { cls: "jchip--tw", label: "Twitter", color: "#1DA1F2", Icon: Globe },
+  widget: { cls: "jchip--web", label: "Site web", color: "#7284A8", Icon: Globe },
 };
 
 function chMeta(ch: Channel) {
-  return CH_META[ch] || CH_META.email;
+  // canal inconnu : chip neutre
+  return CH_META[ch] || { ...CH_META.widget, label: channelLabel(ch) };
 }
 
 export function ChannelChip({ ch }: { ch: Channel }) {

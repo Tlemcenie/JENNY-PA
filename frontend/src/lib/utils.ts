@@ -54,6 +54,7 @@ export function channelLabel(channel: string): string {
     snapchat: "Snapchat",
     form: "Formulaire",
     api: "API",
+    widget: "Site web",
   };
   return labels[channel] || channel;
 }
@@ -67,6 +68,7 @@ export function channelColor(channel: string): string {
     snapchat: "bg-yellow-400",
     form: "bg-jenny-slate",
     api: "bg-jenny-coral",
+    widget: "bg-jenny-slate",
   };
   return colors[channel] || "bg-jenny-slate";
 }

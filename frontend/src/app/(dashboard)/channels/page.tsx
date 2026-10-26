@@ -26,6 +26,7 @@ import {
   type ChannelStatus,
   type ChannelWebhookInfo,
 } from "@/lib/api";
+import { WidgetSnippet } from "@/components/widget-snippet";
 
 /**
  * Page « Intégrations » — état RÉEL des canaux + connexion/déconnexion réelle.
@@ -586,6 +587,21 @@ export default function ChannelsPage() {
               <IntegrationCard key={c.channel} channel={c} onConfigure={setEditing} />
             ))}
       </div>
+
+      {/* carte site web */}
+      <section aria-labelledby="site-web-title" style={{ marginTop: 28 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+          <Globe style={{ width: 20, height: 20, color: "var(--slate)" }} aria-hidden="true" />
+          <h2 id="site-web-title" style={{ fontSize: 17, fontWeight: 600, color: "var(--text)", margin: 0 }}>
+            Site web
+          </h2>
+          <span className="jbadge jbadge--slate">WIDGET</span>
+        </div>
+        <p style={{ fontSize: 13, color: "var(--text-2)", marginBottom: 14, maxWidth: 560, lineHeight: 1.5 }}>
+          Les messages laissés sur votre site arrivent dans vos conversations, comme les autres canaux.
+        </p>
+        <WidgetSnippet />
+      </section>
 
       {editing && (
         <ChannelDialog channel={editing} onClose={() => setEditing(null)} onSaved={refresh} />
