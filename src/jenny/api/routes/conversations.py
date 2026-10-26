@@ -10,12 +10,12 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import String, cast, func, or_, select, text, update
-from sqlalchemy.orm import raiseload
 
 from jenny.api.dependencies import CurrentUser, DbSession
 from jenny.connectors.reply_dispatch import send_channel_reply
 from jenny.core.events import publish_conversation_event, publish_notification_event
 from jenny.core.logging import get_logger
+from jenny.db.loading import NO_REL, get_light
 from jenny.domain.models.business import Business
 from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.customer import Customer
@@ -36,13 +36,10 @@ SLA_RESPONSE_MINUTES = 30
 # ordre de tri priorités
 PRIORITY_RANK: dict[str, int] = {"critical": 3, "high": 2, "medium": 1, "low": 0}
 
-# jamais tout l'historique
-_NO_REL = raiseload("*")
-
 
 async def _get_conv(db, conversation_id: UUID) -> Conversation | None:
     """conversation sans ses relations."""
-    return await db.get(Conversation, conversation_id, options=[_NO_REL])
+    return await get_light(db, Conversation, conversation_id)
 
 
 def _last_msg(col):
@@ -228,7 +225,7 @@ async def list_conversations(
             .order_by(*order_by)
             .limit(limit)
             .offset(offset)
-            .options(_NO_REL)
+            .options(NO_REL)
         )
     ).all()
 
@@ -323,7 +320,7 @@ async def export_conversations_csv(
                     func.coalesce(Conversation.last_message_at, Conversation.created_at).desc()
                 )
                 .limit(5000)
-                .options(_NO_REL)
+                .options(NO_REL)
             )
         ).all()
 
@@ -511,7 +508,7 @@ async def bulk_action(
         await db.execute(
             select(Conversation)
             .where(Conversation.id.in_(body.ids), Conversation.business_id == bid)
-            .options(_NO_REL)
+            .options(NO_REL)
         )
     ).scalars().all()
     if not convs:
@@ -580,7 +577,7 @@ async def get_conversation(
             select(Conversation, Customer.full_name)
             .outerjoin(Customer, Conversation.customer_id == Customer.id)
             .where(Conversation.id == conversation_id, Conversation.business_id == bid)
-            .options(_NO_REL)
+            .options(NO_REL)
         )
     ).one_or_none()
     if row is None:
@@ -592,7 +589,7 @@ async def get_conversation(
             select(Message)
             .where(Message.conversation_id == conv.id)
             .order_by(Message.created_at.asc())
-            .options(_NO_REL)
+            .options(NO_REL)
         )
     ).scalars().all()
 

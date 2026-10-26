@@ -12,10 +12,10 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import raiseload
 
 from jenny.api.dependencies import DbSession, SuperUser
 from jenny.core.logging import get_logger
+from jenny.db.loading import NO_REL, get_light
 from jenny.domain.models.audit_log import AuditLog
 from jenny.domain.models.business import Business
 from jenny.domain.models.business_member import BusinessMember
@@ -186,7 +186,7 @@ async def admin_set_business_active(
     business_id: UUID, body: BusinessActiveUpdate, db: DbSession, principal: SuperUser
 ) -> AdminBusiness:
     """Active ou suspend une entreprise."""
-    b = await db.get(Business, business_id, options=[raiseload("*")])
+    b = await get_light(db, Business, business_id)
     if b is None:
         raise HTTPException(404, "Entreprise introuvable")
     b.is_active = body.is_active
@@ -219,7 +219,7 @@ async def admin_set_superuser(
     user_id: UUID, body: SuperuserUpdate, db: DbSession, principal: SuperUser
 ) -> AdminUser:
     """Promeut ou révoque un administrateur plateforme."""
-    u = await db.get(User, user_id, options=[raiseload("*")])
+    u = await get_light(db, User, user_id)
     if u is None:
         raise HTTPException(404, "Utilisateur introuvable")
     if str(u.id) == str(principal.user_id) and not body.is_superuser:
@@ -306,7 +306,7 @@ async def admin_audit(
             .order_by(AuditLog.created_at.desc())
             .limit(limit)
             .offset(offset)
-            .options(raiseload("*"))
+            .options(NO_REL)
         )
     ).all()
 
