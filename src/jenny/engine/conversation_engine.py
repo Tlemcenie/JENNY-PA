@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from jenny.core.logging import get_logger
+from jenny.engine.datetime_fr import (
+    parse_fr_date,
+    parse_fr_duration,
+    parse_fr_time,
+    today_in,
+)
 from jenny.engine.intelligence import (
+    GAP_SCORE_HARD_FLOOR,
     clean_question,
     decide_clarification,
     detect_language,
@@ -16,14 +25,26 @@ from jenny.engine.intelligence import (
     refine_knowledge_gap,
 )
 from jenny.engine.state_manager import ConversationPhase, ConversationState, StateManager
+from jenny.engine.thresholds import LATCH_MAX_TURNS, LOW_CONFIDENCE_FLOOR
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from datetime import date
     from uuid import UUID
 
     TokenCallback = Callable[[str], Awaitable[None]]
 
 logger = get_logger(__name__)
+
+# une inférence à la fois
+_ML_LOCK = threading.Lock()
+
+
+def _ml_call(fn: Callable[[str], object], text: str) -> object:
+    """Inférence sous verrou."""
+    with _ML_LOCK:
+        return fn(text)
+
 
 # seuil de confiance ML
 ML_CONFIDENCE_FLOOR = 0.5
@@ -75,11 +96,38 @@ _CATALOG_LIST_RE = re.compile(
     re.I,
 )
 
-_AFFIRM_RE = re.compile(
-    r"^\s*(oui|ouais|ok|d['’]accord|c['’]est\s+(?:bon|parfait)|[çc]a\s+me\s+va|"  # noqa: RUF001
-    r"carr[ée]ment|volontiers|parfait|nickel)\b",
+# vrai oui
+_YES_RE = re.compile(
+    r"^\s*(?:oui|ouais|ouaip|ouep|yes|yep|absolument|carr[ée]ment|volontiers|"
+    r"tout\s+[àa]\s+fait|bien\s+s[ûu]r|exactement|[çc]a\s+me\s+va|je\s+valide|"
+    r"ok\s+pour\s+moi|avec\s+plaisir|je\s+veux\s+bien)\b",
     re.I,
 )
+# accord léger, pas un oui
+_ACK_RE = re.compile(
+    r"^\s*(?:ok|okay|d['’]accord|dac|[çc]a\s+marche|parfait|super|top|nickel|"  # noqa: RUF001
+    r"pourquoi\s+pas|go)\b",
+    re.I,
+)
+# refus
+_DECLINE_RE = re.compile(
+    r"^\s*(?:non|nan|nope|pas\s+la\s+peine|pas\s+besoin|sans\s+fa[çc]on|"
+    r"laisse[zr]?\s+tomber|tant\s+pis)\b|\bpas\s+int[ée]ress",
+    re.I,
+)
+
+
+def is_confirmation(message: str) -> bool:
+    """Vrai oui, pas une politesse."""
+    m = message or ""
+    return bool(_YES_RE.search(m)) and not _DECLINE_RE.search(m)
+
+
+def accepts_offer(message: str) -> bool:
+    """Accepte une proposition ?"""
+    m = message or ""
+    return bool(_YES_RE.search(m) or _ACK_RE.search(m)) and not _DECLINE_RE.search(m)
+
 
 # signaux de prise de rdv
 _STRONG_APPOINTMENT_RE = re.compile(
@@ -112,10 +160,39 @@ _NAME_INTRO_RE = re.compile(
     r"je\s+m['’]appelle|au\s+nom\s+de|je\s+suis|mon\s+nom\s+(?:c['’]est|est))\s+",  # noqa: RUF001
     re.I,
 )
-# pas des noms
-_NOT_A_NAME = frozenset(
-    {"moi", "lui", "elle", "nous", "vous", "eux", "toi", "ça", "pour", "oui", "non", "ok"}
+# mots qui ne sont pas des noms
+_NOT_NAME_TEXT = """
+    moi lui elle nous vous eux toi ca cela ceci pour oui non ok okay oki ouais nan si yes no
+    merci parfait super top genial nickel cool bien tres bon bonne daccord accord entendu note
+    attends attendez attend patiente patientez seconde secondes instant minute minutes moment
+    voila voici exact exactement absolument carrement volontiers surement bah euh hum hmm ah
+    oh eh bof mdr lol ptdr haha quoi comment pourquoi quand combien qui je tu il on ils elles
+    mon ma mes ton ta tes son sa ses notre votre leur et ou mais donc car puis alors aussi
+    encore deja pas plus rien personne tout tous est suis sont etre ai as ont fait faire veux
+    voudrais peux rdv rendez rendezvous reservation reserver annuler annule deplacer confirme
+    confirmer coupe coiffure balayage couleur coloration brushing meches meche shampoing
+    lissage permanente barbe soin soins frange demain aujourdhui matin soir midi apres aprem
+    semaine weekend lundi mardi mercredi jeudi vendredi samedi dimanche janvier fevrier mars
+    juin juillet aout septembre octobre novembre decembre salut bonjour bonsoir coucou
+    hello hey svp stp plait desole desolee pardon vite urgent
+"""
+_NOT_NAME_WORDS = frozenset(_NOT_NAME_TEXT.split())
+# de, la, van...
+_NAME_PARTICLES = frozenset(
+    {"de", "du", "des", "la", "le", "van", "von", "der", "den", "el", "al", "da", "di", "dos"}
 )
+# politesse en tête (« oui c'est Marie »)
+_LEAD_FILLER_RE = re.compile(
+    r"^\s*(?:(?:oui|ouais|ok|okay|d['’]accord|parfait|super|top|merci|alors|euh|bah|bon|"  # noqa: RUF001
+    r"voil[àa]|tr[èe]s\s+bien|c['’]est\s+(?:bon|parfait|not[ée]))\b[\s,!.]*)+",  # noqa: RUF001
+    re.I,
+)
+# découpe en morceaux
+_NAME_SPLIT_RE = re.compile(r"[,;.!\n]+|\s+(?:et|mais)\s+", re.I)
+
+
+def _word_key(word: str) -> str:
+    return re.sub(r"['’\-]", "", _norm_txt(word))  # noqa: RUF001
 
 
 def looks_like_name(text: str) -> bool:
@@ -124,12 +201,36 @@ def looks_like_name(text: str) -> bool:
     if not t or "?" in t or any(ch.isdigit() for ch in t):
         return False
     t = _NAME_INTRO_RE.sub("", t).strip(" .!,")  # retire le préfixe
-    if not t or t.lower() in _NOT_A_NAME:
+    if not t:
         return False
     if _CLOSING_RE.search(t) or _GREETING_PREFIX_RE.match(t):
         return False
     words = t.split()
-    return 1 <= len(words) <= 3 and bool(_NAME_RE.match(t))
+    # particules non comptées
+    core = [w for w in words if _word_key(w) not in _NAME_PARTICLES]
+    if not 1 <= len(core) <= 3 or len(words) > 5 or not _NAME_RE.match(t):
+        return False
+    # politesse, jour, prestation
+    return not any(_word_key(w) in _NOT_NAME_WORDS for w in words)
+
+
+def extract_customer_name(message: str, services: list[str] | None = None) -> str | None:
+    """Trouve le nom dans le message."""
+    text = (message or "").strip()
+    if not text or "?" in text:
+        return None
+    parts = [p.strip() for p in _NAME_SPLIT_RE.split(text) if p and p.strip()]
+    # présentation explicite d'abord
+    parts.sort(key=lambda p: 0 if _NAME_INTRO_RE.match(_LEAD_FILLER_RE.sub("", p)) else 1)
+    for part in parts:
+        cand = _LEAD_FILLER_RE.sub("", part).strip()
+        if not cand or (services and match_catalog_services(cand, services)):
+            continue
+        if parse_fr_date(cand) or parse_fr_time(cand):
+            continue
+        if looks_like_name(cand):
+            return _NAME_INTRO_RE.sub("", cand).strip(" .!,")
+    return None
 
 
 def _norm_txt(s: str) -> str:
@@ -158,9 +259,63 @@ def detect_appointment_mgmt(message: str, awaiting_confirmation: bool) -> str | 
         return "reschedule"
     if _MGMT_CONFIRM_RE.search(m):
         return "confirm"
-    if awaiting_confirmation and _AFFIRM_RE.search(m):
+    # politesse ne confirme pas
+    if awaiting_confirmation and is_confirmation(m):
         return "confirm"
     return None
+
+
+# clés NER gardées en slot
+_ENTITY_SLOT_KEYS = frozenset(
+    {
+        "date",
+        "time",
+        "service",
+        "duration",
+        "phone",
+        "email",
+        "name",
+        "order_number",
+        "amount",
+        "product",
+        "location",
+    }
+)
+_EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$")
+
+
+def coerce_entity(
+    key: str, value: object, *, message: str = "", today: date | None = None
+) -> str | None:
+    """Valide une entité avant slot."""
+    if key not in _ENTITY_SLOT_KEYS or value is None:
+        return None
+    v = str(value).strip()
+    if not v:
+        return None
+    if key == "date":
+        d = parse_fr_date(v, today=today) or parse_fr_date(message, today=today)
+        return d.isoformat() if d else None
+    if key == "time":
+        t = parse_fr_time(v) or parse_fr_time(message)
+        return t.strftime("%H:%M") if t else None
+    if key == "duration":
+        n = parse_fr_duration(v)
+        return str(n) if n else None
+    if key == "phone":
+        n_digits = len(re.sub(r"\D", "", v))
+        return v if 8 <= n_digits <= 15 else None
+    if key == "email":
+        return v.lower() if _EMAIL_RE.match(v) else None
+    if key == "amount":
+        a = v.replace("€", "").replace(" ", "").replace(",", ".")
+        try:
+            x = float(a)
+        except ValueError:
+            return None
+        return f"{x:.2f}" if 0 <= x < 1_000_000 else None
+    # texte libre borné
+    return v[:120]
 
 
 _SLOT_ASK_FR: dict[str, str] = {
@@ -218,6 +373,8 @@ class EngineRequest:
     catalog_services: list[str] | None = None
     # horaires d'ouverture (texte)
     hours_text: str | None = None
+    # fuseau du salon
+    timezone: str | None = None
 
 
 @dataclass
@@ -274,7 +431,7 @@ class ConversationEngine:
         )
 
         # 1. contexte
-        state = self.state_manager.get_or_create(
+        state = await self.state_manager.aget_or_create(
             conversation_id=request.conversation_id,
             business_id=request.business_id,
             channel=request.channel,
@@ -300,6 +457,15 @@ class ConversationEngine:
         # horaires pour le prompt
         if request.hours_text:
             state.business_hours_text = request.hours_text
+        if request.timezone:
+            state.business_timezone = request.timezone
+        # consignes du tour d'avant
+        state.clarification_instruction = None
+        state.knowledge_gap = False
+        # verrous trop vieux
+        state.expire_latches(LATCH_MAX_TURNS)
+        today = today_in(state.business_timezone)
+        prev_pending = state.pending_intent
 
         # 2. intention
         intent_result = await self._detect_intent(request.message_text, state)
@@ -315,9 +481,7 @@ class ConversationEngine:
         # rdv sans mot-clé
         _has_when = False
         if not _blocks_appt_override:
-            from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
-
-            _has_when = bool(parse_fr_date(_msg_txt) or parse_fr_time(_msg_txt))
+            _has_when = bool(parse_fr_date(_msg_txt, today=today) or parse_fr_time(_msg_txt))
         _has_service = bool(
             request.catalog_services and match_catalog_services(_msg_txt, request.catalog_services)
         )
@@ -406,14 +570,12 @@ class ConversationEngine:
         # continuité de dialogue
         _resume_appointment_after_info = False
         if state.pending_intent and state.pending_intent != intent:
-            from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
-
             msg_l = request.message_text or ""
             real_closing = intent == "closing" and bool(_CLOSING_RE.search(msg_l))
             hard_interrupt = intent in _INTERRUPTING_INTENTS or real_closing
             # complète une prise de rdv ?
             provides_appt_info = state.pending_intent == "appointment" and bool(
-                parse_fr_date(msg_l) or parse_fr_time(msg_l)
+                parse_fr_date(msg_l, today=today) or parse_fr_time(msg_l)
             )
             # question d'info pendant un rdv
             info_interrupt = intent in _INFO_REQUEST_INTENTS and not provides_appt_info
@@ -435,67 +597,69 @@ class ConversationEngine:
                 intent = state.pending_intent
                 intent_confidence = max(intent_confidence, 0.6)
 
+        msg_text = request.message_text or ""
+
         # liste d'attente
-        joining_waitlist = getattr(state, "awaiting_waitlist", False) and bool(
-            _AFFIRM_RE.search(request.message_text or "")
-        )
-        state.awaiting_waitlist = False
+        joining_waitlist = state.awaiting_waitlist and accepts_offer(msg_text)
         if joining_waitlist:
+            state.disarm_latch("awaiting_waitlist")
             intent = "join_waitlist"
             intent_confidence = 0.95
             state.pending_intent = None
+        elif state.awaiting_waitlist and _DECLINE_RE.search(msg_text):
+            # refus : on oublie
+            state.disarm_latch("awaiting_waitlist")
 
-        # gestion du rdv client
+        # nom attendu ?
+        name_value = (
+            extract_customer_name(msg_text, request.catalog_services)
+            if state.awaiting_name and not joining_waitlist
+            else None
+        )
+
+        # gestion du rdv, le nom prime
         mgmt_op = (
             None
             if joining_waitlist
-            else detect_appointment_mgmt(
-                request.message_text, getattr(state, "awaiting_confirmation", False)
-            )
+            else detect_appointment_mgmt(msg_text, state.awaiting_confirmation and not name_value)
         )
 
         # report implicite sans mot-clé
-        if mgmt_op is None and not joining_waitlist:
+        if mgmt_op is None and not joining_waitlist and not name_value:
             _appt_slot = state.slots.get("appointment_id")
             if _appt_slot is not None and _appt_slot.filled:
-                from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
-
-                _m = request.message_text or ""
-                _new_when = bool(parse_fr_date(_m) or parse_fr_time(_m))
+                _new_when = bool(parse_fr_date(msg_text, today=today) or parse_fr_time(msg_text))
                 _new_service = bool(
                     request.catalog_services
-                    and match_catalog_services(_m, request.catalog_services)
+                    and match_catalog_services(msg_text, request.catalog_services)
                 )
-                if _new_when and not _new_service and not looks_like_name(_m):
+                if _new_when and not _new_service and not looks_like_name(msg_text):
                     logger.info("engine.reschedule.implicit", appt="known")
                     mgmt_op = "reschedule"
 
         # capture du nom
-        naming = (
-            getattr(state, "awaiting_name", False)
-            and not joining_waitlist
-            and not mgmt_op
-            and looks_like_name(request.message_text)
-        )
-        state.awaiting_name = False
+        naming = name_value is not None and not mgmt_op
+        if naming:
+            state.disarm_latch("awaiting_name")
 
         # capture du téléphone
         from jenny.actions.handlers.set_customer_phone import extract_phone
 
-        _phone_in_msg = extract_phone(request.message_text)
+        _phone_in_msg = extract_phone(msg_text)
         phoning = (
-            getattr(state, "awaiting_phone", False)
+            state.awaiting_phone
             and not joining_waitlist
             and not mgmt_op
             and not naming
             and _phone_in_msg is not None
         )
-        state.awaiting_phone = False
+        if phoning:
+            state.disarm_latch("awaiting_phone")
         if naming:
             intent = "set_customer_name"
             intent_confidence = 0.95
             state.pending_intent = None
-            state.set_slot("name", request.message_text.strip())
+            state.set_slot("name", name_value)
         elif phoning:
             intent = "set_customer_phone"
             intent_confidence = 0.95
@@ -505,37 +669,42 @@ class ConversationEngine:
             intent = "manage_appointment"
             intent_confidence = 0.9
 
+        # flux quitté : slots vides oubliés
+        if prev_pending and intent != prev_pending and not _resume_appointment_after_info:
+            state.drop_missing_placeholders()
+
         state.set_intent(intent, intent_confidence)
 
         if mgmt_op:
             state.set_slot("operation", mgmt_op)
             state.pending_intent = None
 
-        # 3. entités
-        entities = await self._extract_entities(request.message_text, state)
+        # 3. entités, liste blanche
+        entities = await self._extract_entities(msg_text, state)
         for entity_name, entity_value in entities.items():
-            state.set_slot(entity_name, entity_value)
+            # déjà capté par le verrou
+            if (naming and entity_name == "name") or (phoning and entity_name == "phone"):
+                continue
+            clean = coerce_entity(entity_name, entity_value, message=msg_text, today=today)
+            if clean is not None:
+                state.set_slot(entity_name, clean, entity_type=entity_name.upper())
 
-        # capte dates/heures FR
+        # dates/heures en absolu
         if intent in ("appointment", "manage_appointment"):
-            from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
-
-            msg = request.message_text.strip()
-            if parse_fr_date(msg):
-                state.set_slot("date", msg, entity_type="DATE")
-            if parse_fr_time(msg):
-                state.set_slot("time", msg, entity_type="TIME")
+            msg = msg_text.strip()
+            _day = parse_fr_date(msg, today=today)
+            if _day:
+                state.set_slot("date", _day.isoformat(), entity_type="DATE")
+            _hour = parse_fr_time(msg)
+            if _hour:
+                state.set_slot("time", _hour.strftime("%H:%M"), entity_type="TIME")
             # fallback prestation via catalogue
             svc_slot = state.slots.get("service")
             if not (svc_slot and svc_slot.filled) and request.catalog_services:
                 matched_svc = match_catalog_services(msg, request.catalog_services)
                 if not matched_svc:
-                    # prestation citée avant
-                    recent_user = " ".join(
-                        m.get("content", "")
-                        for m in state.message_history[-6:]
-                        if m.get("role") == "user"
-                    )
+                    # citée depuis la purge
+                    recent_user = " ".join(state.user_messages_since_reset(6))
                     matched_svc = match_catalog_services(recent_user, request.catalog_services)
                 if matched_svc:
                     state.set_slot("service", matched_svc, entity_type="SERVICE")
@@ -555,12 +724,12 @@ class ConversationEngine:
             and not (state.action_result or {}).get("success")
         ):
             try:
-                # seuil sous le floor
+                # même seuil que les lacunes
                 _hits = await self.retriever.search(
                     request.message_text,
                     business_id=state.business_id,
                     top_k=3,
-                    score_threshold=0.35,
+                    score_threshold=GAP_SCORE_HARD_FLOOR,
                 )
                 if _hits:
                     state.retrieved_documents = [
@@ -577,17 +746,21 @@ class ConversationEngine:
 
         # suivi de confirmation
         _ar = state.action_result or {}
-        if _ar.get("success") and _ar.get("appointment_id") and not _ar.get("operation"):
-            state.awaiting_confirmation = True
+        _ok = bool(_ar.get("success"))
+        _booked = _ok and intent == "appointment" and not _ar.get("operation")
+        if _ok and _ar.get("appointment_id") and not _ar.get("operation"):
+            state.arm_latch("awaiting_confirmation")
         elif _ar.get("operation") in {"confirm", "cancel"}:
-            state.awaiting_confirmation = False
+            state.disarm_latch("awaiting_confirmation")
 
         # salon complet: liste d'attente
         if _ar.get("no_slots"):
-            state.awaiting_waitlist = True
+            state.arm_latch("awaiting_waitlist")
+        elif _booked:
+            state.disarm_latch("awaiting_waitlist")
         # client sans nom
         if _ar.get("ask_name"):
-            state.awaiting_name = True
+            state.arm_latch("awaiting_name")
         # retient l'id du rdv
         if _ar.get("appointment_id"):
             state.set_slot("appointment_id", str(_ar["appointment_id"]))
@@ -600,7 +773,10 @@ class ConversationEngine:
             except (ValueError, TypeError):
                 pass
         if _ar.get("ask_phone"):
-            state.awaiting_phone = True
+            state.arm_latch("awaiting_phone")
+        # rdv fait : on repart à zéro
+        if _booked or (_ok and (_ar.get("operation") or _ar.get("waitlisted"))):
+            state.reset_booking_slots()
 
         # slot-filling prioritaire
         clarification_reason = ""
@@ -613,7 +789,7 @@ class ConversationEngine:
             needs_clarification = True
             clarification_reason = "slot_filling"
             # garde l'action en cours
-            state.pending_intent = intent
+            state.pending_intent = "appointment" if _resume_appointment_after_info else intent
         elif intent == "appointment" and not (state.action_result or {}).get("success"):
             # rdv en cours
             state.pending_intent = "appointment"
@@ -646,10 +822,6 @@ class ConversationEngine:
                     "Le message du client est ambigu : demande-lui poliment une "
                     "précision avant de répondre, sans deviner."
                 )
-
-        # réservation en attente prioritaire
-        if _resume_appointment_after_info:
-            state.pending_intent = "appointment"
 
         # lacune de connaissance
         gap = is_knowledge_gap(
@@ -699,7 +871,7 @@ class ConversationEngine:
         # 6. maj de l'état
         state.suggested_response = response_text
         state.add_assistant_message(response_text)
-        self.state_manager.save(state)
+        await self.state_manager.asave(state)
 
         logger.info(
             "engine.process.done",
@@ -721,7 +893,7 @@ class ConversationEngine:
             agent_used=state.agent_used,
             action_result=state.action_result,
             conversation_phase=state.phase.value,
-            requires_human=intent == "escalation" or intent_confidence < 0.3,
+            requires_human=intent == "escalation" or intent_confidence < LOW_CONFIDENCE_FLOOR,
             detected_language=state.detected_language,
             knowledge_gap=state.knowledge_gap,
             gap_question=gap_question,
@@ -766,7 +938,10 @@ class ConversationEngine:
                 from ml.models.intent.predict import IntentPredictor
 
                 if isinstance(self.intent_predictor, IntentPredictor):
-                    result = self.intent_predictor.predict_multi(text)
+                    # hors boucle d'événements
+                    result = await asyncio.to_thread(
+                        _ml_call, self.intent_predictor.predict_multi, text
+                    )
                     ml_intent = result["primary_intent"]
                     ml_conf = result["primary_confidence"]
 
@@ -847,16 +1022,23 @@ class ConversationEngine:
 
     async def _extract_entities(self, text: str, state: ConversationState) -> dict[str, str]:
         """Extrait les entités du message."""
+        regex_entities = self._regex_entity_extraction(text)
         if self.ner_predictor is not None:
             try:
                 from ml.models.ner.predict import NERPredictor
 
                 if isinstance(self.ner_predictor, NERPredictor):
-                    return self.ner_predictor.predict(text)
+                    # hors boucle d'événements
+                    found = await asyncio.to_thread(_ml_call, self.ner_predictor.predict, text)
+                    entities = dict(found or {})
+                    # regex en complément
+                    for key, value in regex_entities.items():
+                        entities.setdefault(key, value)
+                    return entities
             except (ImportError, Exception) as e:
                 logger.warning("engine.ner.model_error", error=str(e))
 
-        return self._regex_entity_extraction(text)
+        return regex_entities
 
     def _regex_entity_extraction(self, text: str) -> dict[str, str]:
         """Extraction d'entités par regex (fallback)."""

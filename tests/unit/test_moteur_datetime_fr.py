@@ -75,7 +75,7 @@ class TestJoursRelatifs:
 
     def test_aujourdhui(self) -> None:
         assert d("aujourd'hui") == LUNDI
-        assert d("aujourd’hui") == LUNDI
+        assert d("aujourd’hui") == LUNDI  # noqa: RUF001
         assert d("ce soir") == LUNDI
         assert d("cet après-midi") == LUNDI
 
@@ -377,6 +377,4 @@ class TestCombine:
         assert combine_fr("bientôt", "14h") is None
 
     def test_fuseau(self) -> None:
-        assert combine_fr("2026-10-27", "9h", tz="America/New_York") == datetime(
-            2026, 10, 27, 9, 0
-        )
+        assert combine_fr("2026-10-27", "9h", tz="America/New_York") == datetime(2026, 10, 27, 9, 0)
