@@ -66,6 +66,7 @@ def _slugify(value: str) -> str:
 
 
 _TOO_MANY_TRIES = "Trop de tentatives. Réessayez dans quelques minutes."
+_ALREADY_VERIFIED = "Adresse déjà confirmée, connectez-vous."
 # hash factice (timing égal)
 _DUMMY_HASH: str | None = None
 
@@ -346,10 +347,9 @@ async def verify_email(body: VerifyEmailRequest, db: DbSession) -> JSONResponse:
     if user is None:
         raise HTTPException(400, "Code invalide ou expiré")
 
-    # déjà vérifié : re-token
+    # déjà vérifié : jamais de jeton
     if user.email_verified:
-        token = await _issue_token_for_user(db, user)
-        return JSONResponse({"access_token": token, "token_type": "bearer"})
+        raise HTTPException(409, _ALREADY_VERIFIED)
 
     if is_expired(user.email_verification_expires_at):
         raise HTTPException(400, "Code invalide ou expiré")
