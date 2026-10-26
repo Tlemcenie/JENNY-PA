@@ -1,6 +1,7 @@
 """Bascule du LLM actif à chaud (Ollama local / Groq hébergé / NanoGPT maison).
 
-Le gérant choisit quel « cerveau » fait tourner Jenny côté client. Le changement
+Le choix vaut pour TOUTE la plateforme (moteur partagé) : la lecture est ouverte
+à tout compte connecté, la bascule est réservée aux super-admins. Le changement
 est appliqué immédiatement (le provider du moteur est remplacé sans tout
 reconstruire) et persisté pour survivre aux redémarrages.
 """
@@ -10,7 +11,10 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from jenny.api.dependencies import CurrentUser  # noqa: TC001 — résolu au runtime par FastAPI
+from jenny.api.dependencies import (  # noqa: TC001 — résolu au runtime par FastAPI
+    CurrentUser,
+    SuperUser,
+)
 from jenny.core.logging import get_logger
 from jenny.llm.providers import get_llm_provider
 from jenny.llm.runtime import LLM_OPTIONS, get_active_key, set_active_key
@@ -99,8 +103,8 @@ async def get_llm_settings(_principal: CurrentUser) -> LlmState:
 
 
 @router.post("", response_model=LlmState)
-async def switch_llm(body: LlmSwitchRequest, _principal: CurrentUser) -> LlmState:
-    """Bascule Jenny sur un autre moteur, immédiatement."""
+async def switch_llm(body: LlmSwitchRequest, principal: SuperUser) -> LlmState:
+    """Bascule Jenny sur un autre moteur (super-admin)."""
     if body.key not in LLM_OPTIONS:
         raise HTTPException(status_code=400, detail="Modèle inconnu.")
     if not await _is_available(body.key):
@@ -127,5 +131,5 @@ async def switch_llm(body: LlmSwitchRequest, _principal: CurrentUser) -> LlmStat
     except Exception as exc:  # pragma: no cover - défensif
         logger.warning("llm.switch.engine_swap_failed", error=str(exc))
 
-    logger.info("llm.switched", key=body.key)
+    logger.info("llm.switched", key=body.key, by=principal.email)
     return await _state()

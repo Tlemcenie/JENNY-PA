@@ -3,9 +3,10 @@
 Permet au propriétaire de consulter et modifier les informations de son
 business : nom, email, téléphone, description, fuseau horaire. Le business
 ciblé est toujours celui du JWT (multi-tenant), jamais un id fourni par le
-client.
+client. Réglages et équipe : réservés aux rôles owner/admin du salon.
 """
 
+import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
@@ -100,6 +101,31 @@ def _to_response(business: Business) -> BusinessResponse:
     )
 
 
+# rôles qui gèrent le salon
+_MANAGER_ROLES = ("owner", "admin")
+
+
+async def _member_role(db, principal: CurrentUser) -> str | None:
+    """Rôle du compte dans son salon."""
+    if principal.business_id is None or principal.user_id is None:
+        return None
+    r = await db.execute(
+        select(BusinessMember.role).where(
+            BusinessMember.user_id == principal.user_id,
+            BusinessMember.business_id == principal.business_id,
+        )
+    )
+    return r.scalar_one_or_none()
+
+
+async def _require_manager(db, principal: CurrentUser) -> str:
+    """Owner ou admin, sinon 403."""
+    role = await _member_role(db, principal)
+    if role not in _MANAGER_ROLES:
+        raise HTTPException(403, "Réservé au propriétaire ou à un admin du salon")
+    return role
+
+
 async def _load_business(db, principal: CurrentUser) -> Business:
     if principal.business_id is None:
         raise HTTPException(404, "Aucun business associé à ce compte")
@@ -125,6 +151,7 @@ async def update_my_business(
 ) -> BusinessResponse:
     """Met à jour la configuration du business (nom, email, téléphone, etc.)."""
     business = await _load_business(db, principal)
+    await _require_manager(db, principal)
 
     updates = body.model_dump(exclude_unset=True)
     if updates.get("name"):
@@ -212,37 +239,55 @@ async def add_member(
     """Ajoute un membre à l'équipe (crée son compte s'il n'existe pas encore).
 
     Le propriétaire fournit un mot de passe initial : le membre peut se connecter
-    immédiatement. Si l'email correspond déjà à un compte, on le rattache juste
-    à l'équipe.
+    immédiatement. Seuls owner/admin ajoutent, seul un owner crée un owner. Un
+    compte existant n'est jamais rattaché depuis un autre salon (il doit être
+    invité par ce salon avec une autre adresse, ou déjà en faire partie).
     """
     bid = principal.business_id
     if bid is None:
         raise HTTPException(400, "Aucun business associé")
+    caller_role = await _require_manager(db, principal)
+    if body.role == "owner" and caller_role != "owner":
+        raise HTTPException(403, "Seul un propriétaire peut ajouter un propriétaire")
 
     user = (
         await db.execute(select(User).where(User.email == body.email))
     ).scalar_one_or_none()
-    if user is None:
-        from jenny.api.auth.password_utils import hash_password
-
-        user = User(
-            email=body.email,
-            full_name=body.full_name,
-            password_hash=hash_password(body.password),
-            email_verified=True,
-        )
-        db.add(user)
-        await db.flush()
-
-    existing = (
-        await db.execute(
-            select(BusinessMember).where(
-                BusinessMember.user_id == user.id, BusinessMember.business_id == bid
+    if user is not None:
+        existing = (
+            await db.execute(
+                select(BusinessMember).where(
+                    BusinessMember.user_id == user.id, BusinessMember.business_id == bid
+                )
             )
+        ).scalar_one_or_none()
+        if existing is None:
+            # compte d'un autre salon
+            raise HTTPException(
+                409,
+                "Un compte existe déjà avec cet email : impossible de le rattacher à "
+                "votre salon. Utilisez une autre adresse pour ce membre.",
+            )
+        # déjà membre : rien à faire
+        return MemberItem(
+            user_id=str(user.id),
+            email=user.email,
+            full_name=user.full_name,
+            role=existing.role,
         )
-    ).scalar_one_or_none()
-    if existing is None:
-        db.add(BusinessMember(user_id=user.id, business_id=bid, role=body.role))
+
+    from jenny.api.auth.password_utils import hash_password
+
+    user = User(
+        email=body.email,
+        full_name=body.full_name,
+        # bcrypt hors boucle
+        password_hash=await asyncio.to_thread(hash_password, body.password),
+        email_verified=True,
+    )
+    db.add(user)
+    await db.flush()
+    db.add(BusinessMember(user_id=user.id, business_id=bid, role=body.role))
     await db.commit()
 
     logger.info("business.member_added", business_id=str(bid), email=body.email)

@@ -16,7 +16,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from jenny.api.dependencies import CurrentUser  # noqa: TC001 — requis au runtime par FastAPI
@@ -65,8 +65,8 @@ async def sse_event_stream(
                 continue
 
             # Cloisonnement multi-tenant : on ne pousse que les événements
-            # du business de l'utilisateur authentifié.
-            if business_id and event.get("business_id") != business_id:
+            # du business de l'utilisateur authentifié (rien sans business).
+            if not business_id or event.get("business_id") != business_id:
                 continue
 
             yield f"event: {event.get('event', 'message')}\ndata: {json.dumps(event)}\n\n"
@@ -83,7 +83,10 @@ async def sse_event_stream(
 @router.get("/stream")
 async def stream_events(request: Request, principal: CurrentUser) -> StreamingResponse:
     """Ouvre un flux SSE filtré sur le business de l'utilisateur."""
-    bid = str(principal.business_id) if principal.business_id else None
+    if principal.business_id is None:
+        # pas de salon : pas de flux
+        raise HTTPException(403, "Aucun salon associé à ce compte")
+    bid = str(principal.business_id)
 
     return StreamingResponse(
         sse_event_stream(bid, request.is_disconnected),
