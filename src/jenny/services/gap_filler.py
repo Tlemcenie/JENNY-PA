@@ -64,7 +64,7 @@ DEFAULT_CYCLE_DAYS = 42
 REBOOK_POOL = 40
 # annulation récente (cron 10 min)
 RECENT_CHANGE = timedelta(minutes=11)
-# un RDV pris dans les 2 jours = rempli
+# rempli = RDV sous 2 jours
 FILLED_WINDOW = timedelta(days=2)
 
 _DAYS_FR = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
@@ -544,7 +544,7 @@ async def _send_offer(
         "source": c.source,
         "reason": reason,
     }
-    # trace avant envoi : jamais 2 fois
+    # trace avant envoi
     keys = ["business_id", "recipient_key", "slot_start"]
     if not await insert_once(db, SlotOffer, values, keys):
         return None
@@ -645,12 +645,12 @@ async def run_gap_filler(now: datetime | None = None) -> dict[str, int]:
                 stats["runs"] += 1
                 stats["sent"] += rep.sent
                 stats["failed"] += rep.failed
-        except Exception as exc:  # un salon raté ne bloque pas les autres
+        except Exception as exc:  # salon raté, on continue
             logger.error("gap_filler.business_failed", business_id=str(bid), error=str(exc))
     return stats
 
 
-# ── déclenché après une annulation (sans worker) ──
+# ── après annulation, sans worker ──
 
 _pending: dict[UUID, asyncio.Task] = {}
 

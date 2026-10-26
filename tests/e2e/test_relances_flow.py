@@ -169,7 +169,7 @@ class TestPlafond:
             kw = {"business_id": biz.id, "customer_id": c.id, "text": "offre"}
             assert await notify_customer(db, commercial=True, **kw) == "sms"
             assert await notify_customer(db, commercial=True, **kw) is None
-            # un rappel de RDV n'est pas plafonné
+            # rappel : pas de plafond
             assert await notify_customer(db, **kw) == "sms"
             await db.commit()
         assert len(sms) == 2
@@ -473,7 +473,7 @@ class TestGapFiller:
         async with async_session_factory() as db:
             offers = (await db.execute(select(SlotOffer))).scalars().all()
         keys = [(o.recipient_key, o.slot_start) for o in offers]
-        # envois ratés : on réessaie, jamais le même créneau
+        # ratés : jamais le même créneau
         assert len(offers) == 6 and len(set(keys)) == 6
 
     async def test_plafond_respecte_au_2e_passage(self, db_tables, sms) -> None:
@@ -535,7 +535,7 @@ class TestGapFiller:
         async with async_session_factory() as db:
             b = await db.get(Business, biz.id)
             rep = await gap_filler.fill_gaps_for_business(db, b, reason="manuel")
-        # le chat web anonyme n'est pas joignable
+        # chat web anonyme : injoignable
         assert rep.candidates == 1 and rep.sent == 1
         assert sent and sent[0].startswith("Bonjour Léa !")
 

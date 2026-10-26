@@ -87,7 +87,7 @@ class TestMessage:
         assert first_name(None) == ""
 
     def test_textes_en_alphabet_sms(self) -> None:
-        # un seul « ç » double le prix du SMS
+        # un « ç » double le prix
         assert is_gsm(footer("Salon Zoe"))
         for seg in SEGMENTS.values():
             assert is_gsm(render_message(seg.suggestion, name="Marie", salon="Salon")), seg.key

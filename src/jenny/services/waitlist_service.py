@@ -145,7 +145,7 @@ async def notify_waitlist_for_freed_slot(
 
     match = next((e for e in waiting if _services_match(e.service, service)), None)
     if match is None:
-        # personne n'attend : on cherche d'autres clients
+        # personne n'attend : passe agenda
         from jenny.services.gap_filler import schedule_after_change
 
         schedule_after_change(db, business_id)
@@ -159,7 +159,7 @@ async def notify_waitlist_for_freed_slot(
     svc_label = match.service or service or "une prestation"
     slot_txt = f" du {when_label}" if when_label else ""
 
-    # on prévient LE CLIENT, plafond anti-spam compris
+    # message client, plafond compris
     from jenny.notifications.outbound import notify_customer
 
     canal = await notify_customer(

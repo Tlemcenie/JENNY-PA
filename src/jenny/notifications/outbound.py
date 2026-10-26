@@ -159,7 +159,7 @@ async def notify_customer(
         target = customer_id or (cust.id if cust is not None else None)
         canal = await _deliver(db, business_id, text, target, conversation_id, subject)
         if canal is None and claim is not None:
-            # rien parti : on rend la place
+            # rien parti, place rendue
             from jenny.services.offer_cap import release_offer
 
             await release_offer(db, claim, cust)

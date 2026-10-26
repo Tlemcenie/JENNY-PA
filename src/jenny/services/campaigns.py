@@ -105,7 +105,7 @@ def _aware(dt: datetime | str | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
-# ── stats de visite par client ──
+# ── stats de visite ──
 
 
 def visit_stats(business_id: UUID, now: datetime):
@@ -410,7 +410,7 @@ async def deliver_campaign(
         sent_at = now or datetime.now(UTC)
         if not is_reachable(cust, convs) or not can_offer(cust, sent_at):
             continue
-        # trace avant envoi : jamais de doublon
+        # trace avant envoi
         key = {"campaign_id": camp.id, "customer_id": cust.id}
         if not await insert_once(db, CampaignRecipient, {**key, "sent_at": sent_at}, list(key)):
             continue
@@ -524,7 +524,7 @@ async def attribute(db: AsyncSession, business_id: UUID) -> Attribution:
                     Appointment.customer_id == CampaignRecipient.customer_id,
                     Appointment.created_at > CampaignRecipient.sent_at,
                     Appointment.created_at <= deadline,
-                    # une visite saisie après coup ne compte pas
+                    # visite saisie après coup : non
                     Appointment.start_at > CampaignRecipient.sent_at,
                     Appointment.status.notin_(NOT_BOOKING),
                 ),
