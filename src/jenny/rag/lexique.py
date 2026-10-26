@@ -40,7 +40,7 @@ vendre utilisez utiliser prenez prendre peut peux pouvez pourrais pourriez pouvo
 possible besoin savoir sais sait voudrais voudrait voulez veux veut vouloir aimerais
 dois doit devez devoir vais va allez aller dire dis dites chose truc fois quelque
 quelqu plutot genre sinon enfin bien tres trop beaucoup assez
-coup matin soir apres avant week end weekend demain semaine heure heures jour
+coup matin soir apres avant week end weekend demain semaine heure heures jour depuis
 jours combien servez servons restez question questions info infos
 information informations demande demander renseignement renseigner aide aider
 salon prestation prestations service services

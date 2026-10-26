@@ -257,7 +257,7 @@ class PgVectorStore:
             candidates=len(docs),
             kept=len(kept),
             hybrid=bool(tsq),
-            top_score=round(kept[0].score, 3) if kept else None,
+            top_score=round(max(d.score for d in kept), 3) if kept else None,
         )
         return kept[:top_k]
 

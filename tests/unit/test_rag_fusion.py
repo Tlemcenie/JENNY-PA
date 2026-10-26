@@ -216,3 +216,14 @@ def test_rerank_compat_objets_du_banc() -> None:
     hits = [Hit("Fermé le lundi.", 0.5), Hit("Ouvert le samedi de 9h à 18h.", 0.5)]
     out = rerank("Vous êtes ouverts le samedi ?", hits, 1)
     assert out[0].content.startswith("Ouvert le samedi")
+
+
+@pytest.mark.asyncio
+async def test_retriever_sqlite_sans_charger_le_modele() -> None:
+    class _NoEmb(_Emb):
+        async def embed_text(self, text: str) -> list[float]:
+            raise AssertionError("pas d'embedding sans pgvector")
+
+    session = _FakeSession([], dialect="sqlite")
+    retriever = VectorRetriever(_NoEmb(), PgVectorStore(), session_factory=_factory(session))
+    assert await retriever.search("coupe", business_id=uuid4()) == []

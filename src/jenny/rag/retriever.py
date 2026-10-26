@@ -41,6 +41,17 @@ def _accepts(fn, name: str) -> bool:
         return False
 
 
+def _is_postgres(session) -> bool:
+    """Base Postgres (ou inconnue) ?"""
+    get_bind = getattr(session, "get_bind", None)
+    if get_bind is None:
+        return True
+    try:
+        return get_bind().dialect.name == "postgresql"
+    except Exception:
+        return True
+
+
 async def embed_query(embedder, query: str) -> list[float]:
     """Embedding de question (préfixe/cache)."""
     fn = getattr(embedder, "embed_query", None)
@@ -80,16 +91,9 @@ class VectorRetriever:
         if self.embedder is None or self.vector_store is None or business_id is None:
             return []
 
-        try:
-            query_embedding = await embed_query(self.embedder, query)
-        except Exception as e:
-            logger.warning("retriever.embed_error", error=str(e))
-            return []
-
         hybrid = _accepts(self.vector_store.search, "query_text")
         kwargs: dict = {
             "business_id": business_id,
-            "query_embedding": query_embedding,
             "top_k": top_k,
             "score_threshold": score_threshold,
         }
@@ -105,6 +109,14 @@ class VectorRetriever:
         try:
             factory = self._get_session_factory()
             async with factory() as session:
+                if not _is_postgres(session):
+                    # pas de pgvector : pas de modèle
+                    return []
+                try:
+                    kwargs["query_embedding"] = await embed_query(self.embedder, query)
+                except Exception as e:
+                    logger.warning("retriever.embed_error", error=str(e))
+                    return []
                 stored = await self.vector_store.search(session=session, **kwargs)
         except Exception as e:
             # le chat continue sans docs
