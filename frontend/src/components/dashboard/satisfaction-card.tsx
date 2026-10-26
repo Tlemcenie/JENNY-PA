@@ -41,7 +41,7 @@ export function SatisfactionCard({ className }: { className?: string }) {
 
   if (loading && !data) {
     return (
-      <Card className={`p-6 ${className ?? ""}`}>
+      <Card className={`jx p-6 ${className ?? ""}`}>
         <Skeleton className="h-4 w-48 mb-4" />
         <Skeleton className="h-12 w-32 mb-4" />
         <Skeleton className="h-4 w-full" />
@@ -51,7 +51,7 @@ export function SatisfactionCard({ className }: { className?: string }) {
 
   if (!data) {
     return (
-      <Card className={`p-6 ${className ?? ""}`}>
+      <Card className={`jx p-6 ${className ?? ""}`}>
         <div className="flex items-center gap-2" style={{ color: "var(--text-2)" }}>
           <Gauge style={{ width: 16, height: 16 }} />
           <span style={{ fontSize: 13, flex: 1 }}>Satisfaction des réponses indisponible.</span>
@@ -80,7 +80,7 @@ export function SatisfactionCard({ className }: { className?: string }) {
           : "var(--error)";
 
   return (
-    <Card className={`p-6 transition-opacity duration-200 ${loading ? "opacity-60" : ""} ${className ?? ""}`}>
+    <Card className={`jx p-6 transition-opacity duration-200 ${loading ? "opacity-60" : ""} ${className ?? ""}`}>
       <div className="flex items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-2">
           <Gauge style={{ width: 16, height: 16, color: "var(--coral)" }} />

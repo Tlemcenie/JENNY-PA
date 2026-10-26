@@ -379,7 +379,7 @@ export default function AnalyticsPage() {
           {/* résolution */}
           <motion.div variants={staggerItem}>
             <Card className="p-[22px] h-full">
-              <MonoLabel className="mb-3.5">résolu sans intervention</MonoLabel>
+              <MonoLabel className="mb-3.5">gérées sans escalade</MonoLabel>
               <div className="flex items-center gap-[18px]">
                 {resolvedPct != null && <ResolutionDonut percent={resolvedPct} />}
                 <div>

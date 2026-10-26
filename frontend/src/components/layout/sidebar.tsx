@@ -143,14 +143,18 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
   const expanded = !collapsed || mobileOpen;
   const live = useRealtimeStatus();
   const [awaiting, setAwaiting] = useState<number | null>(null);
+  const [statsFailed, setStatsFailed] = useState(false);
   const [labOpen, setLabOpen] = useState(false);
   const labActive = labItems.some((i) => isActivePath(pathname, i.href));
 
   // compteur à traiter
   const refresh = useCallback(() => {
     getConversationStats()
-      .then((s) => setAwaiting(s.awaiting))
-      .catch(() => {});
+      .then((s) => {
+        setAwaiting(s.awaiting);
+        setStatsFailed(false);
+      })
+      .catch(() => setStatsFailed(true));
   }, []);
 
   useEffect(() => {
@@ -303,7 +307,9 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
             </div>
             <p className="text-white/70 text-[12px] leading-snug">
               {awaiting === null
-                ? t("nav.liveUnknown", { defaultValue: "Chargement des conversations…" })
+                ? statsFailed
+                  ? t("nav.liveError", { defaultValue: "Serveur injoignable pour le moment." })
+                  : t("nav.liveUnknown", { defaultValue: "Chargement des conversations…" })
                 : awaiting > 0
                   ? t("nav.liveAwaiting", {
                       count: awaiting,

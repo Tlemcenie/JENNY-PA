@@ -118,10 +118,10 @@ export function RecentConversations({ limit = 6 }: { limit?: number }) {
                   <InitialsAvatar name={name} size={34} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2, minWidth: 0 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0, maxWidth: "60%" }}>
                         {name}
                       </span>
-                      <span className="jmono" style={{ fontSize: 10, color: "var(--text-3)", whiteSpace: "nowrap" }}>
+                      <span className="jmono" style={{ fontSize: 10, color: "var(--text-3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
                         {channelLabel(c.channel)}
                         {c.current_intent ? ` · ${intentLabel(c.current_intent)}` : ""}
                       </span>

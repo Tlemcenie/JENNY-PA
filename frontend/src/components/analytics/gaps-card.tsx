@@ -45,11 +45,8 @@ export function GapsCard({ limit = 3 }: { limit?: number }) {
     setSaving(true);
     try {
       const res = await answerKnowledgeGap(gap.id, answer, true);
-      toast.success(
-        res.saved_to_kb
-          ? "Réponse ajoutée à la base : Jenny saura répondre."
-          : "Réponse enregistrée. L'ajout à la base se fera plus tard."
-      );
+      if (res.saved_to_kb) toast.success("Réponse ajoutée à la base : Jenny saura répondre.");
+      else toast.warning("Réponse enregistrée. L'ajout à la base se fera plus tard.");
       setGaps((prev) => (prev ? prev.filter((g) => g.id !== gap.id) : prev));
       setTotal((t) => Math.max(0, t - 1));
       setOpenId(null);

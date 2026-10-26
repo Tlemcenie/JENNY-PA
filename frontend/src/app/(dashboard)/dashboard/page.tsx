@@ -310,7 +310,7 @@ export default function DashboardPage() {
           hint={insights.avg_first_response_minutes == null ? "pas encore mesuré" : "délai moyen, tout l'historique"}
         />
         <StatCard
-          label="Sans intervention"
+          label="Sans escalade"
           value={resolutionPct == null ? "—" : `${resolutionPct}%`}
           hint={
             convTotal > 0
@@ -388,7 +388,7 @@ export default function DashboardPage() {
                         Canal le plus utilisé : <b>{channelLabel(topChannel)}</b>.
                       </>
                     ) : null}
-                    {resolutionPct != null ? <> Je réponds seule dans {resolutionPct}% des cas.</> : null} »
+                    {resolutionPct != null ? <> Je gère {resolutionPct}% des conversations sans escalade.</> : null} »
                   </>
                 ) : (
                   <>« Dès que les conversations arrivent, je vous résume ici ce qui ressort le plus. »</>

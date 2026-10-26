@@ -218,7 +218,7 @@ export default function LoginPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
-            className="my-auto max-w-[480px]"
+            className="relative z-10 my-auto max-w-[440px]"
           >
             <p className="font-display italic text-[44px] leading-[1.1] tracking-[-0.015em] text-[#F4F1ED]/95 mb-8">
               L&apos;assistante virtuelle de votre salon, qui vous passe la main quand il le faut.
