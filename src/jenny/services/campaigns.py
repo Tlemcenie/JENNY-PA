@@ -3,7 +3,8 @@
 Segments calculés en base (dormantes, RDV manqués, jamais revenues,
 fidèles), aperçu, envoi avec plafond anti-spam, puis attribution :
 une cliente est « revenue » si elle a pris un RDV dans les 30 jours
-qui suivent le message (dernier message reçu = celui qui compte).
+qui suivent le message, pour une date après le message (dernier
+message reçu = celui qui compte).
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ SEGMENTS: dict[str, Segment] = {
         "dormants",
         "Dormantes",
         f"Pas de rendez-vous depuis {DORMANT_DAYS} jours ou plus",
-        "Bonjour {prenom}, ça fait un moment ! On serait ravis de vous revoir "
+        "Bonjour {prenom}, cela fait un moment ! On serait ravis de vous revoir "
         "au salon. Envie d'un petit créneau cette semaine ?",
     ),
     "no_shows": Segment(
@@ -73,7 +74,7 @@ SEGMENTS: dict[str, Segment] = {
         "RDV manqués",
         f"{NO_SHOW_MIN} rendez-vous manqués ou plus",
         "Bonjour {prenom}, on vous garde toujours une place ! Pensez juste à "
-        "nous prévenir si vous ne pouvez pas venir, ça aide toute l'équipe.",
+        "nous prévenir si vous ne pouvez pas venir, cela aide toute l'équipe.",
     ),
     "nouveaux": Segment(
         "nouveaux",
@@ -293,7 +294,7 @@ def first_name(full_name: str | None) -> str:
 def footer(salon: str) -> str:
     """Signature : IA transparente + STOP."""
     return (
-        f"\n— {salon}, via Jenny (assistante virtuelle). "
+        f"\n- {salon}, via Jenny (assistante virtuelle). "
         "Répondez STOP pour ne plus recevoir d'offres."
     )
 
@@ -306,11 +307,16 @@ def render_message(template: str, *, name: str, salon: str) -> str:
     return body + footer(salon)
 
 
+def is_gsm(text: str) -> bool:
+    """Que des caractères SMS de base ?"""
+    return all(ch in _GSM7 or ch in _GSM7_EXT for ch in text or "")
+
+
 def sms_parts(text: str) -> int:
     """Nombre de SMS facturés."""
     if not text:
         return 0
-    if all(ch in _GSM7 or ch in _GSM7_EXT for ch in text):
+    if is_gsm(text):
         size = sum(2 if ch in _GSM7_EXT else 1 for ch in text)
         return 1 if size <= 160 else -(-size // 153)
     return 1 if len(text) <= 70 else -(-len(text) // 67)
@@ -518,6 +524,8 @@ async def attribute(db: AsyncSession, business_id: UUID) -> Attribution:
                     Appointment.customer_id == CampaignRecipient.customer_id,
                     Appointment.created_at > CampaignRecipient.sent_at,
                     Appointment.created_at <= deadline,
+                    # une visite saisie après coup ne compte pas
+                    Appointment.start_at > CampaignRecipient.sent_at,
                     Appointment.status.notin_(NOT_BOOKING),
                 ),
             )

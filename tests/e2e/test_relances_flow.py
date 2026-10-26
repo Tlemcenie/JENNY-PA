@@ -281,36 +281,58 @@ class TestAttribution:
 
         biz = await _biz()
         now = _now()
-        alice, bea, dina, emma, fanny, zoe = [
-            await _cust(biz, n) for n in ("Alice", "Bea", "Dina", "Emma", "Fanny", "Zoé")
+        alice, bea, dina, emma, fanny, zoe, hugo = [
+            await _cust(biz, n) for n in ("Alice", "Bea", "Dina", "Emma", "Fanny", "Zoé", "Hugo")
         ]
         async with async_session_factory() as s, s.begin():
             s.add(Prestation(business_id=biz.id, name="Coupe", price_cents=3500))
             c1 = Campaign(
-                business_id=biz.id, segment="dormants", message="m1", status="sent",
-                sent_count=3, target_count=3, created_at=now - timedelta(days=40),
+                business_id=biz.id,
+                segment="dormants",
+                message="m1",
+                status="sent",
+                sent_count=3,
+                target_count=3,
+                created_at=now - timedelta(days=40),
             )
             c2 = Campaign(
-                business_id=biz.id, segment="nouveaux", message="m2", status="sent",
-                sent_count=3, target_count=3, created_at=now - timedelta(days=10),
+                business_id=biz.id,
+                segment="nouveaux",
+                message="m2",
+                status="sent",
+                sent_count=3,
+                target_count=3,
+                created_at=now - timedelta(days=10),
             )
             s.add_all([c1, c2])
             await s.flush()
             for cust in (alice, bea, emma):
-                s.add(CampaignRecipient(
-                    campaign_id=c1.id, customer_id=cust.id,
-                    sent_at=now - timedelta(days=40), channel="sms",
-                ))
-            for cust in (alice, dina, fanny):
-                s.add(CampaignRecipient(
-                    campaign_id=c2.id, customer_id=cust.id,
-                    sent_at=now - timedelta(days=10), channel="sms",
-                ))
+                s.add(
+                    CampaignRecipient(
+                        campaign_id=c1.id,
+                        customer_id=cust.id,
+                        sent_at=now - timedelta(days=40),
+                        channel="sms",
+                    )
+                )
+            for cust in (alice, dina, fanny, hugo):
+                s.add(
+                    CampaignRecipient(
+                        campaign_id=c2.id,
+                        customer_id=cust.id,
+                        sent_at=now - timedelta(days=10),
+                        channel="sms",
+                    )
+                )
             # message raté : jamais attribué
-            s.add(CampaignRecipient(
-                campaign_id=c2.id, customer_id=zoe.id,
-                sent_at=now - timedelta(days=10), channel=None,
-            ))
+            s.add(
+                CampaignRecipient(
+                    campaign_id=c2.id,
+                    customer_id=zoe.id,
+                    sent_at=now - timedelta(days=10),
+                    channel=None,
+                )
+            )
         future = now + timedelta(days=5)
         await _appt(biz, alice, future, created_at=now - timedelta(days=5))  # c2
         await _appt(biz, bea, future, created_at=now - timedelta(days=35))  # c1
@@ -318,6 +340,8 @@ class TestAttribution:
         await _appt(biz, emma, future, created_at=now - timedelta(days=5))  # > 30 j
         await _appt(biz, fanny, future, status="cancelled", created_at=now - timedelta(days=3))
         await _appt(biz, zoe, future, created_at=now - timedelta(days=3))
+        # visite ancienne saisie après coup (import)
+        await _appt(biz, hugo, now - timedelta(days=60), created_at=now - timedelta(days=3))
 
         async with async_session_factory() as db:
             items = {i["message"]: i for i in await campaign_history(db, biz.id)}
@@ -372,10 +396,15 @@ async def _seed_gaps():
         s.add(Prestation(business_id=biz.id, name="Coupe", duration_minutes=30, price_cents=3000))
     wendy = await _cust(biz, "Wendy")
     async with async_session_factory() as s, s.begin():
-        s.add(WaitlistEntry(
-            business_id=biz.id, customer_id=wendy.id, service="Coupe",
-            customer_name="Wendy", status="waiting",
-        ))
+        s.add(
+            WaitlistEntry(
+                business_id=biz.id,
+                customer_id=wendy.id,
+                service="Coupe",
+                customer_name="Wendy",
+                status="waiting",
+            )
+        )
     rita = await _cust(biz, "Rita")
     await _visits(biz, rita, [50], minutes=60, title="Couleur")
     nina = await _cust(biz, "Nina")
@@ -464,8 +493,14 @@ class TestGapFiller:
         biz = await _biz()
         wa, web = uuid4(), uuid4()
         async with async_session_factory() as s, s.begin():
-            s.add(Conversation(id=wa, business_id=biz.id, channel="whatsapp",
-                               external_conversation_id="wa:33600000000"))
+            s.add(
+                Conversation(
+                    id=wa,
+                    business_id=biz.id,
+                    channel="whatsapp",
+                    external_conversation_id="wa:33600000000",
+                )
+            )
             s.add(Conversation(id=web, business_id=biz.id, channel="web"))
             s.add(WaitlistEntry(business_id=biz.id, conversation_id=web, customer_name="Web"))
             s.add(WaitlistEntry(business_id=biz.id, conversation_id=wa, customer_name="Léa"))
@@ -508,8 +543,13 @@ class TestGapFiller:
             b = await db.get(Business, biz.id)
             await gap_filler.fill_gaps_for_business(db, b, reason="manuel")
         # Rita réserve juste après
-        await _appt(biz, p["rita"], _now() + timedelta(days=1), status="scheduled",
-                    created_at=_now() + timedelta(minutes=5))
+        await _appt(
+            biz,
+            p["rita"],
+            _now() + timedelta(days=1),
+            status="scheduled",
+            created_at=_now() + timedelta(minutes=5),
+        )
         async with async_session_factory() as db:
             st = await gap_filler.offer_stats(db, biz.id)
         assert st == {"sent": 2, "failed": 0, "filled": 1}

@@ -159,7 +159,8 @@ def offer_text(c: Candidate, *, salon: str, when: str, link: str | None) -> str:
     """Message envoyé au client."""
     prenom = first_name(c.name)
     hello = f"Bonjour {prenom} !" if prenom else "Bonjour !"
-    svc = f" pour « {c.service} »" if c.service else ""
+    # sans « » : SMS moins cher
+    svc = f" ({c.service})" if c.service else ""
     if c.source == "waitlist":
         body = f"Bonne nouvelle : une place s'est libérée {when}{svc}, comme vous l'attendiez."
     else:
@@ -728,6 +729,7 @@ async def offer_stats(
                     Appointment.business_id == business_id,
                     Appointment.customer_id.in_({o.customer_id for o in sent}),
                     Appointment.created_at > since,
+                    Appointment.start_at > since,
                     Appointment.status.notin_(NOT_BOOKING),
                 )
             )
