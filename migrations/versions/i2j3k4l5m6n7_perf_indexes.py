@@ -10,7 +10,7 @@ Pas de CONCURRENTLY : la migration reste dans sa transaction.
 L'unique sur payments existe déjà : uq_payments_provider_external.
 
 Revision ID: jen_perfidx2_i2j3
-Revises: jen_nooverlap_g1h2
+Revises: jen_raghnsw_h1i2
 """
 
 from typing import Union
@@ -18,7 +18,7 @@ from typing import Union
 from alembic import op
 
 revision: str = "jen_perfidx2_i2j3"
-down_revision: Union[str, None] = "jen_nooverlap_g1h2"
+down_revision: Union[str, None] = "jen_raghnsw_h1i2"
 branch_labels: Union[str, None] = None
 depends_on: Union[str, None] = None
 

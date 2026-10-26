@@ -31,7 +31,20 @@ target_metadata = Base.metadata
 # un `alembic revision --autogenerate` les voit comme « en trop » et génère
 # un DROP → ça effacerait toute la base de connaissances RAG.
 _TABLES_HORS_ORM = {"document_embeddings"}
-_INDEX_HORS_ORM = {"ix_messages_content_fts"}
+_INDEX_HORS_ORM = {
+    "ix_messages_content_fts",
+    # index perf (jen_perfidx2_i2j3)
+    "ix_messages_business_received",
+    "ix_messages_business_created",
+    "ix_messages_conversation_created",
+    "ix_messages_customer_id",
+    "ix_conversations_business_status",
+    "ix_conversations_business_last_msg",
+    "ix_conversations_business_recency",
+    "ix_appointments_end_at",
+    "ix_customers_business_instagram",
+    "ix_customers_business_messenger",
+}
 
 
 def include_object(obj, name, type_, reflected, compare_to) -> bool:  # type: ignore[no-untyped-def]

@@ -5,7 +5,7 @@
 - slot_offers : chaque créneau libre proposé (jamais 2 fois au même client)
 
 Revision ID: jen_campaigns_k4l5
-Revises: jen_nooverlap_g1h2
+Revises: jen_staff_j3k4
 """
 
 from typing import Union
@@ -13,7 +13,7 @@ from typing import Union
 from alembic import op
 
 revision: str = "jen_campaigns_k4l5"
-down_revision: Union[str, None] = "jen_nooverlap_g1h2"
+down_revision: Union[str, None] = "jen_staff_j3k4"
 branch_labels: Union[str, None] = None
 depends_on: Union[str, None] = None
 

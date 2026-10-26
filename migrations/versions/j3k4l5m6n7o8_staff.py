@@ -8,7 +8,7 @@ Le downgrade remet la contrainte par salon : il échoue si des RDV de coiffeurs
 différents se chevauchent déjà (normal, l'ancien modèle ne sait pas les tenir).
 
 Revision ID: jen_staff_j3k4
-Revises: jen_nooverlap_g1h2
+Revises: jen_perfidx2_i2j3
 """
 
 from typing import Sequence, Union
@@ -18,7 +18,7 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
 revision: str = "jen_staff_j3k4"
-down_revision: Union[str, None] = "jen_nooverlap_g1h2"
+down_revision: Union[str, None] = "jen_perfidx2_i2j3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
