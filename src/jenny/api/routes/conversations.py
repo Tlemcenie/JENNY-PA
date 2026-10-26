@@ -15,6 +15,7 @@ from jenny.api.dependencies import CurrentUser, DbSession
 from jenny.connectors.reply_dispatch import send_channel_reply
 from jenny.core.events import publish_conversation_event, publish_notification_event
 from jenny.core.logging import get_logger
+from jenny.db.loading import NO_REL, get_light
 from jenny.domain.models.business import Business
 from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.customer import Customer
@@ -34,6 +35,23 @@ SLA_RESPONSE_MINUTES = 30
 
 # ordre de tri priorités
 PRIORITY_RANK: dict[str, int] = {"critical": 3, "high": 2, "medium": 1, "low": 0}
+
+
+async def _get_conv(db, conversation_id: UUID) -> Conversation | None:
+    """conversation sans ses relations."""
+    return await get_light(db, Conversation, conversation_id)
+
+
+def _last_msg(col):
+    """colonne du dernier message."""
+    return (
+        select(col)
+        .where(Message.conversation_id == Conversation.id)
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+        .correlate(Conversation)
+        .scalar_subquery()
+    )
 
 
 def resolve_sla_minutes(
@@ -181,10 +199,6 @@ async def list_conversations(
             )
         )
 
-    total = (
-        await db.execute(select(func.count(Conversation.id)).where(*filters))
-    ).scalar_one()
-
     recency = func.coalesce(Conversation.last_message_at, Conversation.created_at)
     if sort_by == "oldest":
         order_by = [recency.asc()]
@@ -197,43 +211,34 @@ async def list_conversations(
     else:  # "recent"
         order_by = [recency.desc()]
 
+    # dernier message en sous-requête
     rows = (
         await db.execute(
-            select(Conversation, Customer.full_name)
+            select(
+                Conversation,
+                Customer.full_name,
+                _last_msg(Message.content_text),
+                _last_msg(Message.direction),
+            )
             .outerjoin(Customer, Conversation.customer_id == Customer.id)
             .where(*filters)
             .order_by(*order_by)
             .limit(limit)
             .offset(offset)
+            .options(NO_REL)
         )
     ).all()
 
-    conv_ids = [conv.id for conv, _ in rows]
-    previews: dict[UUID, str] = {}
-    # direction du dernier message
-    last_direction: dict[UUID, str] = {}
-    if conv_ids:
-        msg_rows = (
-            await db.execute(
-                select(
-                    Message.conversation_id,
-                    Message.content_text,
-                    Message.direction,
-                    Message.created_at,
-                )
-                .where(Message.conversation_id.in_(conv_ids))
-                .order_by(Message.conversation_id, Message.created_at.desc())
-            )
-        ).all()
-        for cid, text, direction, _created in msg_rows:
-            if cid not in last_direction:
-                last_direction[cid] = direction  # le plus récent
-                if text:
-                    previews[cid] = text[:160]
+    if len(rows) < limit and (rows or offset == 0):
+        total = offset + len(rows)  # dernière page
+    else:
+        total = (
+            await db.execute(select(func.count(Conversation.id)).where(*filters))
+        ).scalar_one()
 
     conversations = []
-    for conv, customer_name in rows:
-        awaiting = last_direction.get(conv.id) == "inbound"
+    for conv, customer_name, last_text, last_dir in rows:
+        awaiting = last_dir == "inbound"
         wmin = _waiting_minutes(conv.last_message_at, now) if awaiting else None
         # SLA selon priorité/canal
         sla_minutes = resolve_sla_minutes(
@@ -251,7 +256,7 @@ async def list_conversations(
                 last_message_at=conv.last_message_at,
                 customer_id=str(conv.customer_id) if conv.customer_id else None,
                 customer_name=customer_name,
-                last_message_preview=previews.get(conv.id),
+                last_message_preview=last_text[:160] if last_text else None,
                 awaiting_reply=awaiting,
                 overdue=awaiting and wmin is not None and wmin >= sla_minutes,
                 waiting_minutes=wmin,
@@ -280,13 +285,7 @@ async def conversation_stats(
     if bid is None:
         return ConversationStats(awaiting=0)
     now = datetime.now(UTC)
-    last_direction = (
-        select(Message.direction)
-        .where(Message.conversation_id == Conversation.id)
-        .order_by(Message.created_at.desc())
-        .limit(1)
-        .scalar_subquery()
-    )
+    last_direction = _last_msg(Message.direction)
     awaiting = (
         await db.execute(
             select(func.count(Conversation.id)).where(
@@ -321,6 +320,7 @@ async def export_conversations_csv(
                     func.coalesce(Conversation.last_message_at, Conversation.created_at).desc()
                 )
                 .limit(5000)
+                .options(NO_REL)
             )
         ).all()
 
@@ -506,9 +506,9 @@ async def bulk_action(
 
     convs = (
         await db.execute(
-            select(Conversation).where(
-                Conversation.id.in_(body.ids), Conversation.business_id == bid
-            )
+            select(Conversation)
+            .where(Conversation.id.in_(body.ids), Conversation.business_id == bid)
+            .options(NO_REL)
         )
     ).scalars().all()
     if not convs:
@@ -577,6 +577,7 @@ async def get_conversation(
             select(Conversation, Customer.full_name)
             .outerjoin(Customer, Conversation.customer_id == Customer.id)
             .where(Conversation.id == conversation_id, Conversation.business_id == bid)
+            .options(NO_REL)
         )
     ).one_or_none()
     if row is None:
@@ -588,6 +589,7 @@ async def get_conversation(
             select(Message)
             .where(Message.conversation_id == conv.id)
             .order_by(Message.created_at.asc())
+            .options(NO_REL)
         )
     ).scalars().all()
 
@@ -658,15 +660,16 @@ async def reply_to_conversation(
     principal: CurrentUser,
 ) -> ReplyResult:
     """réponse humaine depuis le dashboard."""
-    conv = await db.get(Conversation, conversation_id)
+    conv = await _get_conv(db, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
 
     # email : adresse du client
     recipient_override: str | None = None
     if conv.channel == "email" and conv.customer_id:
-        cust = await db.get(Customer, conv.customer_id)
-        recipient_override = cust.email if cust else None
+        recipient_override = await db.scalar(
+            select(Customer.email).where(Customer.id == conv.customer_id)
+        )
 
     delivered = await send_channel_reply(
         conv.channel,
@@ -745,19 +748,17 @@ async def suggest_reply(
     principal: CurrentUser,
 ) -> SuggestResult:
     """brouillon de réponse suggéré."""
-    conv = await db.get(Conversation, conversation_id)
+    conv = await _get_conv(db, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
 
-    last_inbound = (
-        await db.execute(
-            select(Message)
-            .where(Message.conversation_id == conv.id, Message.direction == "inbound")
-            .order_by(Message.created_at.desc())
-            .limit(1)
-        )
-    ).scalars().first()
-    if last_inbound is None or not last_inbound.content_text:
+    last_text = await db.scalar(
+        select(Message.content_text)
+        .where(Message.conversation_id == conv.id, Message.direction == "inbound")
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+    if not last_text:
         raise HTTPException(400, "Aucun message client à traiter")
 
     persona, business_name = await load_business_persona(db, conv.business_id)
@@ -765,7 +766,7 @@ async def suggest_reply(
         EngineRequest(
             conversation_id=conv.id,
             business_id=conv.business_id,
-            message_text=last_inbound.content_text,
+            message_text=last_text,
             channel=conv.channel,
             persona=persona,
             business_name=business_name,
@@ -808,7 +809,7 @@ async def resume_conversation(
     principal: CurrentUser,
 ) -> AssignmentResult:
     """rend la main à Jenny."""
-    conv = await db.get(Conversation, conversation_id)
+    conv = await _get_conv(db, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
     conv.assigned_to = None
@@ -832,7 +833,7 @@ async def assign_conversation(
     principal: CurrentUser,
 ) -> AssignmentResult:
     """attribue ou libère la conversation."""
-    conv = await db.get(Conversation, conversation_id)
+    conv = await _get_conv(db, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
     actor = principal.email or "Agent"
@@ -901,7 +902,7 @@ async def update_conversation_status(
     principal: CurrentUser,
 ) -> StatusResult:
     """change le statut."""
-    conv = await db.get(Conversation, conversation_id)
+    conv = await _get_conv(db, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
     previous = conv.status
@@ -942,7 +943,7 @@ async def update_conversation_priority(
     principal: CurrentUser,
 ) -> PriorityResult:
     """change la priorité."""
-    conv = await db.get(Conversation, conversation_id)
+    conv = await _get_conv(db, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
     previous = conv.priority_level
@@ -985,7 +986,7 @@ async def update_conversation_tags(
     principal: CurrentUser,
 ) -> TagsResult:
     """remplace les étiquettes."""
-    conv = await db.get(Conversation, conversation_id)
+    conv = await _get_conv(db, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
     # nettoie et dédoublonne
@@ -1031,7 +1032,7 @@ async def snooze_conversation(
     principal: CurrentUser,
 ) -> SnoozeResult:
     """reporte (snooze) une conversation."""
-    conv = await db.get(Conversation, conversation_id)
+    conv = await _get_conv(db, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
     if body.minutes is None:
@@ -1057,18 +1058,18 @@ async def summarize_conversation(
     principal: CurrentUser,
 ) -> SummaryResult:
     """résumé de la conversation (LLM)."""
-    conv = await db.get(Conversation, conversation_id)
+    conv = await _get_conv(db, conversation_id)
     if conv is None or conv.business_id != principal.business_id:
         raise HTTPException(404, "Conversation introuvable")
 
     msgs = (
         await db.execute(
-            select(Message)
+            select(Message.direction, Message.content_text)
             .where(Message.conversation_id == conv.id)
             .order_by(Message.created_at.asc())
             .limit(50)
         )
-    ).scalars().all()
+    ).all()
     if not msgs:
         raise HTTPException(400, "Conversation vide")
 
@@ -1117,12 +1118,12 @@ async def merge_conversations(
 ) -> MergeResult:
     """fusionne source dans cible."""
     bid = principal.business_id
-    target = await db.get(Conversation, conversation_id)
+    target = await _get_conv(db, conversation_id)
     if target is None or target.business_id != bid:
         raise HTTPException(404, "Conversation cible introuvable")
     if body.source_id == conversation_id:
         raise HTTPException(400, "Impossible de fusionner une conversation avec elle-même")
-    source = await db.get(Conversation, body.source_id)
+    source = await _get_conv(db, body.source_id)
     if source is None or source.business_id != bid:
         raise HTTPException(404, "Conversation source introuvable")
 
@@ -1141,12 +1142,12 @@ async def merge_conversations(
     ) or 0
     last = (
         await db.execute(
-            select(Message)
+            select(Message.created_at, Message.content_text)
             .where(Message.conversation_id == target.id)
             .order_by(Message.created_at.desc())
             .limit(1)
         )
-    ).scalars().first()
+    ).first()
     if last is not None:
         target.last_message_at = last.created_at
         target.last_message_preview = (last.content_text or "")[:200]

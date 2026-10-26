@@ -15,7 +15,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 
 from jenny.api.dependencies import CurrentUser, DbSession  # noqa: TC001
 from jenny.core.logging import get_logger
@@ -129,97 +129,75 @@ async def salon_stats(
     since = now - timedelta(days=range_days)
 
     # Fenêtre élargie : passé (analyse) + futur proche (à venir / CA / acomptes).
-    rows = list(
-        (
-            await db.execute(
-                select(Appointment).where(
-                    Appointment.business_id == bid,
-                    Appointment.start_at >= since,
-                    Appointment.start_at < now + timedelta(days=120),
-                )
-            )
-        ).scalars().all()
-    )
+    # tout compté en SQL
+    a = Appointment
+    window = (a.business_id == bid, a.start_at >= since, a.start_at < now + timedelta(days=120))
+    past = and_(a.start_at < now, a.status != "blocked")
+    honored = and_(past, a.status != "cancelled")
+    upcoming_ok = and_(a.start_at >= now, a.status.notin_(["cancelled", "blocked"]))
 
-    past = [a for a in rows if _aware(a.start_at) < now]
-    past_active = [a for a in past if a.status != "blocked"]
-    completed = sum(1 for a in past_active if a.status in ("completed", "confirmed"))
-    cancelled = sum(1 for a in past_active if a.status == "cancelled")
-    no_show = sum(1 for a in past_active if a.status == "no_show")
-    upcoming = sum(
-        1 for a in rows if _aware(a.start_at) >= now and a.status not in ("cancelled", "blocked")
-    )
-    total_past = len(past_active)
+    agg = (
+        await db.execute(
+            select(
+                func.count(a.id).filter(past),
+                func.count(a.id).filter(past, a.status.in_(["completed", "confirmed"])),
+                func.count(a.id).filter(past, a.status == "cancelled"),
+                func.count(a.id).filter(past, a.status == "no_show"),
+                func.count(a.id).filter(upcoming_ok),
+                func.count(a.id).filter(a.deposit_status == "pending"),
+                func.count(a.id).filter(a.deposit_status == "paid"),
+                func.coalesce(func.sum(a.deposit_cents).filter(a.deposit_status == "paid"), 0),
+                *_side_counts(bid),
+            ).where(*window)
+        )
+    ).one()
+    (
+        total_past, completed, cancelled, no_show, upcoming,
+        dep_pending, dep_paid, collected_cents,
+        clients_total, loyal, wl_waiting, wl_notified, reviews_count, avg_rating,
+    ) = agg
+    total_past, cancelled = int(total_past or 0), int(cancelled or 0)
     cancel_rate = round(100 * cancelled / total_past, 1) if total_past else 0.0
 
     # Taux de remplissage : RDV honorés (hors annulés/bloqués) / capacité ouvrable.
-    booked = sum(1 for a in past_active if a.status != "cancelled")
+    booked = total_past - cancelled
     capacity = _capacity_slots(business, since.astimezone(tz).date(), now.astimezone(tz).date())
     fill_rate = round(min(100.0, 100 * booked / capacity), 1) if capacity else 0.0
 
-    # Prestations populaires + heures de pointe + jour le plus chargé (RDV honorés).
-    honored = [a for a in past_active if a.status != "cancelled"]
-    presta_counter: Counter[str] = Counter(a.title for a in honored if a.title)
-    hour_counter: Counter[int] = Counter(_aware(a.start_at).astimezone(tz).hour for a in honored)
-    day_counter: Counter[int] = Counter(
-        _aware(a.start_at).astimezone(tz).weekday() for a in honored
+    # par titre : top et CA
+    by_title = (
+        await db.execute(
+            select(a.title, func.count(a.id).filter(honored), func.count(a.id).filter(upcoming_ok))
+            .where(*window)
+            .group_by(a.title)
+        )
+    ).all()
+    honored_titles = sorted(
+        ((t, int(n)) for t, n, _u in by_title if t and n), key=lambda x: (-x[1], x[0])
     )
-    top_prestations = [NameCount(name=n, count=c) for n, c in presta_counter.most_common(6)]
+    top_prestations = [NameCount(name=t, count=n) for t, n in honored_titles[:6]]
+    upcoming_titles = {(t or ""): int(u) for t, _n, u in by_title if u}
+
+    # fuseau du salon, en Python
+    starts = (await db.execute(select(a.start_at).where(*window, honored))).scalars().all()
+    hour_counter: Counter[int] = Counter(_aware(s).astimezone(tz).hour for s in starts)
+    day_counter: Counter[int] = Counter(_aware(s).astimezone(tz).weekday() for s in starts)
     peak_hours = [
         HourCount(hour=h, count=c) for h, c in sorted(hour_counter.most_common(4))
     ]
     busiest_day = _WD_FR[day_counter.most_common(1)[0][0]] if day_counter else None
 
-    # Clients fidèles (≥2 RDV honorés) vs nouveaux (tous RDV non annulés/bloqués, all-time).
-    client_counts = (
-        await db.execute(
-            select(Appointment.customer_id, func.count(Appointment.id))
-            .where(
-                Appointment.business_id == bid,
-                Appointment.customer_id.is_not(None),
-                Appointment.status.notin_(["cancelled", "blocked"]),
-            )
-            .group_by(Appointment.customer_id)
-        )
-    ).all()
-    loyal = sum(1 for _cid, n in client_counts if n >= 2)
-    clients_total = len(client_counts)
-    new_clients = clients_total - loyal
-
     # CA estimé à venir (prestations reconnues dans le catalogue).
-    revenue_eur = await _estimate_upcoming_revenue(db, bid, rows, now)
+    revenue_eur = await _estimate_upcoming_revenue(db, bid, upcoming_titles)
 
-    # Acomptes (sur toute la fenêtre).
-    dep_pending = sum(1 for a in rows if a.deposit_status == "pending")
-    dep_paid = sum(1 for a in rows if a.deposit_status == "paid")
-    collected = sum((a.deposit_cents or 0) for a in rows if a.deposit_status == "paid") / 100
-
-    # Liste d'attente.
-    wl = (
-        await db.execute(
-            select(WaitlistEntry.status, func.count(WaitlistEntry.id))
-            .where(WaitlistEntry.business_id == bid)
-            .group_by(WaitlistEntry.status)
-        )
-    ).all()
-    wl_map = {s: n for s, n in wl}
-
-    # Avis clients (note moyenne).
-    rev = (
-        await db.execute(
-            select(func.count(Review.id), func.avg(Review.rating)).where(
-                Review.business_id == bid
-            )
-        )
-    ).first()
-    reviews_count = int(rev[0] or 0) if rev else 0
-    average_rating = round(float(rev[1]), 2) if rev and rev[1] is not None else None
+    clients_total, loyal = int(clients_total or 0), int(loyal or 0)
+    average_rating = round(float(avg_rating), 2) if avg_rating is not None else None
 
     return SalonStats(
         range_days=range_days,
         appointments_total=total_past,
-        upcoming=upcoming,
-        completed=completed,
+        upcoming=int(upcoming or 0),
+        completed=int(completed or 0),
         cancelled=cancelled,
         cancellation_rate_pct=cancel_rate,
         fill_rate_pct=fill_rate,
@@ -228,26 +206,49 @@ async def salon_stats(
         busiest_day=busiest_day,
         clients_total=clients_total,
         loyal_clients=loyal,
-        new_clients=new_clients,
+        new_clients=clients_total - loyal,
         revenue_upcoming_eur=round(revenue_eur, 2),
         deposits=DepositStats(
             enabled=bool(business and business.deposit_enabled),
-            pending=dep_pending,
-            paid=dep_paid,
-            collected_eur=round(collected, 2),
+            pending=int(dep_pending or 0),
+            paid=int(dep_paid or 0),
+            collected_eur=round(int(collected_cents or 0) / 100, 2),
         ),
-        waitlist=WaitlistStats(
-            waiting=int(wl_map.get("waiting", 0)),
-            notified=int(wl_map.get("notified", 0)),
-        ),
+        waitlist=WaitlistStats(waiting=int(wl_waiting or 0), notified=int(wl_notified or 0)),
         average_rating=average_rating,
-        reviews_count=reviews_count,
-        no_show=no_show,
+        reviews_count=int(reviews_count or 0),
+        no_show=int(no_show or 0),
     )
 
 
-async def _estimate_upcoming_revenue(db, bid, rows, now: datetime) -> float:
+def _side_counts(bid) -> list:
+    """Clients, attente et avis en sous-requêtes."""
+    a, w = Appointment, WaitlistEntry
+    # Clients fidèles (≥2 RDV honorés) vs nouveaux (tous RDV non annulés/bloqués, all-time).
+    per_client = (
+        select(a.customer_id, func.count(a.id).label("n"))
+        .where(
+            a.business_id == bid,
+            a.customer_id.is_not(None),
+            a.status.notin_(["cancelled", "blocked"]),
+        )
+        .group_by(a.customer_id)
+        .subquery()
+    )
+    return [
+        select(func.count()).select_from(per_client).scalar_subquery(),
+        select(func.count()).select_from(per_client).where(per_client.c.n >= 2).scalar_subquery(),
+        select(func.count(w.id)).where(w.business_id == bid, w.status == "waiting").scalar_subquery(),
+        select(func.count(w.id)).where(w.business_id == bid, w.status == "notified").scalar_subquery(),
+        select(func.count(Review.id)).where(Review.business_id == bid).scalar_subquery(),
+        select(func.avg(Review.rating)).where(Review.business_id == bid).scalar_subquery(),
+    ]
+
+
+async def _estimate_upcoming_revenue(db, bid, upcoming_titles: dict[str, int]) -> float:
     """Estime le CA des RDV à venir en associant le titre au catalogue de prestations."""
+    if not upcoming_titles:
+        return 0.0  # rien à venir
     from jenny.services.prestation_service import _norm, load_active_prestations
 
     prestations = await load_active_prestations(db, bid)
@@ -255,11 +256,9 @@ async def _estimate_upcoming_revenue(db, bid, rows, now: datetime) -> float:
     if not price_map:
         return 0.0
     total_cents = 0
-    for a in rows:
-        if _aware(a.start_at) < now or a.status in ("cancelled", "blocked"):
-            continue
-        nt = _norm(a.title or "")
+    for title, count in upcoming_titles.items():
+        nt = _norm(title)
         cents = next((c for n, c in price_map.items() if n and (n in nt or nt in n)), None)
         if cents:
-            total_cents += cents
+            total_cents += cents * count
     return total_cents / 100
