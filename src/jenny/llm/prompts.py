@@ -237,7 +237,8 @@ class PromptBuilder:
                 if public.get("success") and public.get("day") and public.get("time"):
                     base += (
                         f"\nRDV réservé — prestation : {public.get('service', 'la prestation')}"
-                        f" · jour : "
+                        + (f" avec {public['staff_name']}" if public.get("staff_name") else "")
+                        + f" · jour : "
                         f"{public['day']} · heure : {public['time']}. Annonce au client que "
                         "c'est confirmé, avec tes mots, en gardant EXACTEMENT ce jour et cette "
                         "heure (ne les change pas). Une à deux phrases, chaleureux."
