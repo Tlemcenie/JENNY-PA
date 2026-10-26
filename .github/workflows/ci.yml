@@ -1,9 +1,9 @@
-# CI — lint + migrations Postgres réelles + tests avec couverture
+# CI — lint + migrations Postgres réelles + tests (réseau coupé) + front + images
 name: CI
 
 on:
   push:
-    branches: [main, master, wip/jenny-build]
+    branches: [main, master, wip/jenny-build, "integration/**"]
   pull_request:
   workflow_dispatch:
 
@@ -16,8 +16,9 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  # modèle RAG par défaut
+  # modèle RAG + tête d'intention
   HF_MODEL: paraphrase-multilingual-mpnet-base-v2
 
 jobs:
@@ -77,6 +78,7 @@ jobs:
           --health-retries 20
 
     env:
+      # base vierge du service
       PG_URL: postgresql+asyncpg://jenny:jenny_secret@localhost:5432/jenny
       REDIS_URL: redis://localhost:6379/0
 
@@ -105,6 +107,7 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-${{ env.HF_MODEL }}-v1
 
+      # seul accès réseau HF du job
       - name: Télécharger le modèle RAG
         if: steps.hf-cache.outputs.cache-hit != 'true'
         run: python -c "from sentence_transformers import SentenceTransformer as S; S('${{ env.HF_MODEL }}')"
@@ -116,7 +119,7 @@ jobs:
           path: ~/.cache/huggingface
           key: ${{ steps.hf-cache.outputs.cache-primary-key }}
 
-      - name: Alembic upgrade head
+      - name: Alembic upgrade head (base vierge)
         env:
           JENNY_DATABASE_URL: ${{ env.PG_URL }}
         run: alembic upgrade head
@@ -128,7 +131,7 @@ jobs:
           alembic downgrade -1
           alembic upgrade head
 
-      # bug connu : initial_schema
+      # initial_schema : DROP businesses avant document_embeddings
       - name: Alembic downgrade base (informatif)
         continue-on-error: true
         env:
@@ -143,15 +146,19 @@ jobs:
           alembic upgrade head
           alembic current
 
+      # dérive connue (21 ops) : informatif
+      # le blocage est dans tests/e2e/test_p3_ci_schema_drift.py
       - name: Alembic check (informatif)
         continue-on-error: true
         env:
           JENNY_DATABASE_URL: ${{ env.PG_URL }}
         run: alembic check
 
+      # réseau sortant coupé par tests/conftest.py
       - name: Pytest + couverture
         env:
           HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
           JENNY_TEST_POSTGRES_URL: ${{ env.PG_URL }}
           JENNY_TEST_REDIS_URL: ${{ env.REDIS_URL }}
         run: >-
@@ -178,3 +185,69 @@ jobs:
       - name: Mypy (informatif)
         continue-on-error: true
         run: mypy src/jenny/
+
+  frontend:
+    name: Frontend (tsc + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: TypeScript
+        run: npx tsc --noEmit
+
+      # 17 erreurs connues : informatif
+      - name: ESLint (informatif)
+        continue-on-error: true
+        run: npx eslint
+
+      - name: Build Next
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          NEXT_PUBLIC_API_URL: https://api.example.test
+          NEXT_PUBLIC_SITE_URL: https://app.example.test
+        run: npx next build --webpack
+
+  images:
+    name: Images Docker (build seul)
+    # lourd : pas sur chaque PR
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Image API (prod)
+        run: docker build -f docker/api.prod.Dockerfile -t jenny-api:ci .
+
+      # mpnet dans l'image, hors ligne
+      - name: API sans réseau
+        run: >-
+          docker run --rm --network none --entrypoint python jenny-api:ci -c
+          "from jenny.rag.embeddings import get_default_embedder as g;
+          import asyncio; v = asyncio.run(g().embed_text('bonjour')); assert len(v) == 768; print('ok', len(v))"
+
+      - name: Image worker
+        run: docker build -f docker/worker.Dockerfile -t jenny-worker:ci .
+
+      - name: Image frontend
+        run: >-
+          docker build -f frontend/Dockerfile
+          --build-arg NEXT_PUBLIC_API_URL=https://api.example.test
+          --build-arg NEXT_PUBLIC_SITE_URL=https://app.example.test
+          -t jenny-frontend:ci frontend
