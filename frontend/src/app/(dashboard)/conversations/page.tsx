@@ -1023,13 +1023,15 @@ export default function ConversationsPage() {
                 <button
                   key={f.key}
                   onClick={f.apply}
+                  aria-pressed={active}
                   style={{
                     padding: "6px 12px",
                     borderRadius: 999,
                     border: "1px solid",
                     borderColor: active ? "var(--text)" : "var(--divider)",
                     background: active ? "var(--text)" : "var(--surface)",
-                    color: active ? "white" : f.accent ? "var(--coral)" : "var(--text)",
+                    // inversé, lisible en sombre
+                    color: active ? "var(--surface)" : f.accent ? "var(--coral)" : "var(--text)",
                     fontSize: 12,
                     fontWeight: 600,
                     cursor: "pointer",
@@ -1048,7 +1050,7 @@ export default function ConversationsPage() {
                       padding: "1px 6px",
                       borderRadius: 999,
                       background: active
-                        ? "rgba(255,255,255,0.18)"
+                        ? "color-mix(in srgb, var(--surface) 20%, transparent)"
                         : f.accent
                         ? "var(--coral-tint)"
                         : "var(--bg-tint)",
