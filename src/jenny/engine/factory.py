@@ -27,7 +27,7 @@ from jenny.engine.response_generator import ResponseGenerator
 from jenny.engine.state_manager import StateManager
 from jenny.integrations.google_calendar import GoogleCalendarService
 from jenny.llm.providers import BaseLLMProvider, get_default_llm_provider
-from jenny.rag.embeddings import get_default_embedder
+from jenny.rag.embeddings import SentenceTransformerEmbedder, get_default_embedder
 from jenny.rag.retriever import VectorRetriever
 from jenny.rag.vector_store import PgVectorStore
 
@@ -41,32 +41,75 @@ def build_retriever() -> VectorRetriever:
     return VectorRetriever(embedder=embedder, vector_store=store)
 
 
+def load_intent_predictor(kind: str | None = None, *, fallback: bool = True) -> object | None:
+    """charge l'intention : head ou lstm."""
+    settings = get_settings()
+    kind = kind or settings.intent_model_kind
+
+    if kind == "head":
+        try:
+            from ml.models.intent_head.predict import EmbeddingIntentPredictor
+
+            head = EmbeddingIntentPredictor.from_checkpoint(settings.intent_head_path)
+            logger.info("engine.ml.intent_loaded", kind="head", path=settings.intent_head_path)
+            return head
+        except Exception as e:
+            logger.warning("engine.ml.intent_head_unavailable", error=str(e))
+            if not fallback:
+                return None
+        # repli sur le lstm
+
+    try:
+        from ml.models.intent.predict import IntentPredictor
+
+        lstm = IntentPredictor.from_checkpoint(settings.intent_model_path)
+        logger.info("engine.ml.intent_loaded", kind="lstm", path=settings.intent_model_path)
+        return lstm
+    except Exception as e:
+        logger.warning("engine.ml.intent_unavailable", error=str(e))
+        return None
+
+
+def load_ner_predictor() -> object | None:
+    """charge le ner bigru."""
+    settings = get_settings()
+    try:
+        from ml.models.ner.predict import NERPredictor
+
+        ner = NERPredictor.from_checkpoint(settings.ner_model_path)
+        logger.info("engine.ml.ner_loaded", path=settings.ner_model_path)
+        return ner
+    except Exception as e:
+        logger.warning("engine.ml.ner_unavailable", error=str(e))
+        return None
+
+
 def load_ml_predictors() -> tuple[object | None, object | None]:
     """charge les modèles ml."""
     settings = get_settings()
     if not settings.enable_ml_models:
         return None, None
 
-    intent_predictor: object | None = None
-    ner_predictor: object | None = None
-
-    try:
-        from ml.models.intent.predict import IntentPredictor
-
-        intent_predictor = IntentPredictor.from_checkpoint(settings.intent_model_path)
-        logger.info("engine.ml.intent_loaded", path=settings.intent_model_path)
-    except Exception as e:
-        logger.warning("engine.ml.intent_unavailable", error=str(e))
-
-    try:
-        from ml.models.ner.predict import NERPredictor
-
-        ner_predictor = NERPredictor.from_checkpoint(settings.ner_model_path)
-        logger.info("engine.ml.ner_loaded", path=settings.ner_model_path)
-    except Exception as e:
-        logger.warning("engine.ml.ner_unavailable", error=str(e))
-
+    intent_predictor = load_intent_predictor()
+    # sans ner : regex du moteur
+    ner_predictor = load_ner_predictor() if settings.enable_ner_model else None
     return intent_predictor, ner_predictor
+
+
+def share_encoder(retriever: VectorRetriever, intent_predictor: object | None) -> bool:
+    """un seul mpnet en ram."""
+    encoder = getattr(intent_predictor, "encoder", None)
+    embedder = retriever.embedder
+    if encoder is None or not isinstance(embedder, SentenceTransformerEmbedder):
+        return False
+    from ml.models.intent_head.predict import ENCODER_NAME
+
+    # même modèle, pas encore chargé
+    if embedder.model_name.split("/")[-1] != ENCODER_NAME or embedder._model is not None:
+        return False
+    embedder._model = encoder
+    logger.info("engine.ml.encoder_shared", model=ENCODER_NAME)
+    return True
 
 
 def build_action_registry(
@@ -132,6 +175,7 @@ def build_engine(
     response_generator = ResponseGenerator(provider) if provider is not None else None
 
     intent_predictor, ner_predictor = load_ml_predictors()
+    share_encoder(retriever, intent_predictor)
 
     engine = ConversationEngine(
         state_manager=sm,
@@ -146,6 +190,7 @@ def build_engine(
         "engine.factory.ready",
         llm=provider.model_name if provider is not None else "templates",
         ml_intent=intent_predictor is not None,
+        ml_intent_kind=type(intent_predictor).__name__ if intent_predictor is not None else None,
         ml_ner=ner_predictor is not None,
         agents=["faq", "action", "planning", "payment", "quote", "fallback"],
         actions=[a["name"] for a in registry.list_actions()],

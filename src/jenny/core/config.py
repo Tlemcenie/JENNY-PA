@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     enable_ml_models: bool = True
     intent_model_path: str = "checkpoints/intent/best_model.pt"
     ner_model_path: str = "checkpoints/ner/best_model.pt"
+    # tête mpnet ou lstm
+    intent_model_kind: Literal["lstm", "head"] = "head"
+    intent_head_path: str = "checkpoints/intent_head/head.joblib"
+    # ner coupé : regex du moteur
+    enable_ner_model: bool = False
 
     # embeddings RAG
     # multilingue, 100 % en-process
