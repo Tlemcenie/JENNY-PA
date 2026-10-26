@@ -12,7 +12,7 @@ ne lèvent pas sur cas limite, elles renvoient None / une entrée.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
@@ -159,6 +159,7 @@ async def _trace_offer(
     from uuid import uuid4
 
     from jenny.domain.models.campaign import SlotOffer
+    from jenny.services.availability import MAX_SERVICE_MINUTES
     from jenny.services.campaigns import insert_once
 
     offer_id = uuid4()
@@ -170,7 +171,7 @@ async def _trace_offer(
         "waitlist_entry_id": entry.id,
         "recipient_key": key,
         "slot_start": slot_start if slot_start.tzinfo else slot_start.replace(tzinfo=UTC),
-        "duration_minutes": max(5, min(480, int(minutes))),
+        "duration_minutes": max(5, min(MAX_SERVICE_MINUTES, int(minutes))),
         "service": label[:120] if label else None,
         "source": "waitlist",
         "reason": "annulation",
@@ -181,6 +182,25 @@ async def _trace_offer(
     return offer_id
 
 
+async def _really_free(
+    db: AsyncSession,
+    business_id: UUID,
+    slot_start: datetime | None,
+    minutes: int | None,
+    staff_id: UUID | None,
+) -> bool:
+    """Place vraiment reprenable ?"""
+    from jenny.services.availability import freed_is_bookable, load_staff_pool
+
+    pool = await load_staff_pool(db, business_id)
+    if slot_start is None:
+        # heure inconnue : coiffeur seul
+        return staff_id is None or not pool.has_staff or pool.get(staff_id) is not None
+    start = slot_start if slot_start.tzinfo else slot_start.replace(tzinfo=UTC)
+    end = start + timedelta(minutes=max(5, int(minutes or 30)))
+    return await freed_is_bookable(db, business_id, start, end, staff_id=staff_id, pool=pool)
+
+
 async def notify_waitlist_for_freed_slot(
     db: AsyncSession,
     *,
@@ -189,6 +209,7 @@ async def notify_waitlist_for_freed_slot(
     when_label: str | None = None,
     slot_start: datetime | None = None,
     duration_minutes: int | None = None,
+    staff_id: UUID | None = None,
 ) -> WaitlistEntry | None:
     """Un créneau s'est libéré : signale le 1er inscrit compatible au salon.
 
@@ -201,12 +222,19 @@ async def notify_waitlist_for_freed_slot(
     personne n'attend, une passe de remplissage d'agenda est lancée.
     ``service`` peut être le titre libre du RDV : il n'est jamais envoyé
     tel quel au client.
+
+    Rien ne part si la place ne resservira pas (``staff_id`` = coiffeur
+    du RDV libéré : en pause, il ne libère rien pour les autres).
     """
     if slot_start is None:
         # lu avant tout flush
         freed = take_freed_slot(db, business_id)
         if freed is not None:
             slot_start, duration_minutes = freed[0], duration_minutes or freed[1]
+
+    if not await _really_free(db, business_id, slot_start, duration_minutes, staff_id):
+        logger.info("waitlist.freed_not_bookable", business_id=str(business_id))
+        return None
 
     waiting = (
         await db.execute(

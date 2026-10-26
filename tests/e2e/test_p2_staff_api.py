@@ -287,7 +287,7 @@ class TestFreedSlot:
         headers, bid = await _auth(client, "freed@x.com")
         calls: list[UUID] = []
 
-        def _spy(db, business_id, **kw) -> bool:
+        async def _spy(db, business_id, **kw) -> bool:
             calls.append(business_id)
             return True
 
@@ -322,7 +322,7 @@ class TestFreedSlot:
     ) -> None:
         headers, bid = await _auth(client, "boom@x.com")
 
-        def _boom(*a, **kw) -> bool:
+        async def _boom(*a, **kw) -> bool:
             raise RuntimeError("relances en panne")
 
         monkeypatch.setattr(gap_filler, "schedule_after_change", _boom)

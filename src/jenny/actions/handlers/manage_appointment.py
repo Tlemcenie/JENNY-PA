@@ -11,9 +11,9 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
 from uuid import UUID
 
-from jenny.db.conflicts import is_slot_taken
 from jenny.actions.base import BaseAction
 from jenny.core.logging import get_logger
+from jenny.db.conflicts import is_slot_taken
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -118,7 +118,7 @@ class ManageAppointmentAction(BaseAction):
                 appt.status = "cancelled"
                 # Créneau libéré → on prévient le 1er inscrit en liste d'attente.
                 await notify_waitlist_for_freed_slot(
-                    db, business_id=bid, service=appt.title, when_label=when
+                    db, business_id=bid, service=appt.title, when_label=when, staff_id=appt.staff_id
                 )
                 await db.commit()
                 return {"success": True, "operation": "cancel", "when": when, "service": appt.title}
@@ -210,14 +210,16 @@ class ManageAppointmentAction(BaseAction):
             new_staff = pick.staff
             new_staff_name = new_staff.display_name if new_staff else None
             staff_changed = new_staff is not None and new_staff.id != old_staff_id
+            old_start = appt.start_at if appt.start_at.tzinfo else appt.start_at.replace(tzinfo=UTC)
             if new_staff is not None:
                 appt.staff_id = new_staff.id
             appt.start_at = new_start
             appt.end_at = appt.start_at + duration
-            # L'ancien créneau se libère → on prévient la liste d'attente.
-            await notify_waitlist_for_freed_slot(
-                db, business_id=bid, service=appt.title, when_label=when
-            )
+            # ancien créneau vraiment quitté ?
+            if new_end <= old_start or new_start >= old_start + duration:
+                await notify_waitlist_for_freed_slot(
+                    db, business_id=bid, service=appt.title, when_label=when, staff_id=old_staff_id
+                )
             try:
                 await db.commit()
             except Exception as exc:  # créneau pris entre-temps (course)
