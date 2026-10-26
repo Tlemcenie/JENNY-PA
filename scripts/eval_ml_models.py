@@ -12,6 +12,8 @@ On mesure aussi la latence par message (appel unitaire, comme le moteur).
 Multi-intention : rappel (au moins deux intentions sur les lignes à deux
 étiquettes), paire complète, faux multi sur les lignes simples, set-F1.
 « sonde_multi » = petit jeu écrit à la main, hors gabarits, jamais entraîné.
+« intent_head_avant » = la même tête sans les têtes secondaires (softmax
+seule, seuil calé sur VAL), donc le comportement de la passe 1.
 
 Usage : PYTHONPATH=src:. .venv/bin/python scripts/eval_ml_models.py
         [--skip-ner] [--skip-train] [--skip-cpu] [--latency-n 200]
@@ -175,6 +177,26 @@ def score_intent(predictor, rows: list[dict], idx: dict, with_train: bool) -> di
     return res
 
 
+def softmax_only(head):
+    """même tête, sans secondaires."""
+    from ml.models.intent_head.predict import EmbeddingIntentPredictor
+
+    # seuil softmax calé sur val
+    t = head.meta.get("softmax_multi_threshold", 0.47)
+    return EmbeddingIntentPredictor(
+        head.encoder,
+        head.coef,
+        head.intercept,
+        temperature=head.temperature,
+        multi_threshold=t,
+        max_intents=3,
+        clarify_threshold=head.clarify_threshold,
+        labels=head.labels,
+        chars=head.chars,
+        char_coef=head.char_coef,
+    )
+
+
 def eval_intents(with_train: bool, cpu_latency: bool, latency_n: int) -> dict:
     from ml.models.intent.predict import IntentPredictor
     from ml.models.intent_head.predict import ENCODER_NAME, EmbeddingIntentPredictor, get_encoder
@@ -207,6 +229,11 @@ def eval_intents(with_train: bool, cpu_latency: bool, latency_n: int) -> dict:
     res["checkpoint"]["secondaires"] = head.has_secondary
     out["intent_head"] = res
 
+    # avant : softmax seule (passe 1)
+    avant = softmax_only(head)
+    out["intent_head_avant"] = score_intent(avant, rows, idx, False)
+    out["intent_head_avant"]["multi_threshold"] = avant.multi_threshold
+
     a, b = out["intent_lstm"], out["intent_head"]
     comp = {}
     for nom in ("test", "test_perturbe", "test_sms_inedit"):
@@ -220,7 +247,13 @@ def eval_intents(with_train: bool, cpu_latency: bool, latency_n: int) -> dict:
             "head_rappel_multi": b[nom]["multi"]["rappel_multi_pct"],
             "lstm_set_f1": a[nom]["multi"]["set_f1"],
             "head_set_f1": b[nom]["multi"]["set_f1"],
+            "head_avant_rappel_multi": out["intent_head_avant"][nom]["multi"]["rappel_multi_pct"],
+            "head_avant_set_f1": out["intent_head_avant"][nom]["multi"]["set_f1"],
+            "lstm_faux_multi": a[nom]["multi"]["faux_multi_pct"],
+            "head_faux_multi": b[nom]["multi"]["faux_multi_pct"],
         }
+        # top-1 inchangé par les secondaires
+        comp[nom]["top1_identique_avant"] = out["intent_head_avant"][nom]["top1"] == b[nom]["top1"]
     comp["head_bat_lstm_test"] = b["test"]["top1"] > a["test"]["top1"]
     comp["head_bat_lstm_perturbe"] = b["test_perturbe"]["top1"] > a["test_perturbe"]["top1"]
     # critère de bascule complet
