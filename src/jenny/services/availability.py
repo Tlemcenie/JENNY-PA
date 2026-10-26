@@ -1,15 +1,17 @@
 """Moteur de disponibilités : créneaux libres réels d'un salon.
 
-Créneaux d'un jour = horaires d'ouverture (``business_hours``, dans le fuseau du
-salon) découpés à la durée de la prestation, MOINS les rendez-vous existants
-(non annulés, créneaux bloqués inclus) et les créneaux déjà passés.
+Sans coiffeur actif : un fauteuil implicite, calcul historique inchangé
+(horaires découpés à la durée, moins les RDV et le passé).
 
-Utilisé par Jenny pour PROPOSER des créneaux au client (« mardi j'ai libre à 10h,
-14h ou 16h ») et pour vérifier qu'une réservation ne chevauche rien.
+Avec coiffeurs : départs toutes les 15 min, libre s'il reste un coiffeur
+actif, compétent, présent et sans RDV sur lui. Un RDV sans coiffeur prend un
+fauteuil ; un « blocked » sans coiffeur bloque tout le salon.
 """
 
 from __future__ import annotations
 
+import unicodedata
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -18,8 +20,10 @@ from sqlalchemy import select
 
 from jenny.core.logging import get_logger
 from jenny.domain.models.appointment import Appointment
+from jenny.domain.models.staff import Staff, StaffSkill
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from uuid import UUID
 
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +44,9 @@ _DEFAULT_HOURS: dict[str, list[str] | None] = {
     "sun": None,
 }
 
+# pas de la grille multi-coiffeurs
+SLOT_STEP_MIN = 15
+
 
 def business_tz(business: Business | None) -> ZoneInfo:
     try:
@@ -56,6 +63,11 @@ def _parse_hhmm(value: str) -> tuple[int, int] | None:
     except (ValueError, AttributeError):
         pass
     return None
+
+
+def _aware(dt: datetime) -> datetime:
+    """SQLite rend du naïf : on force UTC."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def _candidate_slots(business: Business, day: date, duration_min: int) -> list[datetime]:
@@ -77,6 +89,243 @@ def _candidate_slots(business: Business, day: date, duration_min: int) -> list[d
         out.append(cur.astimezone(UTC))
         cur += step
     return out
+
+
+# ── Coiffeurs ────────────────────────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class StaffPool:
+    """Coiffeurs actifs d'un salon."""
+
+    members: list[Staff] = field(default_factory=list)
+    skills: dict[UUID, set[UUID]] = field(default_factory=dict)
+
+    @property
+    def has_staff(self) -> bool:
+        return bool(self.members)
+
+    def get(self, staff_id: UUID | None) -> Staff | None:
+        """Coiffeur actif par id."""
+        return next((m for m in self.members if m.id == staff_id), None)
+
+    def can_do(self, staff_id: UUID, prestation_ids: Iterable[UUID] | None) -> bool:
+        """Sans compétence déclarée = sait tout faire."""
+        known = self.skills.get(staff_id)
+        wanted = list(prestation_ids or [])
+        if not known or not wanted:
+            return True
+        return all(p in known for p in wanted)
+
+
+@dataclass(slots=True)
+class StaffPick:
+    """Qui peut prendre un créneau."""
+
+    free: bool
+    staff: Staff | None = None
+    has_staff: bool = False
+
+
+async def load_staff_pool(db: AsyncSession, business_id: UUID) -> StaffPool:
+    """Charge les coiffeurs actifs et leurs compétences."""
+    members = list(
+        (
+            await db.execute(
+                select(Staff)
+                .where(Staff.business_id == business_id, Staff.is_active.is_(True))
+                .order_by(Staff.created_at.asc(), Staff.display_name.asc(), Staff.id.asc())
+            )
+        ).scalars().all()
+    )
+    skills: dict[UUID, set[UUID]] = {}
+    if members:
+        rows = (
+            await db.execute(
+                select(StaffSkill.staff_id, StaffSkill.prestation_id).where(
+                    StaffSkill.staff_id.in_([m.id for m in members])
+                )
+            )
+        ).all()
+        for sid, pid in rows:
+            skills.setdefault(sid, set()).add(pid)
+    return StaffPool(members=members, skills=skills)
+
+
+def _norm(text: str) -> str:
+    t = unicodedata.normalize("NFKD", (text or "").lower())
+    return "".join(c for c in t if not unicodedata.combining(c)).strip()
+
+
+def match_staff(pool: StaffPool, text: str | None) -> Staff | None:
+    """Retrouve un coiffeur par son prénom."""
+    q = _norm(text or "")
+    if not q:
+        return None
+    for m in pool.members:
+        name = _norm(m.display_name)
+        if q == name or q == name.split(" ")[0]:
+            return m
+    return None
+
+
+def _window(hours: dict | None, day: date) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """Ouverture / fermeture d'un jour."""
+    if not isinstance(hours, dict):
+        return None
+    win = hours.get(_DAY_KEYS[day.weekday()])
+    if not win or len(win) != 2:
+        return None
+    a, b = _parse_hhmm(win[0]), _parse_hhmm(win[1])
+    if a is None or b is None:
+        return None
+    return a, b
+
+
+def _local(day: date, hm: tuple[int, int], tz: ZoneInfo) -> datetime:
+    return datetime(day.year, day.month, day.day, hm[0], hm[1], tzinfo=tz)
+
+
+def _salon_bounds(business: Business | None, day: date) -> tuple[datetime, datetime] | None:
+    """Heures d'ouverture du salon ce jour."""
+    hours = (business.business_hours if business else None) or _DEFAULT_HOURS
+    win = _window(hours, day)
+    if win is None:
+        return None
+    tz = business_tz(business)
+    start, end = _local(day, win[0], tz), _local(day, win[1], tz)
+    return (start, end) if end > start else None
+
+
+def _staff_bounds(
+    business: Business | None, member: Staff, day: date
+) -> tuple[datetime, datetime] | None:
+    """Heures du coiffeur, dans celles du salon."""
+    salon = _salon_bounds(business, day)
+    if salon is None:
+        return None
+    wh = member.working_hours
+    # rien de saisi = horaires du salon
+    if not isinstance(wh, dict) or _DAY_KEYS[day.weekday()] not in wh:
+        return salon
+    win = _window(wh, day)
+    if win is None:
+        return None  # jour off
+    tz = business_tz(business)
+    start = max(_local(day, win[0], tz), salon[0])
+    end = min(_local(day, win[1], tz), salon[1])
+    return (start, end) if end > start else None
+
+
+def _peak(spans: list[tuple[datetime, datetime]]) -> int:
+    """Nombre max de RDV en même temps."""
+    points = [(a, 1) for a, _ in spans] + [(b, -1) for _, b in spans]
+    cur = best = 0
+    for _, d in sorted(points, key=lambda p: (p[0], p[1])):
+        cur += d
+        best = max(best, cur)
+    return best
+
+
+async def _load_booked(
+    db: AsyncSession,
+    business_id: UUID,
+    win_start: datetime,
+    win_end: datetime,
+    *,
+    exclude_id: UUID | None = None,
+) -> list[tuple[datetime, datetime, UUID | None, str]]:
+    """RDV non annulés qui touchent la fenêtre."""
+    filters = [
+        Appointment.business_id == business_id,
+        Appointment.status != "cancelled",
+        Appointment.start_at < win_end,
+        Appointment.end_at > win_start,
+    ]
+    if exclude_id is not None:
+        filters.append(Appointment.id != exclude_id)
+    rows = (
+        await db.execute(
+            select(
+                Appointment.start_at, Appointment.end_at, Appointment.staff_id, Appointment.status
+            ).where(*filters)
+        )
+    ).all()
+    return [(_aware(bs), _aware(be), sid, st) for bs, be, sid, st in rows]
+
+
+def _free_members(
+    pool: StaffPool,
+    business: Business | None,
+    start: datetime,
+    end: datetime,
+    booked: list[tuple[datetime, datetime, UUID | None, str]],
+    prestation_ids: Iterable[UUID] | None,
+    only: UUID | None,
+    cache: dict,
+) -> list[Staff]:
+    """Coiffeurs libres et compétents sur [start, end)."""
+    ids = {m.id for m in pool.members}
+    busy: set[UUID] = set()
+    loose: list[tuple[datetime, datetime]] = []
+    for bs, be, sid, status in booked:
+        if not (start < be and end > bs):
+            continue
+        if sid is not None and sid in ids:
+            busy.add(sid)
+        elif status == "blocked":
+            if sid is None:
+                return []  # salon bloqué
+        else:
+            # sans coiffeur : un fauteuil pris
+            loose.append((max(bs, start), min(be, end)))
+
+    tz = business_tz(business)
+    day = start.astimezone(tz).date()
+    present: list[Staff] = []
+    for m in pool.members:
+        if m.id in busy:
+            continue
+        key = (m.id, day)
+        if key not in cache:
+            cache[key] = _staff_bounds(business, m, day)
+        bounds = cache[key]
+        if bounds is not None and start >= bounds[0] and end <= bounds[1]:
+            present.append(m)
+    if len(present) - _peak(loose) < 1:
+        return []
+    out = [m for m in present if pool.can_do(m.id, prestation_ids)]
+    if only is not None:
+        out = [m for m in out if m.id == only]
+    return out
+
+
+def _grid(business: Business | None, day: date, duration_min: int) -> list[datetime]:
+    """Départs toutes les 15 min (UTC)."""
+    bounds = _salon_bounds(business, day)
+    if bounds is None:
+        return []
+    cur, close = bounds
+    step = timedelta(minutes=SLOT_STEP_MIN)
+    dur = timedelta(minutes=duration_min)
+    out: list[datetime] = []
+    while cur + dur <= close:
+        out.append(cur.astimezone(UTC))
+        cur += step
+    return out
+
+
+def spread_slots(slots: list[datetime], duration_min: int) -> list[datetime]:
+    """Espace les créneaux d'une durée (liste lisible)."""
+    gap = timedelta(minutes=max(duration_min, SLOT_STEP_MIN))
+    out: list[datetime] = []
+    for s in slots:
+        if not out or s >= out[-1] + gap:
+            out.append(s)
+    return out
+
+
+# ── Jours / créneaux ─────────────────────────────────────────────────────────
 
 
 async def is_day_closed(
@@ -123,15 +372,15 @@ async def is_day_closed(
     return not (window and len(window) == 2)
 
 
-async def free_slots_for_day(
+async def _legacy_free_slots(
     db: AsyncSession,
     business_id: UUID,
     day: date,
-    duration_min: int = 30,
+    duration_min: int,
     *,
     business: Business | None = None,
 ) -> list[datetime]:
-    """Créneaux libres (début, UTC) d'un jour pour une durée donnée."""
+    """Un seul fauteuil : calcul historique."""
     from jenny.domain.models.business import Business as _Business
 
     if business is None:
@@ -172,6 +421,76 @@ async def free_slots_for_day(
     return [s for s in candidates if not _taken(s)]
 
 
+async def free_slots_with_staff(
+    db: AsyncSession,
+    business_id: UUID,
+    day: date,
+    duration_min: int = 30,
+    *,
+    business: Business | None = None,
+    prestation_ids: Iterable[UUID] | None = None,
+    staff_id: UUID | None = None,
+    pool: StaffPool | None = None,
+) -> list[tuple[datetime, list[Staff]]]:
+    """Créneaux libres du jour + coiffeurs libres sur chacun."""
+    from jenny.domain.models.business import Business as _Business
+
+    if business is None:
+        business = await db.get(_Business, business_id)
+    if pool is None:
+        pool = await load_staff_pool(db, business_id)
+    if not pool.has_staff:
+        slots = await _legacy_free_slots(db, business_id, day, duration_min, business=business)
+        return [(s, []) for s in slots]
+
+    if await is_day_closed(db, business_id, day, business=business):
+        return []
+    now = datetime.now(UTC)
+    candidates = [s for s in _grid(business, day, duration_min) if s > now]
+    if not candidates:
+        return []
+    dur = timedelta(minutes=duration_min)
+    booked = await _load_booked(db, business_id, candidates[0], candidates[-1] + dur)
+    ids = list(prestation_ids or [])
+    cache: dict = {}
+    out: list[tuple[datetime, list[Staff]]] = []
+    for s in candidates:
+        free = _free_members(pool, business, s, s + dur, booked, ids, staff_id, cache)
+        if free:
+            out.append((s, free))
+    return out
+
+
+async def free_slots_for_day(
+    db: AsyncSession,
+    business_id: UUID,
+    day: date,
+    duration_min: int = 30,
+    *,
+    business: Business | None = None,
+    prestation_ids: Iterable[UUID] | None = None,
+    staff_id: UUID | None = None,
+    pool: StaffPool | None = None,
+) -> list[datetime]:
+    """Créneaux libres (début, UTC) d'un jour pour une durée donnée."""
+    if pool is None:
+        pool = await load_staff_pool(db, business_id)
+    if not pool.has_staff:
+        return await _legacy_free_slots(db, business_id, day, duration_min, business=business)
+    pairs = await free_slots_with_staff(
+        db,
+        business_id,
+        day,
+        duration_min,
+        business=business,
+        prestation_ids=prestation_ids,
+        staff_id=staff_id,
+        pool=pool,
+    )
+    # grille fine, liste aérée
+    return spread_slots([s for s, _ in pairs], duration_min)
+
+
 async def next_free_slots(
     db: AsyncSession,
     business_id: UUID,
@@ -180,23 +499,67 @@ async def next_free_slots(
     from_day: date | None = None,
     max_days: int = 14,
     limit: int = 4,
+    prestation_ids: Iterable[UUID] | None = None,
+    staff_id: UUID | None = None,
 ) -> list[datetime]:
     """Premiers créneaux libres à partir d'un jour, en balayant les jours suivants."""
     from jenny.domain.models.business import Business as _Business
 
     business = await db.get(_Business, business_id)
     tz = business_tz(business)
+    pool = await load_staff_pool(db, business_id)
+    ids = list(prestation_ids or [])
     start = from_day or datetime.now(tz).date()
     found: list[datetime] = []
     for i in range(max_days):
         day = start + timedelta(days=i)
         slots = await free_slots_for_day(
-            db, business_id, day, duration_min, business=business
+            db,
+            business_id,
+            day,
+            duration_min,
+            business=business,
+            prestation_ids=ids,
+            staff_id=staff_id,
+            pool=pool,
         )
         found.extend(slots)
         if len(found) >= limit:
             break
     return found[:limit]
+
+
+async def find_free_staff(
+    db: AsyncSession,
+    business_id: UUID,
+    start: datetime,
+    end: datetime,
+    *,
+    business: Business | None = None,
+    prestation_ids: Iterable[UUID] | None = None,
+    staff_id: UUID | None = None,
+    prefer_staff_id: UUID | None = None,
+    exclude_appointment_id: UUID | None = None,
+    pool: StaffPool | None = None,
+) -> StaffPick:
+    """Qui peut prendre [start, end) ? (staff_id impose, prefer tente)"""
+    if pool is None:
+        pool = await load_staff_pool(db, business_id)
+    start, end = _aware(start), _aware(end)
+    booked = await _load_booked(db, business_id, start, end, exclude_id=exclude_appointment_id)
+    if not pool.has_staff:
+        return StaffPick(free=not booked)
+    if business is None:
+        from jenny.domain.models.business import Business as _Business
+
+        business = await db.get(_Business, business_id)
+    free = _free_members(
+        pool, business, start, end, booked, list(prestation_ids or []), staff_id, {}
+    )
+    if not free:
+        return StaffPick(free=False, has_staff=True)
+    chosen = next((m for m in free if m.id == prefer_staff_id), free[0])
+    return StaffPick(free=True, staff=chosen, has_staff=True)
 
 
 def format_slots_fr(slots: list[datetime], tz: ZoneInfo, *, with_day: bool = False) -> str:

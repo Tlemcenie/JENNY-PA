@@ -1,9 +1,4 @@
-"""Coiffeurs du salon (un fauteuil chacun).
-
-Un salon sans coiffeur déclaré garde un seul fauteuil implicite. Dès qu'il en a,
-chaque RDV est posé sur un coiffeur : deux clients peuvent alors venir à la même
-heure chez deux coiffeurs différents.
-"""
+"""Coiffeurs du salon (un fauteuil chacun)."""
 
 import uuid
 
