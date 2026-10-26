@@ -8,7 +8,7 @@ extensions de cheveux, lissage brésilien / kératine, maquillage, recrutement.
 
 Usage :
     python scripts/seed_kb_coiffeur.py                 # business démo (slug demo)
-    python scripts/seed_kb_coiffeur.py --slug mon-salon
+    python scripts/seed_kb_coiffeur.py --slug mon-salon --force
     python scripts/seed_kb_coiffeur.py --dry-run       # affiche sans écrire
 """
 
@@ -891,5 +891,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Seed KB coiffeur")
     parser.add_argument("--slug", default=DEMO_SLUG)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force", action="store_true", help="autre business que la démo")
     args = parser.parse_args()
+    if args.slug != DEMO_SLUG and not (args.force or args.dry_run):
+        # efface toute la KB : prudence
+        raise SystemExit("Remplace TOUTE la KB : ajoute --force pour un autre business.")
     asyncio.run(main(args.slug, args.dry_run))
