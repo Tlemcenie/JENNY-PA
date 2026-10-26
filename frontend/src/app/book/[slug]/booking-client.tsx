@@ -50,6 +50,33 @@ function apiDetail(err: unknown): string | null {
   return typeof detail === "string" && detail.trim() ? detail : null;
 }
 
+// date dans le fuseau du salon
+function salonDate(iso: string, tz: string | undefined, opts: Intl.DateTimeFormatOptions): string {
+  // sans fuseau = utc
+  const d = new Date(/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(iso) ? iso : `${iso}Z`);
+  try {
+    return new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: tz || "Europe/Paris" }).format(d);
+  } catch {
+    // fuseau inconnu du navigateur
+    return new Intl.DateTimeFormat("fr-FR", opts).format(d);
+  }
+}
+
+const DAY_OPTS: Intl.DateTimeFormatOptions = { weekday: "long", day: "numeric", month: "long" };
+const TIME_OPTS: Intl.DateTimeFormatOptions = { hour: "2-digit", minute: "2-digit" };
+
+// champ refusé par l'api
+function invalidFieldMessage(err: ApiError): string {
+  const detail = (err.data as { detail?: unknown } | undefined)?.detail;
+  const fields = Array.isArray(detail)
+    ? detail.flatMap((d) => (Array.isArray((d as { loc?: unknown }).loc) ? (d as { loc: unknown[] }).loc : []))
+    : [];
+  if (fields.includes("email")) return "Cette adresse email est refusée. Vérifiez-la.";
+  if (fields.includes("phone")) return "Ce numéro de téléphone est refusé. Vérifiez-le.";
+  if (fields.includes("full_name")) return "Merci de vérifier votre nom.";
+  return "Certaines informations sont invalides. Vérifiez le formulaire.";
+}
+
 // « 45 min · 35 € »
 function prestaMeta(p: PublicPrestation): string {
   const price = p.price_cents ? ` · ${(p.price_cents / 100).toLocaleString("fr-FR")} €` : "";
@@ -294,9 +321,11 @@ export default function BookingClient({
         setFormError(null);
         setSlotsError("Ce créneau vient d'être réservé. Choisissez-en un autre.");
         if (selectedIso) void loadSlots(selectedIso);
+      } else if (err instanceof ApiError && err.status === 422) {
+        // liste pydantic, pas du texte
+        setFormError(invalidFieldMessage(err));
       } else if (err instanceof ApiError) {
-        const detail = (err.data as { detail?: string } | undefined)?.detail;
-        setFormError(detail || "La réservation a échoué. Réessayez dans un instant.");
+        setFormError(apiDetail(err) ?? "La réservation a échoué. Réessayez dans un instant.");
       } else {
         setFormError("Impossible de joindre le serveur. Réessayez dans un instant.");
       }
@@ -343,7 +372,11 @@ export default function BookingClient({
             )}
 
             {phase === "confirmed" && confirmation && (
-              <ConfirmationCard key="confirmed" confirmation={confirmation} />
+              <ConfirmationCard
+                key="confirmed"
+                confirmation={confirmation}
+                timeZone={info?.timezone}
+              />
             )}
 
             {phase === "ready" && info && (
@@ -444,6 +477,7 @@ export default function BookingClient({
                   /* étape formulaire */
                   <BookingForm
                     businessName={info.name}
+                    timeZone={info.timezone}
                     staffName={chosenStaff?.display_name ?? null}
                     prestationName={prestation?.name ?? null}
                     duration={duration}
@@ -805,6 +839,7 @@ function SlotGrid({
 
 function BookingForm({
   businessName,
+  timeZone,
   staffName,
   prestationName,
   duration,
@@ -825,6 +860,7 @@ function BookingForm({
   onSubmit,
 }: {
   businessName: string;
+  timeZone?: string;
   staffName: string | null;
   prestationName: string | null;
   duration: number;
@@ -844,7 +880,6 @@ function BookingForm({
   onBack: () => void;
   onSubmit: (e: FormEvent) => void;
 }) {
-  const start = parseISO(slot.start_at);
   const inputClass =
     "w-full h-11 px-3.5 rounded-xl text-[14.5px] text-[#F4F1ED] placeholder:text-[#F4F1ED]/35 outline-none transition-all duration-150 focus:border-jenny-coral focus:ring-2 focus:ring-jenny-coral/25";
   const inputStyle = {
@@ -877,7 +912,7 @@ function BookingForm({
         </span>
         <div className="min-w-0">
           <div className="text-[14px] font-semibold text-[#F4F1ED]">
-            {cap(format(start, "EEEE d MMMM", { locale: fr }))} · {slot.label}
+            {cap(salonDate(slot.start_at, timeZone, DAY_OPTS))} · {slot.label}
           </div>
           <div className="text-[12px] text-[#F4F1ED]/55 truncate">
             {prestationName ? `${prestationName} · ` : ""}
@@ -1004,9 +1039,17 @@ function BookingForm({
 
 // carte de confirmation
 
-function ConfirmationCard({ confirmation }: { confirmation: PublicBookingConfirmation }) {
-  const start = parseISO(confirmation.start_at);
-  const end = parseISO(confirmation.end_at);
+function ConfirmationCard({
+  confirmation,
+  timeZone,
+}: {
+  confirmation: PublicBookingConfirmation;
+  timeZone?: string;
+}) {
+  // heures du salon, pas du navigateur
+  const day = cap(salonDate(confirmation.start_at, timeZone, { ...DAY_OPTS, year: "numeric" }));
+  const from = salonDate(confirmation.start_at, timeZone, TIME_OPTS);
+  const to = salonDate(confirmation.end_at, timeZone, TIME_OPTS);
   return (
     <motion.div
       key="confirmed"
@@ -1051,11 +1094,11 @@ function ConfirmationCard({ confirmation }: { confirmation: PublicBookingConfirm
         </span>
         <div className="min-w-0">
           <div className="text-[15px] font-semibold text-[#F4F1ED]">
-            {cap(format(start, "EEEE d MMMM yyyy", { locale: fr }))}
+            {day}
           </div>
           <div className="text-[13px] text-[#F4F1ED]/60 flex items-center gap-1.5 mt-0.5 tabular-nums">
             <Clock className="w-3.5 h-3.5" />
-            {format(start, "HH:mm")} – {format(end, "HH:mm")}
+            {from} – {to}
           </div>
         </div>
       </div>
