@@ -4,40 +4,47 @@ Utilisées par les orchestrateurs (Docker, K8s) pour vérifier
 que le service est opérationnel.
 
 Checks réels :
-- PostgreSQL : tentative de `SELECT 1` via asyncpg
+- PostgreSQL : `SELECT 1` via le pool de l'app
 - Redis : tentative de `PING` via redis-py
 - ML Models : vérification de la présence des checkpoints
 """
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
+from jenny.db.session import engine
 
 logger = get_logger(__name__)
 
 router = APIRouter()
 
+_DB_TIMEOUT_S = 3
+
+
+async def _ping_db() -> None:
+    """SELECT 1 via le pool de l'app."""
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
 
 async def _check_database() -> dict:
-    """Vérifie la connectivité PostgreSQL."""
+    """Vérifie la connectivité de la base."""
+    kind = engine.dialect.name
     try:
-        from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import create_async_engine
-
-        settings = get_settings()
-        engine = create_async_engine(settings.database_url, pool_pre_ping=True)
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        await engine.dispose()
-        return {"status": "ok", "type": "postgresql"}
+        # borné pour la sonde
+        await asyncio.wait_for(_ping_db(), timeout=_DB_TIMEOUT_S)
+        return {"status": "ok", "type": kind}
     except Exception as e:
         logger.warning("health.db.error", error=str(e))
-        return {"status": "error", "type": "postgresql", "error": str(e)[:100]}
+        msg = str(e) or type(e).__name__
+        return {"status": "error", "type": kind, "error": msg[:100]}
 
 
 async def _check_redis() -> dict:
