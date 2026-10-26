@@ -624,9 +624,28 @@ class TestWaitlistHook:
         assert offer.reason == "annulation" and offer.customer_id == rita.id
         assert len(sms) == 1
 
-    async def test_avec_redis_le_worker_sen_charge(self, db_tables) -> None:
+    async def test_avec_redis_le_worker_sen_charge(self, db_tables, monkeypatch) -> None:
+        jobs: list[str] = []
+
+        async def alive() -> bool:
+            return True
+
+        async def enqueue(bid) -> bool:
+            jobs.append(str(bid))
+            return True
+
+        async def interdit(*a, **kw):
+            raise AssertionError("pas de passe ici")
+
+        monkeypatch.setattr(gap_filler, "worker_alive", alive)
+        monkeypatch.setattr(gap_filler, "_enqueue", enqueue)
+        monkeypatch.setattr(gap_filler, "run_for_business", interdit)
+        bid = uuid4()
         async with async_session_factory() as db:
-            assert gap_filler.schedule_after_change(db, uuid4()) is False
+            assert await gap_filler.schedule_after_change(db, bid, delay=0.1)
+            task = gap_filler._pending[bid]
+        await asyncio.wait_for(task, timeout=5)
+        assert jobs == [str(bid)]
 
     def test_cron_branche(self) -> None:
         from jenny.workers.tasks import WorkerSettings, fill_agenda_gaps
