@@ -401,6 +401,8 @@ class PgVectorStore:
                     "preview": (contents[0] if contents else "") or "",
                     # texte complet à éditer
                     "content": reassemble(chunks),
+                    # méta du 1er fragment
+                    "metadata": chunks[0][1] if chunks else {},
                     "chunks_count": int(row.chunks_count),
                     "created_at": row.created_at,
                 }

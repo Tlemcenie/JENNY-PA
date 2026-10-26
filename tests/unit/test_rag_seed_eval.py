@@ -55,7 +55,7 @@ _PRESTAS = [
 
 @pytest.fixture(scope="module")
 def entries() -> list[dict]:
-    return seed.build_entries(_BUSINESS, _PRESTAS)
+    return seed.build_entries(_BUSINESS, _PRESTAS, demo=True)
 
 
 def _by_key(entries: list[dict]) -> dict[str, dict]:

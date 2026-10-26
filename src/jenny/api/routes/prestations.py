@@ -5,7 +5,7 @@ sert comme source de vérité pour les tarifs et la durée des rendez-vous : ell
 peut donc rien inventer. Tout est scopé au business du JWT (multi-tenant).
 
 Un raccourci d'onboarding (« seed-coiffeur ») installe un catalogue type de salon
-de coiffure et quelques connaissances de base si le business démarre à vide.
+de coiffure et des fiches KB tirées des vraies données du salon (horaires...).
 """
 
 from uuid import UUID
@@ -17,6 +17,14 @@ from sqlalchemy import func, select
 from jenny.api.dependencies import CurrentUser, DbSession
 from jenny.core.logging import get_logger
 from jenny.domain.models.prestation import Prestation
+from jenny.rag.kb_coiffeur import (
+    DEFAULT_COIFFEUR,
+    build_entries,
+    has_hours,
+    load_salon,
+    real_families,
+    sync_real_entries,
+)
 from jenny.rag.knowledge_base import KnowledgeBase
 from jenny.services.audit_service import record_audit
 
@@ -188,32 +196,7 @@ async def delete_prestation(
 # ── Onboarding coiffeur ──────────────────────────────────────────────────────
 
 # (name, category, duration_minutes, price_cents)
-_DEFAULT_COIFFEUR: list[tuple[str, str, int, int]] = [
-    ("Coupe femme", "coupe", 45, 3900),
-    ("Coupe homme", "coupe", 30, 2500),
-    ("Brushing", "coiffage", 30, 2500),
-    ("Coloration", "couleur", 90, 5500),
-    ("Balayage", "couleur", 120, 8000),
-    ("Soin profond", "soin", 30, 2000),
-    ("Barbe", "barbe", 20, 1500),
-]
-
-# (title, category, content) — connaissances de base pour Jenny.
-_DEFAULT_KNOWLEDGE: list[tuple[str, str, str]] = [
-    (
-        "Horaires d'ouverture",
-        "horaires",
-        "Le salon est ouvert du mardi au samedi, de 9h à 19h. "
-        "Fermé le dimanche et le lundi.",
-    ),
-    (
-        "Politique d'annulation",
-        "politique",
-        "Pour annuler ou déplacer un rendez-vous, merci de prévenir au moins "
-        "24 heures à l'avance. Toute annulation tardive ou non-présentation "
-        "pourra être facturée.",
-    ),
-]
+_DEFAULT_COIFFEUR: list[tuple[str, str, int, int]] = DEFAULT_COIFFEUR
 
 
 class SeedCoiffeurResponse(BaseModel):
@@ -221,14 +204,41 @@ class SeedCoiffeurResponse(BaseModel):
     knowledge: int
 
 
+async def _seed_knowledge(db: DbSession, bid: UUID) -> int:
+    """Fiches tirées du salon réel."""
+    if db.get_bind().dialect.name != "postgresql":
+        # pas de pgvector (tests)
+        return 0
+    try:
+        business, prestas, staff = await load_salon(db, bid)
+        if not has_hours(business.get("business_hours")):
+            # fiches horaires sautées
+            logger.warning("prestation.seed_no_hours", business_id=str(bid))
+        # prix : catalogue en direct
+        entries = build_entries(
+            business, prestas, demo=False, include_prices=False, staff=staff
+        )
+        kb = KnowledgeBase(business_id=bid, session=db)
+        stats = await sync_real_entries(
+            kb, entries, families=real_families(include_prices=False)
+        )
+    except Exception as exc:
+        # store vectoriel indispo : on ignore
+        await db.rollback()
+        logger.warning("prestation.seed_knowledge_failed", error=str(exc))
+        return 0
+    logger.info("prestation.seed_knowledge", business_id=str(bid), **stats)
+    return stats["added"] + stats["updated"]
+
+
 @router.post("/seed-coiffeur", response_model=SeedCoiffeurResponse)
 async def seed_coiffeur(db: DbSession, principal: CurrentUser) -> SeedCoiffeurResponse:
     """Installe un catalogue type de salon de coiffure + connaissances de base.
 
     Idempotent : si le business possède déjà des prestations, on ne duplique rien
-    (renvoie 0 prestation créée). Les connaissances passent par la base
-    vectorielle, qui peut être indisponible (pgvector absent) : on ignore alors
-    proprement sans faire échouer la requête.
+    (renvoie 0 prestation créée). Les fiches KB viennent des vraies données du
+    salon (horaires saisis, acompte, rappels, équipe) : à appeler après la
+    saisie des horaires. Relancer le seed les remet à jour.
     """
     bid = principal.business_id
     if bid is None:
@@ -272,25 +282,7 @@ async def seed_coiffeur(db: DbSession, principal: CurrentUser) -> SeedCoiffeurRe
         )
         await db.commit()
 
-    knowledge = 0
-    kb = KnowledgeBase(business_id=bid, session=db)
-    # Idempotent : on ne réajoute pas une connaissance dont le titre existe déjà
-    # (sinon relancer le seed duplique « Horaires d'ouverture », etc.).
-    try:
-        existing_titles = {e.title for e in await kb.list_entries()}
-    except Exception:  # pragma: no cover - dépend du store vectoriel
-        existing_titles = set()
-    for title, category, content in _DEFAULT_KNOWLEDGE:
-        if title in existing_titles:
-            continue
-        try:
-            await kb.add_text(content=content, title=title, category=category)
-            knowledge += 1
-        except Exception as exc:
-            # pgvector peut être absent (ex. SQLite en test) : on ignore proprement.
-            logger.warning(
-                "prestation.seed_knowledge_failed", error=str(exc), title=title
-            )
+    knowledge = await _seed_knowledge(db, bid)
 
     logger.info(
         "prestation.seeded",

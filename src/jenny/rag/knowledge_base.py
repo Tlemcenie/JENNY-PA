@@ -304,6 +304,10 @@ class KnowledgeBase:
                     category=r["category"],
                     chunks_count=r["chunks_count"],
                     created_at=r["created_at"] or datetime.now(UTC),
+                    # kb_key, seed...
+                    metadata={
+                        k: v for k, v in (r.get("metadata") or {}).items() if k not in LAYOUT_KEYS
+                    },
                 )
             )
         return entries
