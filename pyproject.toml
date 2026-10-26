@@ -50,11 +50,10 @@ dependencies = [
     # ── RAG ──
     "sentence-transformers>=5.6.0",
     # ── Tête d'intention (ml/models/intent_head) ──
-    # poids numpy chargés par joblib
+    # importés à l'inférence
     "numpy>=1.26,<3.0",
+    # relit head.joblib
     "joblib>=1.4,<2.0",
-    # entraînement de la tête
-    "scikit-learn>=1.5,<2.0",
 ]
 
 [project.optional-dependencies]
@@ -64,6 +63,10 @@ ml = [
     "datasets>=3.2,<4.0",
     "groq>=0.9,<1.0",
     "rich>=13.0,<14.0",
+    # entraînement de la tête
+    # (déjà tirés par sentence-transformers)
+    "scikit-learn>=1.5,<2.0",
+    "scipy>=1.11,<2.0",
 ]
 dev = [
     "pytest>=8.3,<9.0",
