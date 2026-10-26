@@ -71,19 +71,25 @@ _CLOSING_RE = re.compile(
     re.I,
 )
 
+# avant « à demain » : début, virgule, merci
+_BYE_LEAD = r"(?:^|[,;.!]|\b(?:merci|ok|super|parfait|top|alors|et|bon(?:ne)?\s+\w+))\s*"
 # « merci, à jeudi 10h ! »
 _FAREWELL_WHEN_RE = re.compile(
-    r"\b[àa]\s+(?:demain|apr[èe]s[\s-]?demain|lundi|mardi|mercredi|jeudi|vendredi|samedi|"
-    r"dimanche|midi|tout\s+[àa]\s+l['’]heure)(?:\s+prochain)?"  # noqa: RUF001
+    rf"{_BYE_LEAD}[àa]\s+(?:demain|apr[èe]s[\s-]?demain|lundi|mardi|mercredi|jeudi|vendredi|"
+    r"samedi|dimanche|midi|tout\s+[àa]\s+l['’]heure)(?:\s+prochain)?"  # noqa: RUF001
     r"(?:[\s,]+(?:[àa]\s+)?(?:\d{1,2}\s*h(?:\s*\d{2})?|midi))?"
     r"(?:[\s,]+(?:alors|donc|matin|soir|midi))*\s*[!.]*\s*$",
     re.I,
 )
-# « bon week-end », « à ce soir »
-_FAREWELL_RE = re.compile(
-    r"\bbon(?:ne)?\s+(?:week[\s-]?end|soir[ée]e|nuit|semaine|dimanche|samedi|vacances|"
-    r"apr[èe]s[\s-]?midi|aprem|fin\s+de\s+(?:journ[ée]e|semaine|soir[ée]e))\b"
-    r"|\b[àa]\s+(?:ce\s+(?:soir|midi|matin)|cet\s+apr[èe]s[\s-]?midi|tout\s+[àa]\s+l['’]heure|"  # noqa: RUF001
+# « bon week-end » : un souhait
+_WISH_RE = re.compile(
+    r"\bbon(?:ne)?\s+(?:week[\s-]?end|soir[ée]e|nuit|semaine|vacances|"
+    r"apr[èe]s[\s-]?midi|aprem|fin\s+de\s+(?:journ[ée]e|semaine|soir[ée]e))\b",
+    re.I,
+)
+# « à ce soir », « à la prochaine »
+_SEE_YOU_RE = re.compile(
+    r"\b[àa]\s+(?:ce\s+(?:soir|midi|matin)|cet\s+apr[èe]s[\s-]?midi|tout\s+[àa]\s+l['’]heure|"  # noqa: RUF001
     r"la\s+semaine\s+prochaine|la\s+prochaine|plus\s+tard|tr[èe]s\s+vite)\b",
     re.I,
 )
@@ -346,6 +352,29 @@ def detect_appointment_mgmt(message: str, awaiting_confirmation: bool) -> str | 
     return None
 
 
+def strip_farewell(message: str) -> str:
+    """Retire « bon week-end », « à demain »."""
+    m = _WISH_RE.sub(" ", message or "")
+    # « décaler à jeudi » : on garde
+    keep = (
+        _MGMT_RESCHED_RE.search(m)
+        or _MGMT_CANCEL_RE.search(m)
+        or _RESCHED_CUE_RE.search(m)
+        or re.search(r"\bavanc", m, re.I)
+    )
+    if not keep:
+        m = _FAREWELL_WHEN_RE.sub(" ", _SEE_YOU_RE.sub(" ", m))
+    return m
+
+
+def is_farewell(message: str, *, today: date | None = None) -> bool:
+    """Juste un au revoir ?"""
+    rest = strip_farewell(message)
+    if rest == (message or ""):
+        return False
+    return not (parse_fr_date(rest, today=today) or parse_fr_time(rest))
+
+
 def _filled(state: ConversationState, name: str) -> str | None:
     """Valeur d'un slot rempli."""
     slot = state.slots.get(name)
@@ -369,8 +398,9 @@ def is_implicit_reschedule(
     m = message or ""
     kind = fr_date_kind(m, today=today)
     hour = parse_fr_time(m)
+    cue = bool(_RESCHED_CUE_RE.search(m))
     # jour flou ou bavardage
-    if kind == VAGUE or (kind in (None, SOFT) and hour is None):
+    if kind == VAGUE or (hour is None and (kind is None or (kind == SOFT and not cue))):
         return False
     if services and match_catalog_services(m, services):
         return False  # nouvelle prestation
@@ -389,9 +419,13 @@ def is_implicit_reschedule(
     ]
     if given and all(new == old for new, old in given):
         return False
-    cue = bool(_RESCHED_CUE_RE.search(m))
     # au revoir : il faut un vrai signal
-    if _CLOSING_RE.search(m) or _FAREWELL_RE.search(m) or intent in _BYE_INTENTS:
+    if (
+        _CLOSING_RE.search(m)
+        or _WISH_RE.search(m)
+        or _SEE_YOU_RE.search(m)
+        or intent in _BYE_INTENTS
+    ):
         return cue
     return cue or bool(_ALT_LEAD_RE.match(m)) or _when_only(m)
 
@@ -609,15 +643,19 @@ class ConversationEngine:
             "manage_appointment",
             "escalation",
         ) or (_model_intent == "complaint" and _COMPLAINT_SIGNAL_RE.search(_msg_txt))
+        # « bon week-end » : pas un jour
+        _when_txt = strip_farewell(_msg_txt)
+        _farewell = is_farewell(_msg_txt, today=today)
         # rdv sans mot-clé
         _has_when = False
         if not _blocks_appt_override:
-            _has_when = bool(parse_fr_date(_msg_txt, today=today) or parse_fr_time(_msg_txt))
+            _has_when = bool(parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt))
         _has_service = bool(
             request.catalog_services and match_catalog_services(_msg_txt, request.catalog_services)
         )
         _strong_appt = bool(_STRONG_APPOINTMENT_RE.search(_msg_txt))
-        if (_strong_appt or (_has_when and _has_service)) and not _blocks_appt_override:
+        _wants_appt = _strong_appt or (_has_when and _has_service)
+        if _wants_appt and not _blocks_appt_override and not _farewell:
             logger.info(
                 "engine.intent.appointment_override",
                 was=intent_result["intent"],
@@ -702,11 +740,11 @@ class ConversationEngine:
         _resume_appointment_after_info = False
         if state.pending_intent and state.pending_intent != intent:
             msg_l = request.message_text or ""
-            real_closing = intent == "closing" and bool(_CLOSING_RE.search(msg_l))
+            real_closing = (intent == "closing" and bool(_CLOSING_RE.search(msg_l))) or _farewell
             hard_interrupt = intent in _INTERRUPTING_INTENTS or real_closing
             # complète une prise de rdv ?
             provides_appt_info = state.pending_intent == "appointment" and bool(
-                parse_fr_date(msg_l, today=today) or parse_fr_time(msg_l)
+                parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt)
             )
             # question d'info pendant un rdv
             info_interrupt = intent in _INFO_REQUEST_INTENTS and not provides_appt_info
@@ -826,6 +864,9 @@ class ConversationEngine:
             # déjà capté par le verrou
             if (naming and entity_name == "name") or (phoning and entity_name == "phone"):
                 continue
+            # « à ce soir » : pas un créneau
+            if _when_txt != _msg_txt and entity_name in ("date", "time"):
+                continue
             clean = coerce_entity(entity_name, entity_value, message=msg_text, today=today)
             if clean is not None:
                 state.set_slot(entity_name, clean, entity_type=entity_name.upper())
@@ -833,10 +874,11 @@ class ConversationEngine:
         # dates/heures en absolu
         if intent in ("appointment", "manage_appointment"):
             msg = msg_text.strip()
-            _day = parse_fr_date(msg, today=today)
+            # sans la formule d'au revoir
+            _day = parse_fr_date(_when_txt, today=today)
             if _day:
                 state.set_slot("date", _day.isoformat(), entity_type="DATE")
-            _hour = parse_fr_time(msg)
+            _hour = parse_fr_time(_when_txt)
             if _hour:
                 state.set_slot("time", _hour.strftime("%H:%M"), entity_type="TIME")
             # fallback prestation via catalogue

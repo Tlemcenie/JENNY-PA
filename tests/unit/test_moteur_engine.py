@@ -21,8 +21,10 @@ from jenny.engine.conversation_engine import (
     detect_appointment_mgmt,
     extract_customer_name,
     is_confirmation,
+    is_farewell,
     is_implicit_reschedule,
     looks_like_name,
+    strip_farewell,
 )
 from jenny.engine.datetime_fr import today_in
 from jenny.engine.intelligence import GAP_SCORE_HARD_FLOOR
@@ -271,6 +273,8 @@ class TestReportImplicite:
             ("ce soir à 18h", True, True),
             ("je peux venir jeudi", True, False),
             ("16h", False, True),
+            ("jeudi à midi", True, True),
+            ("Bon samedi 10h ça me va", True, True),
         ],
     )
     @pytest.mark.asyncio
@@ -316,6 +320,84 @@ class TestReportImplicite:
         assert chat.state.booked_time == "10:00"
         await chat.say("finalement j'annule")
         assert chat.state.booked_date is None and chat.state.booked_time is None
+
+    @pytest.mark.parametrize("bye", ["Bon week-end à vous !", "À ce soir !", "À demain !"])
+    @pytest.mark.asyncio
+    async def test_au_revoir_en_cours_ne_reserve_pas(self, bye: str) -> None:
+        # rdv en cours, heure déjà donnée
+        eng, acts = _engine()
+        chat = _Chat(eng)
+        await chat.say("je veux un rdv à 15h pour une coupe femme")
+        assert acts["book"].calls == []
+        r = await chat.say(bye)
+        assert acts["book"].calls == []
+        assert r.intent != "appointment"
+        assert "date" not in chat.state.slots
+
+    @pytest.mark.parametrize("answer", ["ce soir", "le week-end", "jeudi"])
+    @pytest.mark.asyncio
+    async def test_vraie_reponse_en_cours(self, answer: str) -> None:
+        eng, acts = _engine()
+        chat = _Chat(eng)
+        await chat.say("je veux un rdv à 15h pour une coupe femme")
+        r = await chat.say(answer)
+        assert r.intent == "appointment"
+        assert acts["book"].calls[-1]["time"] == "15:00"
+        assert acts["book"].calls[-1]["date"]
+
+    @pytest.mark.parametrize(
+        "msg", ["je réserve une coupe femme jeudi à midi", "rdv coupe femme demain, à 10h"]
+    )
+    @pytest.mark.asyncio
+    async def test_midi_reste_une_heure(self, msg: str) -> None:
+        eng, acts = _engine()
+        r = await _Chat(eng).say(msg)
+        assert r.intent == "appointment"
+        assert acts["book"].calls[-1]["time"] in ("12:00", "10:00")
+        assert acts["book"].calls[-1]["date"]
+
+    @pytest.mark.asyncio
+    async def test_merci_prestation_bon_weekend(self) -> None:
+        eng, acts = _engine()
+        r = await _Chat(eng).say("Merci pour la coupe femme, bon week-end !")
+        assert r.intent != "appointment"
+        assert acts["book"].calls == []
+
+    def test_au_revoir(self) -> None:
+        assert is_farewell("Merci, bon week-end !")
+        assert is_farewell("À ce soir !")
+        assert is_farewell("à jeudi 10h alors")
+        assert is_farewell("Merci pour le rdv, à demain !")
+        assert not is_farewell("une coupe ce week-end")
+        assert not is_farewell("ce soir à 18h")
+        # créneau en plus
+        assert not is_farewell("Jeudi 15h, bon week-end !")
+        # cible d'un report
+        assert not is_farewell("Déplacez-le à jeudi")
+        assert not is_farewell("je repousse à la semaine prochaine")
+        assert (
+            strip_farewell("Je décale à jeudi, bon week-end !").strip(" ,!") == "Je décale à jeudi"
+        )
+
+    @pytest.mark.parametrize(
+        ("msg", "field"),
+        [
+            ("Déplacez-le à jeudi", "date"),
+            ("je voudrais décaler à demain", "date"),
+            ("je repousse mon rdv à la semaine prochaine", "date"),
+            ("Je décale à jeudi, bon week-end !", "date"),
+            ("on peut avancer à ce soir ?", "date"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_report_cible_gardee(self, msg: str, field: str) -> None:
+        eng, acts = _engine()
+        chat = _Chat(eng)
+        await chat.say("je réserve une coupe femme vendredi à 10h")
+        r = await chat.say(msg)
+        assert r.intent == "manage_appointment"
+        assert acts["manage"].calls[-1]["operation"] == "reschedule"
+        assert field in acts["manage"].calls[-1]
 
     def test_fonction_directe(self) -> None:
         kw = {"today": LUNDI, "services": CATALOG}
