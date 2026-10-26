@@ -59,6 +59,10 @@ async def send_channel_reply(
     sortant, destinataire introuvable ou échec API — l'appelant persiste alors la
     réponse avec un statut d'échec.
     """
+    # le widget relève via /poll
+    if channel == "widget":
+        return True
+
     creds = None
     if session is not None and business_id is not None and channel in _PER_BUSINESS:
         try:

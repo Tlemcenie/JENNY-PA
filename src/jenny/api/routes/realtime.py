@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from jenny.api.dependencies import CurrentUser  # noqa: TC001 — requis au runtime par FastAPI
+from jenny.api.dependencies import CurrentPrincipal, get_current_principal, get_db
 from jenny.core.events import event_bus
 from jenny.core.logging import get_logger
 
@@ -29,6 +30,20 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/realtime", tags=["Realtime"])
+
+# session rendue avant le flux
+ShortDb = Annotated[AsyncSession, Depends(get_db, scope="function")]
+
+
+async def _stream_principal(
+    db: ShortDb,
+    authorization: str | None = Header(None, alias="Authorization"),
+) -> CurrentPrincipal:
+    """Principal, sans garder la connexion."""
+    return await get_current_principal(db=db, authorization=authorization)
+
+
+StreamUser = Annotated[CurrentPrincipal, Depends(_stream_principal)]
 
 # Intervalle des battements de cœur (commentaires SSE) qui maintiennent la
 # connexion ouverte à travers proxys et navigateurs.
@@ -81,7 +96,7 @@ async def sse_event_stream(
 
 
 @router.get("/stream")
-async def stream_events(request: Request, principal: CurrentUser) -> StreamingResponse:
+async def stream_events(request: Request, principal: StreamUser) -> StreamingResponse:
     """Ouvre un flux SSE filtré sur le business de l'utilisateur."""
     if principal.business_id is None:
         # sans salon, pas de flux
