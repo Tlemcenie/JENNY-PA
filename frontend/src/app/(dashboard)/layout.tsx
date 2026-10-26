@@ -8,6 +8,7 @@ import { UiPrefsProvider } from "@/lib/ui-prefs";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { RealtimeNotifier } from "@/components/layout/realtime-notifier";
+import { RealtimeProvider } from "@/components/providers/realtime-provider";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { ShortcutsHelp } from "@/components/layout/shortcuts-help";
 import { LiveRegion } from "@/components/layout/live-region";
@@ -40,17 +41,19 @@ export default function DashboardLayout({
       <UiPrefsProvider>
         <TimeProvider>
           <ConfirmProvider>
-            <div className="h-full flex">
-              <RealtimeNotifier />
-              <CommandPalette />
-              <ShortcutsHelp />
-              <LiveRegion />
-              <Sidebar />
-              <div className="flex-1 flex flex-col min-w-0">
-                <Topbar />
-                <main className="flex-1 overflow-auto">{children}</main>
+            <RealtimeProvider>
+              <div className="h-full flex">
+                <RealtimeNotifier />
+                <CommandPalette />
+                <ShortcutsHelp />
+                <LiveRegion />
+                <Sidebar />
+                <div className="flex-1 flex flex-col min-w-0">
+                  <Topbar />
+                  <main className="flex-1 overflow-auto">{children}</main>
+                </div>
               </div>
-            </div>
+            </RealtimeProvider>
           </ConfirmProvider>
         </TimeProvider>
       </UiPrefsProvider>
