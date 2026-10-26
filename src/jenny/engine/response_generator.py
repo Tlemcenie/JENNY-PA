@@ -166,6 +166,26 @@ def strip_repeated_greeting(text: str) -> str:
     return text
 
 
+# ligne de fait recopiée
+_FACT_LINE_RE = re.compile(
+    r"RDV réservé\s*[—–-]\s*prestation\s*:\s*(?P<svc>[^·\n]{1,80}?)"  # noqa: RUF001
+    r"(?:\s+avec\s+(?P<staff>[^·\n]{1,40}?))?\s*·\s*jour\s*:\s*(?P<day>[^·\n]{1,40}?)"
+    r"\s*·\s*heure\s*:\s*(?P<h>\d{1,2})\s*h\s*(?P<m>\d{2})?\.?",
+    re.I,
+)
+
+
+def rewrite_fact_line(text: str) -> str:
+    """Remet la ligne de fait en phrase."""
+
+    def _phrase(m: re.Match[str]) -> str:
+        heure = f"{int(m['h'])}h" + (m["m"] if m["m"] and m["m"] != "00" else "")
+        avec = f" avec {m['staff'].strip()}" if m["staff"] else ""
+        return f"C'est réservé : {m['svc'].strip()}{avec}, {m['day'].strip()} à {heure}."
+
+    return _FACT_LINE_RE.sub(_phrase, text)
+
+
 def drop_leaked_instructions(text: str) -> str:
     """Vire les consignes recopiées."""
     if not _LEAKED_INSTRUCTION_RE.search(text):
@@ -393,6 +413,7 @@ def polish_response(
     out = sanitize_identity(out)
     out = strip_letter_format(out)
     out = strip_inline_address(out)
+    out = rewrite_fact_line(out)
     out = drop_leaked_instructions(out)
     out = strip_false_booking_confirmation(out, booking_confirmed=booking_confirmed)
     out = trim_trailing_deflection(out, grounded=grounded)

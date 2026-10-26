@@ -262,3 +262,29 @@ def test_polish_strips_letter_format_end_to_end() -> None:
     assert "Madame" not in out
     assert "ordialement" not in out
     assert "ouverts jusqu'à 19h" in out
+
+
+def test_ligne_de_fait_reformulee() -> None:
+    """Pas de « prestation : » au client."""
+    from jenny.engine.response_generator import polish_response, rewrite_fact_line
+
+    raw = (
+        "RDV réservé — prestation : Brushing · jour : samedi 31/10 · heure : 10h00. "
+        "Sous quel nom je note votre rendez-vous ?"
+    )
+    out = rewrite_fact_line(raw)
+    assert out.startswith("C'est réservé : Brushing, samedi 31/10 à 10h.")
+    assert "prestation :" not in polish_response(raw, already_spoke=True, booking_confirmed=True)
+    staff = "RDV réservé — prestation : Coupe femme avec Léa · jour : jeudi 05/11 · heure : 14h30"
+    assert rewrite_fact_line(staff) == "C'est réservé : Coupe femme avec Léa, jeudi 05/11 à 14h30."
+
+
+def test_ligne_de_fait_lineaire() -> None:
+    """Pas de retour arrière lent."""
+    import time
+
+    from jenny.engine.response_generator import rewrite_fact_line
+
+    t = time.perf_counter()
+    rewrite_fact_line("RDV réservé — prestation : " + "a " * 5000 + "· jour : x")
+    assert time.perf_counter() - t < 0.05
