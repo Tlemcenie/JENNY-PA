@@ -109,6 +109,19 @@ from jenny.llm import runtime as _llm_runtime  # noqa: E402
 _llm_runtime._STORE = _RUN_DIR / "llm_choice.json"
 _llm_runtime._active_key = None
 
+# bcrypt coût mini en test
+import bcrypt  # noqa: E402
+
+_orig_gensalt = bcrypt.gensalt
+
+
+def _fast_gensalt(rounds: int = 4, prefix: bytes = b"2b") -> bytes:
+    """Sel bcrypt rapide (tests)."""
+    return _orig_gensalt(rounds=rounds, prefix=prefix)
+
+
+bcrypt.gensalt = _fast_gensalt
+
 # ── coupe-circuit réseau LLM ──
 
 import httpx  # noqa: E402
@@ -151,13 +164,24 @@ httpx.HTTPTransport.handle_request = _guarded_sync_send  # type: ignore[method-a
 import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 from pytest import MonkeyPatch  # noqa: E402
+from sqlalchemy import event  # noqa: E402
 from sqlalchemy.dialects.postgresql import ARRAY  # noqa: E402
 from sqlalchemy.ext.compiler import compiles  # noqa: E402
 
 from jenny.api.main import create_app  # noqa: E402
 from jenny.core.config import Settings  # noqa: E402
+from jenny.db.session import engine as _db_engine  # noqa: E402
 from jenny.llm.providers import BaseLLMProvider, LLMResponse  # noqa: E402
 from jenny.rag.embeddings import BaseEmbedder  # noqa: E402
+
+
+@event.listens_for(_db_engine.sync_engine, "connect")
+def _sqlite_fast(dbapi_conn, _record) -> None:  # type: ignore[no-untyped-def]
+    """Base jetable : pas de fsync."""
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA synchronous=OFF")
+    cur.execute("PRAGMA journal_mode=MEMORY")
+    cur.close()
 
 
 # ARRAY postgres en JSON
