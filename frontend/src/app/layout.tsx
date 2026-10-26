@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
@@ -51,7 +51,7 @@ export const metadata: Metadata = {
     siteName: "Jenny",
     locale: "fr_FR",
     type: "website",
-    images: [{ url: "/jenny.png", width: 512, height: 512, alt: "Jenny" }],
+    images: [{ url: "/jenny.png", width: 1024, height: 1024, alt: "Jenny" }],
   },
   twitter: {
     card: "summary",
@@ -59,6 +59,16 @@ export const metadata: Metadata = {
     description: "L'assistante IA qui répond à vos clients sur tous vos canaux, 24/7.",
     images: ["/jenny.png"],
   },
+  icons: { apple: "/jenny.png" },
+  appleWebApp: { capable: true, title: "Jenny", statusBarStyle: "default" },
+};
+
+// couleur barre mobile
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#FAFAFA" },
+    { media: "(prefers-color-scheme: dark)", color: "#0E1014" },
+  ],
 };
 
 export default function RootLayout({
