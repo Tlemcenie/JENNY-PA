@@ -484,6 +484,41 @@ def parse_fr_duration(text: str) -> int | None:
 
 # ── formes absolues ──
 
+_MONTH_LABELS = (
+    "janvier",
+    "février",
+    "mars",
+    "avril",
+    "mai",
+    "juin",
+    "juillet",
+    "août",
+    "septembre",
+    "octobre",
+    "novembre",
+    "décembre",
+)
+
+
+def format_fr_date(value: str | date | None, *, today: date | None = None) -> str | None:
+    """Date en clair, « jeudi 29 octobre »."""
+    d = value if isinstance(value, date) else parse_fr_date(value or "", today=today)
+    if d is None:
+        return None
+    label = f"{list(_WEEKDAYS)[d.weekday()]} {d.day} {_MONTH_LABELS[d.month - 1]}"
+    # année si pas celle-ci
+    if d.year != (today or today_in()).year:
+        label += f" {d.year}"
+    return label
+
+
+def format_fr_time(value: str | time | None) -> str | None:
+    """Heure en clair, « 14h » ou « 14h30 »."""
+    t = value if isinstance(value, time) else parse_fr_time(value or "")
+    if t is None:
+        return None
+    return f"{t.hour}h" if t.minute == 0 else f"{t.hour}h{t.minute:02d}"
+
 
 def to_iso_date(text: str, *, today: date | None = None) -> str | None:
     """Date FR vers AAAA-MM-JJ."""

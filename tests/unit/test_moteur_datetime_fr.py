@@ -6,6 +6,8 @@ import pytest
 
 from jenny.engine.datetime_fr import (
     combine_fr,
+    format_fr_date,
+    format_fr_time,
     parse_fr_date,
     parse_fr_duration,
     parse_fr_time,
@@ -378,3 +380,18 @@ class TestCombine:
 
     def test_fuseau(self) -> None:
         assert combine_fr("2026-10-27", "9h", tz="America/New_York") == datetime(2026, 10, 27, 9, 0)
+
+
+class TestAffichage:
+    def test_date_en_clair(self) -> None:
+        assert format_fr_date("2026-10-29", today=LUNDI) == "jeudi 29 octobre"
+        assert format_fr_date(date(2027, 2, 14), today=LUNDI) == "dimanche 14 février 2027"
+        assert format_fr_date("demain", today=LUNDI) == "mardi 27 octobre"
+        assert format_fr_date("bientôt") is None
+        assert format_fr_date(None) is None
+
+    def test_heure_en_clair(self) -> None:
+        assert format_fr_time("14:00") == "14h"
+        assert format_fr_time("09:30") == "9h30"
+        assert format_fr_time(time(12, 5)) == "12h05"
+        assert format_fr_time("") is None
