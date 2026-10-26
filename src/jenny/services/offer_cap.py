@@ -6,8 +6,9 @@ Un client qui répond STOP ne reçoit plus rien de commercial.
 
 Règle STOP : tous les mots du message doivent venir du vocabulaire
 STOP (mot d'arrêt, « ne ... plus recevoir », « plus de pub »,
-politesse). Un autre mot, ou un « pas » qui nie, et c'est ambigu :
-on laisse la conversation répondre.
+politesse). Un autre mot, ou un « pas » qui nie le STOP lui-même
+(« n'arrêtez pas »), et c'est ambigu : on laisse la conversation
+répondre. « Stop, pas de pub » reste un STOP.
 """
 
 from __future__ import annotations
@@ -152,7 +153,7 @@ def _words(text: str) -> frozenset[str]:
 
 # mots qui veulent dire STOP
 _STOP_WORDS = _words(
-    "stop stopp stoppez arret arrete arreter arretez desinscription desinscrire"
+    "stop stopp stopper stoppez arret arrete arreter arretez desinscription desinscrire"
     " desinscris desinscrivez desinscrit desinscrite desabonner desabonnez"
     " desabonnement desabonne unsubscribe optout"
 )
@@ -174,6 +175,15 @@ _STOP_FILLERS = _words(
 )
 _STOP_ALLOWED = _STOP_WORDS | _STOP_VERBS | _STOP_TARGETS | _STOP_FILLERS
 _MAX_STOP_WORDS = 14
+# verbes d'arrêt conjugués
+_STOP_ACTIONS = _words(
+    "arrete arreter arretez stopper stoppez desinscrire desinscris desinscrivez"
+    " desabonne desabonner desabonnez"
+)
+# négations franches
+_NEG = _words("pas jamais")
+# petits mots entre deux
+_GLUE = _words("de d des du me m moi vous nous les le la l vos votre")
 
 STOP_ACK = (
     "C'est noté, vous ne recevrez plus d'offres de notre part. "
@@ -181,15 +191,47 @@ STOP_ACK = (
 )
 
 
+def _plain(text: str) -> str:
+    """Minuscules, sans accents."""
+    t = unicodedata.normalize("NFKD", text.lower())
+    return "".join(ch for ch in t if not unicodedata.combining(ch))
+
+
 def _stop_tokens(text: str) -> list[str]:
     """Minuscules, sans accents, mots seuls."""
-    t = unicodedata.normalize("NFKD", text.lower())
-    t = "".join(ch for ch in t if not unicodedata.combining(ch))
-    return re.findall(r"[a-z0-9]+", t)
+    return re.findall(r"[a-z0-9]+", _plain(text))
+
+
+def _stop_clauses(text: str) -> list[list[str]]:
+    """Mots, morceau par morceau."""
+    parts = re.split(r"[,.;:!?\n]+", _plain(text))
+    return [w for w in (re.findall(r"[a-z0-9]+", p) for p in parts) if w]
+
+
+def _denies_stop(words: list[str], i: int) -> bool:
+    """Ce « pas » nie-t-il le STOP ?"""
+    prev = words[i - 1] if i else ""
+    if prev in _STOP_ACTIONS:
+        # « n'arrêtez pas »
+        return True
+    j = i + 1
+    while j < len(words) and words[j] in _GLUE:
+        j += 1
+    nxt = words[j] if j < len(words) else ""
+    if nxt in _STOP_WORDS:
+        # « pas arrêter », « pas me désinscrire »
+        return True
+    # « stop pas » seul ; « stop pas de pub » ok
+    return prev in _STOP_WORDS and nxt not in _STOP_TARGETS | _STOP_VERBS
 
 
 def is_stop_reply(text: str | None) -> bool:
-    """STOP seul ou poli ; sinon ambigu."""
+    """STOP seul ou poli ; sinon ambigu.
+
+    Une négation ne casse le STOP que si elle porte dessus
+    (« n'arrêtez pas », « pas me désinscrire »). Ailleurs, elle
+    renforce le refus (« stop, pas de pub »).
+    """
     if not text:
         return False
     words = _stop_tokens(text)
@@ -198,15 +240,20 @@ def is_stop_reply(text: str | None) -> bool:
     if any(w not in _STOP_ALLOWED for w in words):
         # « stop je voulais dire jeudi »
         return False
+    for clause in _stop_clauses(text):
+        if " pas du tout " in f" {' '.join(clause)} ":
+            return False
+        if any(w in _NEG and _denies_stop(clause, i) for i, w in enumerate(clause)):
+            return False
     has = set(words)
     if has & _STOP_WORDS:
-        # « n'arrêtez pas » : non
-        return "pas" not in has
+        return True
+    neg = bool(has & _NEG)
     if has & _STOP_VERBS:
-        # « ne m'envoyez plus » oui
-        return "plus" in has and bool(has & {"ne", "n"}) and "pas" not in has
+        # « ne m'envoyez plus/pas »
+        return neg or ("plus" in has and bool(has & {"ne", "n"}))
     # « plus de pub », « pas de sms »
-    return bool(has & _STOP_TARGETS) and bool(has & {"plus", "pas"})
+    return bool(has & _STOP_TARGETS) and (neg or "plus" in has)
 
 
 def set_opt_out(customer: Customer, opt_out: bool, now: datetime | None = None) -> None:
