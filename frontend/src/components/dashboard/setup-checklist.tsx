@@ -83,10 +83,14 @@ export function SetupChecklist({
     setSeedMsg(null);
     try {
       const r = await seedCoiffeurTemplate();
+      const kbNote =
+        r.knowledge > 0
+          ? ` ${r.knowledge} fiches génériques ajoutées à la base (horaires, annulation) : relisez-les.`
+          : "";
       setSeedMsg(
         r.prestations > 0
-          ? `${r.prestations} prestations ajoutées, à ajuster dans Prestations.`
-          : "Vous aviez déjà des prestations : rien n'a été dupliqué."
+          ? `${r.prestations} prestations ajoutées, à ajuster dans Prestations.${kbNote}`
+          : `Vous aviez déjà des prestations : rien n'a été dupliqué.${kbNote}`
       );
       await refresh();
       onChanged?.();

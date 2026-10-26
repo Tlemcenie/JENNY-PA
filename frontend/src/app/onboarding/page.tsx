@@ -253,10 +253,14 @@ export default function OnboardingPage() {
     setSeedInfo(null);
     try {
       const r = await seedCoiffeurTemplate();
+      const kbNote =
+        r.knowledge > 0
+          ? ` ${r.knowledge} fiches génériques ont aussi été ajoutées à la base (horaires, annulation) : relisez-les.`
+          : "";
       setSeedInfo(
         r.prestations > 0
-          ? `${r.prestations} prestations ajoutées${r.knowledge > 0 ? ` et ${r.knowledge} fiches de connaissances` : ""}. Ajustez les prix quand vous voulez.`
-          : "Vous aviez déjà des prestations : rien n'a été dupliqué."
+          ? `${r.prestations} prestations ajoutées. Ajustez les prix quand vous voulez.${kbNote}`
+          : `Vous aviez déjà des prestations : rien n'a été dupliqué.${kbNote}`
       );
       await loadPrestations();
     } catch (err) {
