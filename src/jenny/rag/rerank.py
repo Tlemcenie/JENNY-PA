@@ -1,8 +1,4 @@
-"""Score lexical et fusion des candidats RAG.
-
-Score final : 0.7 · vectoriel + 0.3 · lexical (racines + synonymes).
-L'ordre vient d'une fusion RRF (vectoriel, texte intégral, lexical).
-"""
+"""Score lexical et fusion RRF."""
 
 from __future__ import annotations
 
@@ -62,10 +58,7 @@ def _title_of(d) -> str:
 
 
 def rerank(query: str, docs: list, top_k: int) -> list:
-    """Re-classe en mélangeant vectoriel et lexical.
-
-    Les objets exposent ``content`` et ``score`` (score muté en place).
-    """
+    """Re-classe (score muté en place)."""
     if not docs:
         return []
     for d in docs:

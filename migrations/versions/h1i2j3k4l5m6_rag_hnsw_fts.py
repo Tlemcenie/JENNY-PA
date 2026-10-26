@@ -1,8 +1,4 @@
-"""RAG : index HNSW + texte intégral français.
-
-L'IVFFlat avait été créé sur une table vide (centroïdes ratés, probes=1).
-On passe en HNSW et on ajoute une colonne tsvector générée (titre + texte,
-sans accents) pour la recherche hybride. Idempotente.
+"""RAG : index HNSW + texte intégral français (idempotente).
 
 Revision ID: jen_raghnsw_h1i2
 Revises: jen_nooverlap_g1h2

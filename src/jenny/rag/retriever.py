@@ -1,11 +1,4 @@
-"""Retriever RAG hybride, scopé par business.
-
-1. Encode la question
-2. Recherche hybride pgvector + texte intégral (RRF)
-3. Seuil sur le score blendé, puis top_k
-
-Ouvre sa propre session courte (le moteur n'en transporte pas).
-"""
+"""Retriever RAG hybride, par business."""
 
 from __future__ import annotations
 

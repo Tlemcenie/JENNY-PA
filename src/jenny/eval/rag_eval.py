@@ -1,10 +1,6 @@
-"""Éval du RAG sur la vraie base pgvector (KB coiffeur).
+"""Éval du RAG sur le vrai pgvector.
 
-Mesure la recherche (recall@1/3/5, MRR) et la décision de lacune
-(taux de fausse lacune, taux de fausse réponse) en passant par le vrai
-chemin du chat : FAQAgent → grounding moteur → is_knowledge_gap.
-
-Usage (KB seedée par scripts/seed_kb_coiffeur.py) :
+Usage (après scripts/seed_kb_coiffeur.py) :
     python src/jenny/eval/rag_eval.py                 # business démo
     python src/jenny/eval/rag_eval.py --sweep         # balaye les seuils
     python src/jenny/eval/rag_eval.py --json out.json

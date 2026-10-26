@@ -1,18 +1,9 @@
-"""Ré-indexe la base de connaissances avec l'embedder COURANT.
-
-À lancer après tout changement de modèle d'embeddings ou de format
-(titre + catégorie embarqués) : vecteurs stockés et vecteurs de requête
-doivent vivre dans le même espace, sinon les scores n'ont aucun sens.
+"""Ré-indexe la KB avec l'embedder courant.
 
 Usage :
     python scripts/reindex_kb.py                       # toutes les entreprises
     python scripts/reindex_kb.py <business_id>         # une seule
     python scripts/reindex_kb.py --rechunk [<id>]      # redécoupe aussi
-
-Sans --rechunk : re-vectorise chaque fragment en place (id, texte et
-métadonnées inchangés). Avec --rechunk : recolle chaque entrée et la
-redécoupe au budget du modèle (anciens fragments de 512 caractères
-tronqués par la fenêtre de 128 tokens). Tout se fait en une transaction.
 """
 
 from __future__ import annotations

@@ -1,10 +1,4 @@
-"""Remplace la KB du salon démo par une vraie base coiffeur.
-
-Lit les prestations et les horaires en base, génère ~90 entrées cohérentes,
-puis remplace TOUTE la KB du business en une seule transaction.
-
-Sujets laissés exprès sans réponse (pour tester les lacunes) :
-extensions de cheveux, lissage brésilien / kératine, maquillage, recrutement.
+"""Vraie KB coiffeur pour le salon démo.
 
 Usage :
     python scripts/seed_kb_coiffeur.py                 # business démo (slug demo)
