@@ -21,7 +21,7 @@ from jenny.domain.models.appointment import Appointment
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.staff import Staff
 from jenny.services.audit_service import record_audit
-from jenny.services.availability import find_free_staff
+from jenny.services.availability import StaffPick, find_free_staff, load_staff_pool
 
 logger = get_logger(__name__)
 
@@ -111,6 +111,54 @@ async def _check_staff(db: AsyncSession, bid: UUID, staff_id: UUID | None) -> No
         raise HTTPException(400, "Coiffeur inconnu pour ce salon")
 
 
+_OVERLAP = "Ce créneau chevauche un rendez-vous existant"
+
+
+def _utc(dt: datetime) -> datetime:
+    """SQLite rend du naïf."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+async def _ensure_room(
+    db: AsyncSession,
+    bid: UUID,
+    start: datetime,
+    end: datetime,
+    *,
+    staff_id: UUID | None,
+    auto: bool = False,
+    exclude_id: UUID | None = None,
+) -> UUID | None:
+    """Vérifie qu'un fauteuil reste libre."""
+    pool = await load_staff_pool(db, bid)
+
+    async def _pick(only: UUID | None, hours: bool) -> StaffPick:
+        return await find_free_staff(
+            db,
+            bid,
+            start,
+            end,
+            staff_id=only,
+            pool=pool,
+            exclude_appointment_id=exclude_id,
+            check_hours=hours,
+        )
+
+    if auto and staff_id is None:
+        # présent d'abord, sinon hors horaires
+        pick = await _pick(None, True)
+        if not pick.free and pool.has_staff:
+            pick = await _pick(None, False)
+        if not pick.free:
+            raise HTTPException(409, "Aucun coiffeur libre sur ce créneau")
+        return pick.staff.id if pick.staff else None
+    # coiffeur inactif = un fauteuil
+    only = staff_id if pool.get(staff_id) is not None else None
+    if not (await _pick(only, False)).free:
+        raise HTTPException(409, _OVERLAP)
+    return staff_id
+
+
 @router.get("", response_model=AppointmentListResponse)
 async def list_appointments(
     db: DbSession,
@@ -175,10 +223,10 @@ async def create_appointment(
         owner = await db.scalar(select(Customer.business_id).where(Customer.id == body.customer_id))
         if owner != bid:
             raise HTTPException(400, "Client inconnu pour ce salon")
-    staff_id = body.staff_id
-    if staff_id is None and body.auto_assign_staff:
-        pick = await find_free_staff(db, bid, body.start_at, body.end_at)
-        staff_id = pick.staff.id if pick.staff else None
+    # jamais de surréservation silencieuse
+    staff_id = await _ensure_room(
+        db, bid, body.start_at, body.end_at, staff_id=body.staff_id, auto=body.auto_assign_staff
+    )
     appt = Appointment(
         business_id=bid,
         staff_id=staff_id,
@@ -194,23 +242,24 @@ async def create_appointment(
         created_by=principal.email or "Agent",
     )
     db.add(appt)
-    await db.flush()
-    record_audit(
-        db,
-        business_id=bid,
-        actor=principal.email or "Agent",
-        action="appointment.created",
-        entity_type="appointment",
-        entity_id=appt.id,
-        summary=f"RDV « {appt.title} » créé le {appt.start_at:%d/%m %H:%M}",
-    )
     try:
+        # course : la base tranche au flush
+        await db.flush()
+        record_audit(
+            db,
+            business_id=bid,
+            actor=principal.email or "Agent",
+            action="appointment.created",
+            entity_type="appointment",
+            entity_id=appt.id,
+            summary=f"RDV « {appt.title} » créé le {appt.start_at:%d/%m %H:%M}",
+        )
         await db.commit()
     except Exception as exc:  # créneau déjà occupé
         if not is_slot_taken(exc):
             raise
         await db.rollback()
-        raise HTTPException(409, "Ce créneau chevauche un rendez-vous existant") from exc
+        raise HTTPException(409, _OVERLAP) from exc
     await db.refresh(appt)
     logger.info("appointment.created", business_id=str(bid), appt_id=str(appt.id))
     return await _item(db, appt)
@@ -237,14 +286,30 @@ async def update_appointment(
     if appt is None or appt.business_id != principal.business_id:
         raise HTTPException(404, "Rendez-vous introuvable")
     data = body.model_dump(exclude_unset=True)
+    # valeurs cibles, avant toute écriture
+    new_start = _utc(data.get("start_at") or appt.start_at)
+    new_end = _utc(data.get("end_at") or appt.end_at)
+    new_status = data.get("status") or appt.status
+    new_staff = data.get("staff_id", appt.staff_id)
+    if new_end < new_start:
+        raise HTTPException(400, "La fin doit être postérieure au début")
+    if "staff_id" in data:
+        await _check_staff(db, appt.business_id, new_staff)
+    moved = (
+        data.get("start_at") is not None
+        or data.get("end_at") is not None
+        or "staff_id" in data
+        or appt.status == "cancelled"
+    )
+    if moved and new_status != "cancelled":
+        await _ensure_room(
+            db, appt.business_id, new_start, new_end, staff_id=new_staff, exclude_id=appt.id
+        )
     for f in ("title", "description", "location", "status", "start_at", "end_at", "staff_notes"):
         if f in data and data[f] is not None:
             setattr(appt, f, data[f])
     if "staff_id" in data:
-        await _check_staff(db, appt.business_id, data["staff_id"])
-        appt.staff_id = data["staff_id"]
-    if appt.end_at < appt.start_at:
-        raise HTTPException(400, "La fin doit être postérieure au début")
+        appt.staff_id = new_staff
     record_audit(
         db,
         business_id=appt.business_id,
@@ -260,7 +325,7 @@ async def update_appointment(
         if not is_slot_taken(exc):
             raise
         await db.rollback()
-        raise HTTPException(409, "Ce créneau chevauche un rendez-vous existant") from exc
+        raise HTTPException(409, _OVERLAP) from exc
     await db.refresh(appt)
     return await _item(db, appt)
 

@@ -263,6 +263,7 @@ def _free_members(
     prestation_ids: Iterable[UUID] | None,
     only: UUID | None,
     cache: dict,
+    check_hours: bool = True,
 ) -> list[Staff]:
     """Coiffeurs libres et compétents sur [start, end)."""
     ids = {m.id for m in pool.members}
@@ -285,6 +286,10 @@ def _free_members(
     present: list[Staff] = []
     for m in pool.members:
         if m.id in busy:
+            continue
+        if not check_hours:
+            # agenda : horaires ignorés
+            present.append(m)
             continue
         key = (m.id, day)
         if key not in cache:
@@ -541,6 +546,7 @@ async def find_free_staff(
     prefer_staff_id: UUID | None = None,
     exclude_appointment_id: UUID | None = None,
     pool: StaffPool | None = None,
+    check_hours: bool = True,
 ) -> StaffPick:
     """Qui peut prendre [start, end) ? (staff_id impose, prefer tente)"""
     if pool is None:
@@ -554,7 +560,7 @@ async def find_free_staff(
 
         business = await db.get(_Business, business_id)
     free = _free_members(
-        pool, business, start, end, booked, list(prestation_ids or []), staff_id, {}
+        pool, business, start, end, booked, list(prestation_ids or []), staff_id, {}, check_hours
     )
     if not free:
         return StaffPick(free=False, has_staff=True)
