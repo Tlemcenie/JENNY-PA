@@ -14,10 +14,14 @@ import sys
 import tomllib
 from importlib import metadata
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -38,6 +42,13 @@ TRANSITIVE = {
 }
 # modules maison
 LOCAL = {"jenny", "ml", "nanogpt"}
+# nom d'import != nom pip
+IMPORT_TO_DIST = {
+    "sklearn": "scikit-learn",
+    "jwt": "pyjwt",
+    "yaml": "pyyaml",
+    "PIL": "pillow",
+}
 # modules maison suivis depuis src
 FOLLOWED = ("ml", "nanogpt")
 
@@ -116,6 +127,39 @@ def _rel(path: Path) -> str:
     return str(path.relative_to(ROOT))
 
 
+def _dist_names(module: str, dists: Mapping[str, list[str]]) -> set[str]:
+    """Distributions d'un module, même absent."""
+    installed = dists.get(module)
+    if installed:
+        return {canonicalize_name(d) for d in installed}
+    # absent ici (CI sans [ml])
+    return {canonicalize_name(IMPORT_TO_DIST.get(module, module))}
+
+
+def _ml_tree_imports() -> dict[str, set[str]]:
+    """Imports tiers de ml/, nanogpt/, pipelines/."""
+    found: dict[str, set[str]] = {}
+    for base in ("ml", "nanogpt", "pipelines"):
+        for module, files in _third_party_imports(ROOT / base).items():
+            found.setdefault(module, set()).update(files)
+    return found
+
+
+def _undeclared(
+    imports: Mapping[str, set[str]], declared: set[str], dists: Mapping[str, list[str]]
+) -> dict[str, list[str]]:
+    """Imports sans dep déclarée."""
+    return {
+        module: sorted(files)
+        for module, files in imports.items()
+        if module not in OPTIONAL and not _dist_names(module, dists) & declared
+    }
+
+
+# imports prod hors transitifs
+DIRECT_RUNTIME = {m: f for m, f in RUNTIME_IMPORTS.items() if m not in TRANSITIVE}
+
+
 def test_closure_couvre_le_chemin_ml() -> None:
     """Tête, lstm, ner et nanogpt vus."""
     rel = {_rel(p) for p in CLOSURE}
@@ -138,14 +182,7 @@ def test_runtime_never_imports_ml_extra() -> None:
 
 def test_runtime_imports_are_declared() -> None:
     """Chaque import tiers de prod est déclaré."""
-    dists = metadata.packages_distributions()
-    missing = {}
-    for module, files in RUNTIME_IMPORTS.items():
-        if module in OPTIONAL or module in TRANSITIVE:
-            continue
-        names = {canonicalize_name(d) for d in dists.get(module, [])}
-        if not names & CORE:
-            missing[module] = sorted(files)
+    missing = _undeclared(DIRECT_RUNTIME, CORE, metadata.packages_distributions())
     assert missing == {}, "à déclarer dans [project].dependencies"
 
 
@@ -160,17 +197,33 @@ def test_transitives_reelles() -> None:
 
 def test_ml_tree_deps_declared() -> None:
     """Entraînement : cœur ou [ml]."""
-    dists = metadata.packages_distributions()
-    declared = CORE | ML_EXTRA
-    missing = {}
-    for base in ("ml", "nanogpt", "pipelines"):
-        for module, files in _third_party_imports(ROOT / base).items():
-            if module in OPTIONAL:
-                continue
-            names = {canonicalize_name(d) for d in dists.get(module, [])}
-            if not names & declared:
-                missing.setdefault(module, set()).update(files)
+    missing = _undeclared(_ml_tree_imports(), CORE | ML_EXTRA, metadata.packages_distributions())
     assert missing == {}, "à déclarer dans le cœur ou l'extra [ml]"
+
+
+def test_deps_vues_sans_rien_installe() -> None:
+    """Comme la CI sans [ml]."""
+    imports = _ml_tree_imports()
+    # mlflow, groq... vus quand même
+    assert set(imports) >= ML_ONLY
+    assert _undeclared(imports, CORE | ML_EXTRA, {}) == {}
+    assert _undeclared(DIRECT_RUNTIME, CORE, {}) == {}
+
+
+def test_dep_absente_reste_signalee() -> None:
+    """Absent et non déclaré : signalé."""
+    imports = {"pandas": {"ml/x.py"}, "sklearn": {"ml/y.py"}, "fitz": {"ml/z.py"}}
+    assert _undeclared(imports, CORE | ML_EXTRA, {}) == {"pandas": ["ml/x.py"]}
+    # sklearn hors cœur
+    assert set(_undeclared(imports, CORE, {})) == {"pandas", "sklearn"}
+
+
+def test_noms_pip_connus_exacts() -> None:
+    """Table import -> pip juste."""
+    dists = metadata.packages_distributions()
+    for module, dist in IMPORT_TO_DIST.items():
+        if module in dists:
+            assert canonicalize_name(dist) in _dist_names(module, dists), module
 
 
 def test_extras_layout() -> None:
