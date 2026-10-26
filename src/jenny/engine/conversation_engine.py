@@ -695,6 +695,8 @@ class ConversationEngine:
             channel=request.channel,
         )
         state.add_user_message(request.message_text)
+        # règles : texte borné
+        _msg_txt = clip_rules_text(request.message_text)
         state.language = request.language
         if request.customer_id is not None:
             state.customer_id = request.customer_id
@@ -705,7 +707,7 @@ class ConversationEngine:
             state.business_name = request.business_name
 
         # langue du client
-        state.detected_language = request.language or detect_language(request.message_text)
+        state.detected_language = request.language or detect_language(_msg_txt)
         # faits connus sur le client
         if request.customer_facts:
             state.customer_facts = list(request.customer_facts)
@@ -737,10 +739,9 @@ class ConversationEngine:
         )
 
         # 2. intention
-        intent_result = await self._detect_intent(request.message_text, state)
+        intent_result = await self._detect_intent(_msg_txt, state)
 
         # override rdv haute précision
-        _msg_txt = request.message_text or ""
         _model_intent = intent_result["intent"]
         _blocks_appt_override = _model_intent in (
             "appointment",
@@ -775,7 +776,7 @@ class ConversationEngine:
             }
 
         # override devis
-        if _STRONG_QUOTE_RE.search(request.message_text or "") and intent_result["intent"] not in (
+        if _STRONG_QUOTE_RE.search(_msg_txt) and intent_result["intent"] not in (
             "appointment",
             "manage_appointment",
             "escalation",
@@ -790,9 +791,9 @@ class ConversationEngine:
             }
 
         # prix + prestation → devis
-        _price_signal = _PRICE_SIGNAL_RE.search(request.message_text or "")
+        _price_signal = _PRICE_SIGNAL_RE.search(_msg_txt)
         _cited_prestation = (
-            match_catalog_services(request.message_text or "", request.catalog_services)
+            match_catalog_services(_msg_txt, request.catalog_services)
             if request.catalog_services
             else None
         )
@@ -816,7 +817,7 @@ class ConversationEngine:
 
         # catalogue générique → info groundée (pas small_talk / planning)
         if (
-            _CATALOG_LIST_RE.search(request.message_text or "")
+            _CATALOG_LIST_RE.search(_msg_txt)
             and not _cited_prestation
             and not _has_when  # une vraie demande de créneau a une date
             and intent_result["intent"]
@@ -893,7 +894,7 @@ class ConversationEngine:
                 intent = state.pending_intent
                 intent_confidence = max(intent_confidence, 0.6)
 
-        msg_text = request.message_text or ""
+        msg_text = _msg_txt
         # vrai changement de sujet ?
         new_topic = len(re.findall(r"\w+", msg_text)) > 3 and intent not in _FILLER_INTENTS
 
@@ -1043,7 +1044,7 @@ class ConversationEngine:
             try:
                 # même seuil que la FAQ
                 _hits = await self.retriever.search(
-                    request.message_text,
+                    _msg_txt,
                     business_id=state.business_id,
                     top_k=FAQ_MAX_DOCS,
                     score_threshold=FAQ_MIN_SCORE,
@@ -1137,7 +1138,7 @@ class ConversationEngine:
             state.pending_intent = None
             # clarification générale
             decision = decide_clarification(
-                message_text=request.message_text,
+                message_text=_msg_txt,
                 intent=intent,
                 confidence=intent_confidence,
                 entities=entities,
@@ -1157,7 +1158,7 @@ class ConversationEngine:
             intent=intent,
             documents=state.retrieved_documents,
             action_result=state.action_result,
-            message=request.message_text,
+            message=_msg_txt,
         )
         # catalogue = pas une lacune
         if (
@@ -1165,7 +1166,7 @@ class ConversationEngine:
             and state.business_catalog
             and (
                 intent in ("pricing", "quote")
-                or _CATALOG_TOPIC_RE.search(request.message_text or "")
+                or _CATALOG_TOPIC_RE.search(_msg_txt)
             )
         ):
             gap = False
@@ -1173,10 +1174,10 @@ class ConversationEngine:
         # pas de lacune si clarification
         if gap and not needs_clarification:
             state.knowledge_gap = True
-            gap_question = clean_question(request.message_text)
+            gap_question = clean_question(_msg_txt)
 
         # faits à mémoriser
-        extracted_facts = extract_customer_facts(request.message_text)
+        extracted_facts = extract_customer_facts(_msg_txt)
 
         # 5. réponse LLM
         state.phase = ConversationPhase.RESPONDING
@@ -1185,7 +1186,7 @@ class ConversationEngine:
         # affine la lacune après génération
         from jenny.engine.intelligence import _retrieval_has_answer
 
-        grounded = _retrieval_has_answer(state.retrieved_documents, request.message_text)
+        grounded = _retrieval_has_answer(state.retrieved_documents, _msg_txt)
         final_gap = refine_knowledge_gap(
             intent=intent,
             response_text=response_text,
@@ -1195,7 +1196,7 @@ class ConversationEngine:
             retrieval_grounded=grounded,
         )
         state.knowledge_gap = final_gap
-        gap_question = clean_question(request.message_text) if final_gap else None
+        gap_question = clean_question(_msg_txt) if final_gap else None
 
         # 6. maj de l'état
         state.suggested_response = response_text
