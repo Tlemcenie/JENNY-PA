@@ -94,7 +94,7 @@ def describe_hours(hours: dict | None) -> tuple[str, list[str], dict[str, tuple[
     ]
     sentence = "Le salon est ouvert " + _join_fr(parts) + "."
     if closed:
-        sentence += f" Il est fermé le {_join_fr(closed)}."
+        sentence += " Il est fermé " + _join_fr([f"le {d}" for d in closed]) + "."
     return sentence, closed, open_days
 
 
@@ -164,7 +164,9 @@ def build_entries(business: dict, prestations: list[dict]) -> list[dict]:
             "horaires-fermeture",
             "Jours de fermeture",
             "horaires",
-            f"Le salon est fermé le {_join_fr(closed)}, ainsi que les jours fériés.",
+            "Le salon est fermé "
+            + _join_fr([f"le {d}" for d in closed])
+            + ", ainsi que les jours fériés.",
         )
     if "samedi" in open_days:
         a, b = open_days["samedi"]
