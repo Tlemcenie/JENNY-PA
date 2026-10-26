@@ -14,12 +14,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from jenny.core.logging import get_logger
 from jenny.rag.embeddings import get_default_embedder
-from jenny.rag.ingestion import DocumentIngester, build_embed_text, embed_header
+from jenny.rag.ingestion import DocumentIngester, build_embed_text, embed_header, reassemble
 from jenny.rag.retriever import embed_query
 from jenny.rag.vector_store import PgVectorStore
 
@@ -29,6 +30,51 @@ if TYPE_CHECKING:
     from jenny.rag.embeddings import BaseEmbedder
 
 logger = get_logger(__name__)
+
+# clés posées par le découpage
+LAYOUT_KEYS = frozenset(
+    {
+        "knowledge_id",
+        "title",
+        "category",
+        "source",
+        "section",
+        "overlap_chars",
+        "sep",
+        "chunk_index",
+    }
+)
+# coupe de l'aperçu (route)
+PREVIEW_CHARS = 200
+_ELLIPSIS = "..."
+# un mot fini à la main
+_PREVIEW_SLACK = 20
+# aperçu retouché, pas réécrit
+_PREVIEW_SIMILARITY = 0.8
+
+
+def restore_preview_tail(new: str, old: str, preview_chars: int = PREVIEW_CHARS) -> str:
+    """Recolle la fin cachée par l'aperçu."""
+    if len(old) <= preview_chars:
+        return new
+    body = new.rstrip()
+    if not body.endswith(_ELLIPSIS):
+        return new
+    body = body[: -len(_ELLIPSIS)]
+    # doit ressembler à l'aperçu
+    if len(body) > preview_chars + _PREVIEW_SLACK:
+        return new
+    seen = old[:preview_chars]
+    if SequenceMatcher(None, seen, body, autojunk=False).ratio() < _PREVIEW_SIMILARITY:
+        return new
+    cut = preview_chars
+    window = old[: preview_chars + _PREVIEW_SLACK]
+    blocks = SequenceMatcher(None, window, body, autojunk=False).get_matching_blocks()
+    last = blocks[-2] if len(blocks) > 1 else None
+    # mot coupé complété à la main
+    if last and last.b + last.size == len(body) and last.a < preview_chars < last.a + last.size:
+        cut = last.a + last.size
+    return body + old[cut:]
 
 
 @dataclass
@@ -114,7 +160,9 @@ class KnowledgeBase:
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings, strict=False)):
             # section / overlap du découpage
             layout = {
-                k: chunk.metadata[k] for k in ("section", "overlap_chars") if k in chunk.metadata
+                k: chunk.metadata[k]
+                for k in ("section", "overlap_chars", "sep")
+                if k in chunk.metadata
             }
             chunk_dicts.append(
                 {
@@ -241,7 +289,7 @@ class KnowledgeBase:
         return entry
 
     async def list_entries(self) -> list[KnowledgeEntry]:
-        """Liste les entrées de la base de connaissances du business."""
+        """Entrées avec leur texte complet."""
         rows = await self.vector_store.list_entries(self.session, self.business_id)
         entries: list[KnowledgeEntry] = []
         for r in rows:
@@ -250,7 +298,8 @@ class KnowledgeBase:
                     id=r["knowledge_id"],
                     business_id=self.business_id,
                     title=r["title"],
-                    content=r["preview"],
+                    # texte entier, pas le 1er fragment
+                    content=r.get("content") or r["preview"],
                     source=r["source"],
                     category=r["category"],
                     chunks_count=r["chunks_count"],
@@ -258,6 +307,23 @@ class KnowledgeBase:
                 )
             )
         return entries
+
+    async def get_entry(self, knowledge_id: str) -> KnowledgeEntry | None:
+        """Une entrée, texte complet."""
+        chunks = await self.vector_store.entry_chunks(self.session, self.business_id, knowledge_id)
+        if not chunks:
+            return None
+        meta = chunks[0][1]
+        return KnowledgeEntry(
+            id=knowledge_id,
+            business_id=self.business_id,
+            title=meta.get("title") or "",
+            content=reassemble(chunks),
+            source=meta.get("source") or "text",
+            category=meta.get("category") or "general",
+            chunks_count=len(chunks),
+            metadata={k: v for k, v in meta.items() if k not in LAYOUT_KEYS},
+        )
 
     async def delete_entry(self, knowledge_id: str) -> bool:
         """Supprime une entrée (tous ses chunks) de la base de connaissances."""
@@ -275,17 +341,43 @@ class KnowledgeBase:
         category: str = "general",
         metadata: dict | None = None,
     ) -> KnowledgeEntry | None:
-        """Met à jour une entrée : remplace ses chunks par le nouveau contenu.
-
-        Conserve le même ``knowledge_id`` (référence stable). Renvoie l'entrée
-        mise à jour, ou ``None`` si l'entrée n'existe pas pour ce business.
-        """
+        """Remplace le texte, même knowledge_id (None si absente)."""
+        self._require_pgvector()
+        current = await self.get_entry(knowledge_id)
+        if current is None:
+            return None
+        # aperçu tronqué renvoyé tel quel
+        fixed = restore_preview_tail(content, current.content)
+        if fixed != content:
+            logger.warning(
+                "knowledge.update.tail_restored",
+                id=knowledge_id[:8],
+                sent=len(content),
+                kept=len(fixed),
+                business_id=self.business_id,
+            )
+            content = fixed
+        # garde kb_key, filename...
+        extra = {**current.metadata, **(metadata or {})}
+        # vectorise avant d'effacer
+        chunk_dicts = await self.prepare_chunks(
+            content,
+            knowledge_id=knowledge_id,
+            title=title,
+            category=category,
+            source="text",
+            extra_metadata=extra,
+        )
         deleted = await self.vector_store.delete_by_knowledge_id(
             self.session, self.business_id, knowledge_id
         )
         if deleted == 0:
             await self.session.rollback()
             return None
+        count = 0
+        if chunk_dicts:
+            count = await self.vector_store.add_chunks(self.session, self.business_id, chunk_dicts)
+        await self.session.commit()
         entry = KnowledgeEntry(
             id=knowledge_id,
             business_id=self.business_id,
@@ -293,15 +385,8 @@ class KnowledgeBase:
             content=content,
             source="text",
             category=category,
-            metadata=metadata or {},
-        )
-        entry.chunks_count = await self._ingest(
-            content,
-            knowledge_id=knowledge_id,
-            title=title,
-            category=category,
-            source="text",
-            extra_metadata=metadata,
+            chunks_count=count,
+            metadata=extra,
         )
         logger.info(
             "knowledge.entry_updated",

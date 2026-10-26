@@ -21,12 +21,11 @@ from sqlalchemy import text
 from jenny.db.session import async_session_factory
 from jenny.rag.embeddings import get_default_embedder
 from jenny.rag.ingestion import build_embed_text, reassemble
+from jenny.rag.knowledge_base import LAYOUT_KEYS as _LAYOUT_KEYS
 from jenny.rag.knowledge_base import KnowledgeBase
 from jenny.rag.vector_store import _vector_literal
 
 BATCH = 32
-# clés posées par le découpage
-_LAYOUT_KEYS = {"knowledge_id", "title", "category", "source", "section", "overlap_chars"}
 
 
 def _meta(raw) -> dict:

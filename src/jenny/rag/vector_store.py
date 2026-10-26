@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from jenny.core.logging import get_logger
 from jenny.rag import rerank as _rr
+from jenny.rag.ingestion import reassemble
 from jenny.rag.lexique import expansions, fold
 
 if TYPE_CHECKING:
@@ -64,6 +65,18 @@ def _parse_meta(meta) -> dict:
         except json.JSONDecodeError:
             meta = {}
     return meta if isinstance(meta, dict) else {}
+
+
+def _with_index(contents, metas, idx) -> list[tuple[str, dict]]:
+    """(texte, meta) avec leur rang."""
+    metas = list(metas or [])
+    idx = list(idx or [])
+    out: list[tuple[str, dict]] = []
+    for pos, content in enumerate(contents):
+        meta = _parse_meta(metas[pos] if pos < len(metas) else None)
+        rank = idx[pos] if pos < len(idx) and idx[pos] is not None else pos
+        out.append((content or "", {**meta, "chunk_index": rank}))
+    return out
 
 
 def build_tsquery(query: str, max_terms: int = 40) -> str:
@@ -314,7 +327,7 @@ class PgVectorStore:
         session: AsyncSession,
         business_id: UUID | str,
     ) -> list[dict]:
-        """entrées groupées par knowledge_id."""
+        """Entrées groupées, texte recollé."""
         result = await session.execute(
             text(
                 """
@@ -323,7 +336,9 @@ class PgVectorStore:
                     max(metadata_->>'title')    AS title,
                     max(metadata_->>'category') AS category,
                     max(metadata_->>'source')   AS source,
-                    (array_agg(content ORDER BY chunk_index))[1] AS preview,
+                    array_agg(content ORDER BY chunk_index, id) AS contents,
+                    array_agg(metadata_::text ORDER BY chunk_index, id) AS metas,
+                    array_agg(chunk_index ORDER BY chunk_index, id) AS idx,
                     count(*)        AS chunks_count,
                     min(created_at) AS created_at
                 FROM document_embeddings
@@ -337,18 +352,47 @@ class PgVectorStore:
         )
         entries: list[dict] = []
         for row in result.fetchall():
+            contents = list(row.contents or [])
+            chunks = _with_index(contents, row.metas, row.idx)
             entries.append(
                 {
                     "knowledge_id": row.knowledge_id,
                     "title": row.title or "",
                     "category": row.category or "general",
                     "source": row.source or "text",
-                    "preview": row.preview or "",
+                    # 1er fragment seul
+                    "preview": (contents[0] if contents else "") or "",
+                    # texte complet à éditer
+                    "content": reassemble(chunks),
                     "chunks_count": int(row.chunks_count),
                     "created_at": row.created_at,
                 }
             )
         return entries
+
+    async def entry_chunks(
+        self,
+        session: AsyncSession,
+        business_id: UUID | str,
+        knowledge_id: str,
+    ) -> list[tuple[str, dict]]:
+        """Fragments d'une entrée, dans l'ordre."""
+        result = await session.execute(
+            text(
+                """
+                SELECT content, metadata_, chunk_index
+                FROM document_embeddings
+                WHERE business_id = :business_id
+                  AND metadata_->>'knowledge_id' = :knowledge_id
+                ORDER BY chunk_index, id
+                """
+            ),
+            {"business_id": str(business_id), "knowledge_id": knowledge_id},
+        )
+        rows = result.fetchall()
+        return _with_index(
+            [r.content for r in rows], [r.metadata_ for r in rows], [r.chunk_index for r in rows]
+        )
 
     async def delete_by_knowledge_id(
         self,
