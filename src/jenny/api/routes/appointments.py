@@ -28,6 +28,7 @@ from jenny.services.availability import (
     StaffPick,
     business_tz,
     find_free_staff,
+    freed_is_bookable,
     load_staff_pool,
     staff_is_busy,
 )
@@ -171,7 +172,9 @@ async def _ensure_room(
         return pick.staff.id if pick.staff else None
     if staff_id is not None and pool.has_staff and pool.get(staff_id) is None:
         # coiffeur en pause : lui seul
-        if await staff_is_busy(db, bid, staff_id, start, end, exclude_appointment_id=exclude_id):
+        if await staff_is_busy(
+            db, bid, staff_id, start, end, exclude_appointment_id=exclude_id, salon_blocks=True
+        ):
             raise HTTPException(409, _OVERLAP)
         return staff_id
     if not (await _pick(staff_id, False, None)).free:
@@ -205,25 +208,45 @@ async def _prestations_for(
     return list(dict.fromkeys(i for i in ids if i is not None))
 
 
-async def _after_free(db: AsyncSession, freed: dict[str, Any]) -> None:
+async def _after_free(db: AsyncSession, freed: dict[str, Any]) -> bool:
     """Place libérée : liste d'attente + relances."""
-    from jenny.services.gap_filler import schedule_after_change
+    from jenny.services import gap_filler
     from jenny.services.waitlist_service import notify_waitlist_for_freed_slot
 
     bid = freed["business_id"]
+    start = _utc(freed["start_at"])
     try:
+        # coiffeur en pause : rien de libre
+        if not await freed_is_bookable(
+            db, bid, start, _utc(freed["end_at"]), staff_id=freed["staff_id"]
+        ):
+            await db.rollback()
+            logger.info("appointment.freed_not_bookable", business_id=str(bid))
+            return False
         tz = business_tz(await db.get(Business, bid))
-        cur = _utc(freed["start_at"]).astimezone(tz)
+        cur = start.astimezone(tz)
         when = f"{_WD[cur.weekday()]} {cur.day:02d}/{cur.month:02d} à {cur.strftime('%Hh%M')}"
+        # créneau exact, perdu au commit
         await notify_waitlist_for_freed_slot(
-            db, business_id=bid, service=freed["service"], when_label=when
+            db,
+            business_id=bid,
+            service=freed["service"],
+            when_label=when,
+            slot_start=start,
+            duration_minutes=freed["minutes"],
+            staff_id=freed["staff_id"],
         )
-        schedule_after_change(db, bid)
         await db.commit()
     except Exception as exc:  # jamais bloquant
         logger.warning("appointment.freed_hook_failed", business_id=str(bid), error=str(exc))
         with contextlib.suppress(Exception):
             await db.rollback()
+    try:
+        # passe agenda, même si raté
+        return await gap_filler.schedule_after_change(db, bid)
+    except Exception as exc:  # jamais bloquant
+        logger.warning("appointment.gap_pass_failed", business_id=str(bid), error=str(exc))
+        return False
 
 
 def _frees_slot(a: Appointment) -> bool:
@@ -235,9 +258,13 @@ def _frees_slot(a: Appointment) -> bool:
 
 def _snapshot(a: Appointment) -> dict[str, Any]:
     """Ce qu'il faut garder avant écriture."""
+    start, end = _utc(a.start_at), _utc(a.end_at)
     return {
         "business_id": a.business_id,
-        "start_at": a.start_at,
+        "start_at": start,
+        "end_at": end,
+        "minutes": max(5, int((end - start).total_seconds() // 60)),
+        "staff_id": a.staff_id,
         # créneau bloqué : sans prestation
         "service": None if a.status == "blocked" else a.title,
     }
@@ -400,8 +427,10 @@ async def update_appointment(
         await _ensure_room(
             db, appt.business_id, new_start, new_end, staff_id=new_staff, exclude_id=appt.id
         )
-    # annulation : place libérée
-    freed = _snapshot(appt) if new_status == "cancelled" and _frees_slot(appt) else None
+    # annulé ou déplacé : place libre
+    away = new_end <= _utc(appt.start_at) or new_start >= _utc(appt.end_at)
+    frees = new_status == "cancelled" or (away and new_status not in ("completed", "no_show"))
+    freed = _snapshot(appt) if frees and _frees_slot(appt) else None
     for f in ("title", "description", "location", "status", "start_at", "end_at", "staff_notes"):
         if f in data and data[f] is not None:
             setattr(appt, f, data[f])

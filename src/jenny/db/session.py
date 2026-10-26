@@ -1,9 +1,17 @@
 """Gestion des sessions et du moteur async SQLAlchemy.
 
 Deux pools sur Postgres : ``request_engine`` pour les routes (``get_db``),
-``engine`` pour le reste (handlers, RAG, webhooks, tâches). Une session de
-route peut ainsi garder sa connexion pendant l'appel LLM sans affamer les
-sessions imbriquées. Tailles et budget : voir docs/db_pool.md.
+``engine`` pour le reste (handlers, RAG, webhooks, tâches). Un seul pool
+partagé peut se bloquer : une session de route vit jusqu'à la fin des
+tâches de fond (webhooks WhatsApp/Insta, LLM compris) pendant que ces
+tâches ouvrent leurs propres sessions.
+
+Budget : ``JENNY_DB_MAX_CONNECTIONS`` (défaut 16) par process, partagé
+entre les deux pools (4 + 4 chacun). Total en base = instances x
+workers uvicorn x budget + worker arq (8). Prod démo (1 instance,
+1 worker) : 16. Avec Redis (2 workers) : 2 x 16 + 8 = 40, sous les 47
+de db-g1-small. Plus d'instances : baisser le budget ou passer par
+``JENNY_DB_POOLER=transaction``. Voir docs/db_pool.md.
 """
 
 from collections.abc import AsyncIterator
@@ -25,9 +33,11 @@ settings = get_settings()
 
 _TRUE = {"1", "true", "yes", "on"}
 
-# défauts pour 1 process API
-POOL_SIZE = 10
-MAX_OVERFLOW = 10
+# budget par process, 2 pools
+MAX_CONNECTIONS = 16
+# défauts d'un pool (16 / 2)
+POOL_SIZE = 4
+MAX_OVERFLOW = 4
 POOL_TIMEOUT_S = 10
 POOL_RECYCLE_S = 1800
 
@@ -46,6 +56,7 @@ class _PoolSettings(BaseSettings):
     # texte brut, lu avec tolérance
     sql_echo: str = ""
     db_pooler: str = ""
+    db_max_connections: str = ""
     db_pool_size: str = ""
     db_max_overflow: str = ""
 
@@ -61,6 +72,15 @@ def _as_int(raw: str, default: int, low: int) -> int:
         return max(low, int(raw))
     except ValueError:
         return default
+
+
+def pool_budget(raw: str = "") -> tuple[int, int]:
+    """(taille, débord) d'un pool."""
+    total = _as_int(raw, MAX_CONNECTIONS, 2)
+    # moitié par pool
+    per_pool = total // 2
+    size = (per_pool + 1) // 2
+    return size, per_pool - size
 
 
 def _pg_stmt_name() -> str:
@@ -86,9 +106,11 @@ def engine_options(url: str) -> dict[str, Any]:
             "prepared_statement_name_func": _pg_stmt_name,
         }
         return opts
+    size, overflow = pool_budget(conf.db_max_connections)
     opts.update(
-        pool_size=_as_int(conf.db_pool_size, POOL_SIZE, 1),
-        max_overflow=_as_int(conf.db_max_overflow, MAX_OVERFLOW, 0),
+        # réglage fin par pool
+        pool_size=_as_int(conf.db_pool_size, size, 1),
+        max_overflow=_as_int(conf.db_max_overflow, overflow, 0),
         pool_recycle=POOL_RECYCLE_S,
         pool_timeout=POOL_TIMEOUT_S,
         pool_pre_ping=True,

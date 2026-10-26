@@ -48,6 +48,16 @@ _DEFAULT_HOURS: dict[str, list[str] | None] = {
 
 # pas de la grille multi-coiffeurs
 SLOT_STEP_MIN = 15
+# prestation longue : 12 h max
+MAX_SERVICE_MINUTES = 720
+
+
+def service_minutes(minutes: int | None, fallback: int = 30) -> int:
+    """Durée réelle, jamais nulle."""
+    value = int(minutes or 0)
+    if value <= 0:
+        value = fallback
+    return max(value, SLOT_STEP_MIN)
 
 
 def business_tz(business: Business | None) -> ZoneInfo:
@@ -175,22 +185,34 @@ def match_staff(pool: StaffPool, text: str | None) -> Staff | None:
     return None
 
 
-def staff_in_text(pool: StaffPool, text: str | None) -> Staff | None:
-    """Coiffeur cité dans une phrase."""
+def staff_named(members: Iterable[Staff], text: str | None) -> list[Staff]:
+    """Tous les coiffeurs cités."""
     words = re.findall(r"[a-z0-9]+", _norm(text or ""))
     if not words:
-        return None
+        return []
     joined = f" {' '.join(words)} "
+    members = list(members)
     # nom complet d'abord, puis prénom
     for full in (True, False):
-        for m in pool.members:
+        found: list[tuple[int, Staff]] = []
+        for m in members:
             parts = re.findall(r"[a-z0-9]+", _norm(m.display_name))
             if not parts:
                 continue
             key = " ".join(parts) if full else parts[0]
             if f" {key} " in joined:
-                return m
-    return None
+                found.append((len(parts) if full else 1, m))
+        if found:
+            # « léa martin » avant « léa »
+            best = max(n for n, _ in found)
+            return [m for n, m in found if n == best]
+    return []
+
+
+def staff_in_text(pool: StaffPool, text: str | None) -> Staff | None:
+    """Coiffeur cité dans une phrase."""
+    found = staff_named(pool.members, text)
+    return found[0] if found else None
 
 
 def _window(
@@ -593,6 +615,25 @@ async def find_free_staff(
     return StaffPick(free=True, staff=chosen, has_staff=True)
 
 
+async def freed_is_bookable(
+    db: AsyncSession,
+    business_id: UUID,
+    start: datetime,
+    end: datetime,
+    *,
+    staff_id: UUID | None = None,
+    pool: StaffPool | None = None,
+) -> bool:
+    """La place libérée resservira-t-elle ?"""
+    if pool is None:
+        pool = await load_staff_pool(db, business_id)
+    if staff_id is not None and pool.has_staff and pool.get(staff_id) is None:
+        # coiffeur en pause : rien de libre
+        return False
+    pick = await find_free_staff(db, business_id, start, end, pool=pool, check_hours=False)
+    return pick.free
+
+
 async def staff_is_busy(
     db: AsyncSession,
     business_id: UUID,
@@ -601,11 +642,20 @@ async def staff_is_busy(
     end: datetime,
     *,
     exclude_appointment_id: UUID | None = None,
+    salon_blocks: bool = False,
 ) -> bool:
     """Ce coiffeur a déjà un RDV ?"""
     start, end = _aware(start), _aware(end)
     booked = await _load_booked(db, business_id, start, end, exclude_id=exclude_appointment_id)
-    return any(sid == staff_id and start < be and end > bs for bs, be, sid, _ in booked)
+    for bs, be, sid, status in booked:
+        if not (start < be and end > bs):
+            continue
+        if sid == staff_id:
+            return True
+        # blocage de tout le salon
+        if salon_blocks and sid is None and status == "blocked":
+            return True
+    return False
 
 
 def format_slots_fr(slots: list[datetime], tz: ZoneInfo, *, with_day: bool = False) -> str:

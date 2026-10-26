@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.pool import NullPool
 
 from jenny.core.config import Settings
-from jenny.db.session import engine_options
+from jenny.db.session import POOL_SIZE, engine_options
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -54,7 +54,7 @@ def test_real_env_wins(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def test_bad_values_fall_back(env_file: Path) -> None:
     env_file.write_text("JENNY_DB_POOL_SIZE=beaucoup\nJENNY_DB_MAX_OVERFLOW=-3\n", encoding="utf-8")
     opts = engine_options(PG)
-    assert opts["pool_size"] == 10 and opts["max_overflow"] == 0
+    assert opts["pool_size"] == POOL_SIZE and opts["max_overflow"] == 0
 
 
 def test_no_env_file_in_tests() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -14,8 +15,15 @@ from jenny.db.conflicts import is_slot_taken
 from jenny.domain.models.appointment import Appointment
 from jenny.domain.models.business import Business
 from jenny.domain.models.customer import Customer
+from jenny.domain.models.staff import Staff
 from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
-from jenny.services.availability import load_staff_pool, staff_in_text, staff_is_busy
+from jenny.services.availability import (
+    find_free_staff,
+    load_staff_pool,
+    staff_in_text,
+    staff_is_busy,
+    staff_named,
+)
 
 # extraction du nom client
 _CLIENT_NAME_RE = re.compile(
@@ -27,6 +35,8 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from jenny.services.availability import StaffPool
 
 logger = get_logger(__name__)
 
@@ -208,6 +218,131 @@ async def _handle_report(db: AsyncSession, bid: UUID) -> dict:
 
 # bloquer un créneau
 
+# blocage salon demandé
+_SALON_RE = re.compile(
+    r"\b(tout\s+le\s+salon|(?:bloqu|ferm)\w*\s+(?:tout\s+)?le\s+salon"
+    r"|salon\s+(?:est\s+|sera\s+)?ferm|tout\s+le\s+monde"
+    r"|toute\s+l['’]?\s*[ée]quipe|fermeture)",  # noqa: RUF001
+    re.I,
+)
+# prénom, pas « Peux-tu »
+_NAME = r"[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:-[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+)?(?![\w-])"
+# là où on cite quelqu'un
+_NAME_SPOT_RE = re.compile(
+    rf"(?i:\bbloqu\w*(?:-(?:moi|nous|le|la|les))?\s+|\bpour\s+|\bde\s+|\bd['’]\s*)"  # noqa: RUF001
+    rf"(?P<a>{_NAME})"
+    rf"|(?<![\w-])(?P<b>{_NAME})\s+(?i:est\b|sera\b|ne\b|n['’]|absente?\b|malade\b"  # noqa: RUF001
+    r"|indispo|off\b|pas\s+l[àa]\b|en\s+(?:cong|vacances|repos|formation|arr[êe]t|pause))"
+)
+
+
+def _word_set(text: str) -> frozenset[str]:
+    """Liste de mots -> ensemble."""
+    return frozenset(text.split())
+
+
+# majuscules, pas des prénoms
+_NOT_NAMES = _word_set(
+    "bloque bloquer bloques bloquez bloquee indisponible indispo dispo disponible"
+    " pas je tu il elle on nous vous ils elles le la les un une des du de ce cet"
+    " cette ces mon ma mes ton ta tes son sa ses notre nos votre vos leur et ou"
+    " mais donc car que qui quand pour par sur avec sans chez dans en au aux a"
+    " ferme fermee fermer fermeture conge conges vacances reserve reserver"
+    " merci stp svp bonjour bonsoir salut coucou hello hey ok oui non jenny"
+    " salon equipe tout toute tous toutes demain aujourd apres avant matin midi"
+    " soir soiree aprem journee semaine mois prochain prochaine lundi mardi"
+    " mercredi jeudi vendredi samedi dimanche janvier fevrier mars avril mai"
+    " juin juillet aout septembre octobre novembre decembre noel paques ferie"
+    " mets met mettre note peux peut veux voudrais est sera suis ne plus rien"
+    " jamais absent absente malade rdv rendez stop urgent attention mme mr"
+    " madame monsieur mlle moi toi lui ca cela ceci personne aucun aucune entre"
+    " juste aussi encore seulement vite direct deux trois quatre cinq formation"
+    " reunion medecin dentiste dejeuner pause perso raison raisons cause travaux"
+    " inventaire livraison"
+)
+
+
+def _plain(text: str) -> str:
+    """Minuscules sans accents."""
+    t = unicodedata.normalize("NFKD", (text or "").lower())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def _name_guess(message: str) -> str | None:
+    """Un prénom qu'on ne connaît pas ?"""
+    for m in _NAME_SPOT_RE.finditer(message or ""):
+        word = m.group("a") or m.group("b")
+        if _plain(word) not in _NOT_NAMES:
+            return str(word)
+    return None
+
+
+def _names(members: list[Staff]) -> str:
+    """« Léa, Marc et Zoé »."""
+    names = [m.display_name for m in members]
+    if len(names) < 2:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " et " + names[-1]
+
+
+async def _whole_team(db: AsyncSession, bid: UUID) -> list[Staff]:
+    """Coiffeurs, en pause compris."""
+    return list(
+        (
+            await db.execute(
+                select(Staff)
+                .where(Staff.business_id == bid)
+                .order_by(Staff.created_at.asc(), Staff.display_name.asc())
+            )
+        ).scalars().all()
+    )
+
+
+def _unclear_staff(pool: StaffPool, team: list[Staff], message: str) -> dict | None:
+    """Coiffeur flou : on demande."""
+    named = staff_named(team, message)
+    firsts = {re.findall(r"[a-z0-9]+", _plain(m.display_name))[0] for m in named}
+    if len(named) > 1 and len(firsts) == 1:
+        # même prénom : lequel ?
+        return {
+            "response": f"Tu parles de qui : {' ou '.join(m.display_name for m in named)} ? "
+            "Redis-moi avec le nom complet et je bloque.",
+            "action": "block_slot",
+            "data": {"ambiguous": True},
+        }
+    if len(named) > 1:
+        # plusieurs : un par un
+        return {
+            "response": f"Je bloque une personne à la fois : redis-le pour "
+            f"{' puis pour '.join(m.display_name for m in named)}.",
+            "action": "block_slot",
+            "data": {"several": True},
+        }
+    if named:
+        m = named[0]
+        if pool.get(m.id) is not None:
+            return None
+        # en pause : rien à bloquer
+        return {
+            "response": f"{m.display_name} est en pause dans l'équipe : je ne propose déjà "
+            f"aucun créneau avec {m.display_name}, donc je ne bloque rien. "
+            f"Si {m.display_name} revient, réactive son profil dans Équipe puis redis-moi.",
+            "action": "block_slot",
+            "data": {"paused": True, "staff_id": str(m.id)},
+        }
+    if not team or _SALON_RE.search(message or ""):
+        return None
+    guess = _name_guess(message)
+    if guess is None:
+        return None
+    actifs = _names(pool.members) or "aucun coiffeur actif"
+    return {
+        "response": f"Je ne trouve pas « {guess} » dans ton équipe ({actifs}). "
+        "Dis-moi qui bloquer, ou « bloque tout le salon » si c'est pour tout le monde.",
+        "action": "block_slot",
+        "data": {"unknown_staff": guess},
+    }
+
 
 async def _handle_block(db: AsyncSession, bid: UUID, actor: str, message: str) -> dict:
     business = await db.get(Business, bid)
@@ -243,12 +378,31 @@ async def _handle_block(db: AsyncSession, bid: UUID, actor: str, message: str) -
 
     # coiffeur nommé : lui seul
     pool = await load_staff_pool(db, bid)
+    team = await _whole_team(db, bid)
+    unclear = _unclear_staff(pool, team, message)
+    if unclear is not None:
+        return unclear
     member = staff_in_text(pool, message) if pool.has_staff else None
-    if member is not None and await staff_is_busy(db, bid, member.id, start_utc, end_utc):
+    if member is not None and await staff_is_busy(
+        db, bid, member.id, start_utc, end_utc, salon_blocks=True
+    ):
         return {
             "response": f"{member.display_name} a déjà un rendez-vous (ou un blocage) le "
             f"{day_label} {label}. "
             "Déplace-le ou annule-le d'abord, puis je bloque le créneau.",
+            "action": "block_slot",
+            "data": {"conflict": True, "staff_id": str(member.id)},
+        }
+    if member is not None and not (
+        await find_free_staff(
+            db, bid, start_utc, end_utc, staff_id=member.id, pool=pool, check_hours=False
+        )
+    ).free:
+        # RDV sans coiffeur : sa place
+        return {
+            "response": f"Si je bloque {member.display_name} le {day_label} {label}, un "
+            "rendez-vous sans coiffeur n'aurait plus personne. "
+            "Attribue-le à quelqu'un d'abord, puis je bloque.",
             "action": "block_slot",
             "data": {"conflict": True, "staff_id": str(member.id)},
         }
@@ -288,6 +442,15 @@ async def _handle_block(db: AsyncSession, bid: UUID, actor: str, message: str) -
             "les autres coiffeurs restent réservables.",
             "action": "block_slot",
             "data": {"appointment_id": str(appt.id), "staff_id": str(member.id)},
+        }
+    if pool.has_staff:
+        # tout le salon : on le dit
+        return {
+            "response": f"C'est bloqué ✅ — le {day_label} {label}, tout le salon est "
+            f"indisponible ({_names(pool.members)} compris). "
+            "Je ne proposerai ce créneau à personne.",
+            "action": "block_slot",
+            "data": {"appointment_id": str(appt.id), "salon": True},
         }
     return {
         "response": f"C'est bloqué ✅ — le {day_label} {label}, tu n'es pas disponible. "
@@ -527,7 +690,7 @@ async def _handle_cancel(db: AsyncSession, bid: UUID, message: str) -> dict:
     from jenny.services.waitlist_service import notify_waitlist_for_freed_slot
 
     notified = await notify_waitlist_for_freed_slot(
-        db, business_id=bid, service=appt.title, when_label=when
+        db, business_id=bid, service=appt.title, when_label=when, staff_id=appt.staff_id
     )
     await db.commit()
     extra = (
@@ -593,14 +756,19 @@ async def _handle_move(db: AsyncSession, bid: UUID, message: str) -> dict:
     hh = new_time.hour if new_time else cur.hour
     mm = new_time.minute if new_time else cur.minute
     new_local = datetime(day.year, day.month, day.day, hh, mm, tzinfo=tz)
+    old_start = appt.start_at if appt.start_at.tzinfo else appt.start_at.replace(tzinfo=UTC)
     appt.start_at = new_local.astimezone(UTC)
     appt.end_at = appt.start_at + duration
+    # ancien créneau vraiment quitté ?
+    away = appt.end_at <= old_start or appt.start_at >= old_start + duration
     # prévient la liste d'attente
     from jenny.services.waitlist_service import notify_waitlist_for_freed_slot
 
-    notified = await notify_waitlist_for_freed_slot(
-        db, business_id=bid, service=appt.title, when_label=old_when
-    )
+    notified = None
+    if away:
+        notified = await notify_waitlist_for_freed_slot(
+            db, business_id=bid, service=appt.title, when_label=old_when, staff_id=appt.staff_id
+        )
     await db.commit()
     when = new_local.strftime("%d/%m à %Hh%M")
     extra = (

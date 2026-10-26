@@ -6,8 +6,12 @@ Un client qui répond STOP ne reçoit plus rien de commercial.
 
 Règle STOP : tous les mots du message doivent venir du vocabulaire
 STOP (mot d'arrêt, « ne ... plus recevoir », « plus de pub »,
-politesse). Un autre mot, ou un « pas » qui nie, et c'est ambigu :
-on laisse la conversation répondre.
+politesse). Un autre mot, ou un « pas » qui nie le STOP lui-même
+(« n'arrêtez pas »), et c'est ambigu : on laisse la conversation
+répondre. « Stop, pas de pub » reste un STOP. Une plainte (« vous ne
+m'envoyez jamais d'offres »), une question (« pas de promo ? ») ou
+une envie d'en recevoir (« je veux recevoir les offres ») ne
+désinscrit pas.
 """
 
 from __future__ import annotations
@@ -152,7 +156,7 @@ def _words(text: str) -> frozenset[str]:
 
 # mots qui veulent dire STOP
 _STOP_WORDS = _words(
-    "stop stopp stoppez arret arrete arreter arretez desinscription desinscrire"
+    "stop stopp stopper stoppez arret arrete arreter arretez desinscription desinscrire"
     " desinscris desinscrivez desinscrit desinscrite desabonner desabonnez"
     " desabonnement desabonne unsubscribe optout"
 )
@@ -174,6 +178,28 @@ _STOP_FILLERS = _words(
 )
 _STOP_ALLOWED = _STOP_WORDS | _STOP_VERBS | _STOP_TARGETS | _STOP_FILLERS
 _MAX_STOP_WORDS = 14
+# verbes d'arrêt conjugués
+_STOP_ACTIONS = _words(
+    "arrete arreter arretez stopper stoppez desinscrire desinscris desinscrivez"
+    " desabonne desabonner desabonnez"
+)
+# négations franches
+_NEG = _words("pas jamais")
+# toutes les négations
+_NOT = _NEG | _words("plus rien")
+# petits mots entre deux
+_GLUE = _words("de d des du me m moi vous nous les le la l vos votre")
+# verbes d'envoi, infinitif
+_SEND_INF = _words("recevoir envoyer contacter ecrire")
+# « je ne veux pas recevoir »
+_MODALS = _words("veux voudrais souhaite")
+# entre « de » et la cible
+_DETS = _words("vos votre ces ce cette les la le l")
+# devant « pas de pub »
+_POLITE = _words(
+    "non oui ok bon merci svp stp svpl please pls beaucoup bcp bonjour bonsoir"
+    " hello salut coucou et maintenant definitivement"
+)
 
 STOP_ACK = (
     "C'est noté, vous ne recevrez plus d'offres de notre part. "
@@ -181,15 +207,122 @@ STOP_ACK = (
 )
 
 
+def _plain(text: str) -> str:
+    """Minuscules, sans accents."""
+    t = unicodedata.normalize("NFKD", text.lower())
+    return "".join(ch for ch in t if not unicodedata.combining(ch))
+
+
 def _stop_tokens(text: str) -> list[str]:
     """Minuscules, sans accents, mots seuls."""
-    t = unicodedata.normalize("NFKD", text.lower())
-    t = "".join(ch for ch in t if not unicodedata.combining(ch))
-    return re.findall(r"[a-z0-9]+", t)
+    return re.findall(r"[a-z0-9]+", _plain(text))
+
+
+def _stop_clauses(text: str) -> list[tuple[list[str], bool]]:
+    """Mots par morceau, et si question."""
+    out = []
+    for m in re.finditer(r"([^,.;:!?\n]+)([,.;:!?\n]*)", _plain(text)):
+        words = re.findall(r"[a-z0-9]+", m.group(1))
+        if words:
+            out.append((words, "?" in m.group(2)))
+    return out
+
+
+def _denies_stop(words: list[str], i: int) -> bool:
+    """Ce « pas » nie-t-il le STOP ?"""
+    prev = words[i - 1] if i else ""
+    if prev in _STOP_ACTIONS:
+        # « n'arrêtez pas »
+        return True
+    j = i + 1
+    while j < len(words) and words[j] in _GLUE:
+        j += 1
+    nxt = words[j] if j < len(words) else ""
+    if nxt in _STOP_WORDS:
+        # « pas arrêter », « pas me désinscrire »
+        return True
+    # « stop pas » tout seul
+    return prev in _STOP_WORDS and nxt not in _STOP_TARGETS | _STOP_VERBS
+
+
+def _after_stop(words: list[str], i: int) -> bool:
+    """« arrêtez de m'envoyer »."""
+    j = i - 1
+    while j >= 0 and words[j] in _GLUE:
+        j -= 1
+    return j >= 0 and words[j] in _STOP_WORDS
+
+
+def _no_before(words: list[str], i: int) -> bool:
+    """« ne pas recevoir », « je veux plus recevoir »."""
+    j = i - 1
+    while j >= 0 and words[j] in _GLUE:
+        j -= 1
+    if j < 0 or words[j] not in _NOT:
+        return False
+    while j >= 0 and words[j] in _NOT:
+        j -= 1
+    # pas « vous ne pouvez pas »
+    return j < 0 or words[j] in {"ne", "n"} | _MODALS
+
+
+def _verb_stop(words: list[str], i: int, question: bool) -> bool | None:
+    """Ce verbe : refus, envie, ou flou."""
+    if _after_stop(words, i):
+        return True
+    if words[i] in _SEND_INF:
+        if _no_before(words, i):
+            return True
+        # « vous ne pouvez pas m'envoyer »
+        return None if set(words[:i]) & _NOT else False
+    j = i - 1
+    while j >= 0 and words[j] in {"me", "m", "nous", "en", "y", "les", "le", "la", "l"}:
+        j -= 1
+    after = set(words[i + 1 :]) & _NOT
+    if j >= 0 and words[j] in {"ne", "n"}:
+        if not after:
+            return None
+        if j and words[j - 1] == "vous":
+            # « vous ne m'envoyez jamais » : plainte
+            return True if "plus" in after and not after & _NEG and not question else None
+        # « ne m'envoyez plus »
+        return True
+    if (j >= 0 and words[j] == "vous") or j < i - 1 or after & _NEG:
+        # « vous m'envoyez », « m'envoyez plus »
+        return None
+    # « envoyez-moi des offres »
+    return False
+
+
+def _clause_stop(words: list[str], question: bool) -> bool | None:
+    """Refus, envie, ou rien."""
+    verbs = [i for i, w in enumerate(words) if w in _STOP_VERBS]
+    if verbs:
+        said = [_verb_stop(words, i, question) for i in verbs]
+        if False in said:
+            return False
+        return True if all(said) else None
+    for i, w in enumerate(words):
+        if w not in _NEG and w != "plus":
+            continue
+        if i and words[i - 1] not in _MODALS | _POLITE:
+            # « il n'y a pas d'offres »
+            continue
+        j = i + 1
+        while j < len(words) and words[j] in _NOT:
+            j += 1
+        if j < len(words) and words[j] in {"de", "d", "des", "du"}:
+            j += 1
+            while j < len(words) and words[j] in _DETS:
+                j += 1
+            if j < len(words) and words[j] in _STOP_TARGETS:
+                # « pas de pub ? » : question
+                return None if question else True
+    return None
 
 
 def is_stop_reply(text: str | None) -> bool:
-    """STOP seul ou poli ; sinon ambigu."""
+    """STOP seul ou poli ; la négation doit viser le STOP."""
     if not text:
         return False
     words = _stop_tokens(text)
@@ -198,15 +331,17 @@ def is_stop_reply(text: str | None) -> bool:
     if any(w not in _STOP_ALLOWED for w in words):
         # « stop je voulais dire jeudi »
         return False
-    has = set(words)
-    if has & _STOP_WORDS:
-        # « n'arrêtez pas » : non
-        return "pas" not in has
-    if has & _STOP_VERBS:
-        # « ne m'envoyez plus » oui
-        return "plus" in has and bool(has & {"ne", "n"}) and "pas" not in has
-    # « plus de pub », « pas de sms »
-    return bool(has & _STOP_TARGETS) and bool(has & {"plus", "pas"})
+    clauses = _stop_clauses(text)
+    for clause, _q in clauses:
+        if " pas du tout " in f" {' '.join(clause)} ":
+            return False
+        if any(w in _NEG and _denies_stop(clause, i) for i, w in enumerate(clause)):
+            return False
+    said = [_clause_stop(c, q) for c, q in clauses]
+    if False in said:
+        # « je veux recevoir les offres »
+        return False
+    return bool(set(words) & _STOP_WORDS) or True in said
 
 
 def set_opt_out(customer: Customer, opt_out: bool, now: datetime | None = None) -> None:

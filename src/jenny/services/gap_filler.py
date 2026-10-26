@@ -33,7 +33,12 @@ from jenny.domain.models.business import Business
 from jenny.domain.models.campaign import SlotOffer
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.waitlist_entry import WaitlistEntry
-from jenny.services.availability import business_tz, free_slots_for_day
+from jenny.services.availability import (
+    MAX_SERVICE_MINUTES,
+    business_tz,
+    free_slots_for_day,
+    service_minutes,
+)
 from jenny.services.campaigns import (
     NO_SHOW_MIN,
     NOT_BOOKING,
@@ -273,7 +278,10 @@ def _duration_for(service: str | None, prestations: list) -> int:
     from jenny.services.prestation_service import find_prestation
 
     p = find_prestation(prestations, service or "") if service and prestations else None
-    return max(15, min(240, int(p.duration_minutes))) if p is not None else 30
+    if p is None:
+        return 30
+    # vraie durée, bornée
+    return min(MAX_SERVICE_MINUTES, service_minutes(p.duration_minutes))
 
 
 async def waitlist_candidates(
@@ -408,7 +416,7 @@ async def rebook_candidates(
         duration = 30
         if appt is not None:
             mins = int((_aware(appt.end_at) - _aware(appt.start_at)).total_seconds() // 60)
-            duration = max(15, min(240, mins))
+            duration = min(MAX_SERVICE_MINUTES, service_minutes(mins))
         title = appt.title if appt is not None else None
         out.append(
             Candidate(
