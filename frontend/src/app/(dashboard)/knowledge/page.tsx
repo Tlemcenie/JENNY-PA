@@ -39,6 +39,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useFocusTrap } from "@/lib/use-focus-trap";
 
 const categories = ["general", "horaires", "tarifs", "faq", "politique", "services", "equipe"];
 
@@ -94,6 +95,9 @@ export default function KnowledgePage() {
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   // ouvre le sélecteur de fichiers
   const filesInputRef = useRef<HTMLInputElement | null>(null);
+  // focus gardé dans la modale
+  const addFormRef = useRef<HTMLDivElement | null>(null);
+  useFocusTrap(showAddForm, addFormRef);
 
   const fetchData = useCallback(async () => {
     if (!businessId) return;
@@ -134,15 +138,22 @@ export default function KnowledgePage() {
     setShowAddForm(true);
     // nettoie l'url
     window.history.replaceState({}, "", "/knowledge");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ferme le menu au clic
   useEffect(() => {
     if (!menuOpenId) return;
     const close = () => setMenuOpenId(null);
+    // échap ferme aussi
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
     window.addEventListener("click", close);
-    return () => window.removeEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [menuOpenId]);
 
   const resetForm = () => {
@@ -418,6 +429,7 @@ export default function KnowledgePage() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Rechercher dans la base de connaissances (recherche sémantique)…"
+          aria-label="Rechercher dans la base de connaissances"
           style={{
             width: "100%",
             height: 44,
@@ -636,10 +648,21 @@ export default function KnowledgePage() {
             onClick={(e) => e.target === e.currentTarget && resetForm()}
           >
             <motion.div
+              ref={addFormRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="kb-form-title"
+              tabIndex={-1}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  resetForm();
+                }
+              }}
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-lg"
+              className="w-full max-w-lg max-h-[90vh] overflow-y-auto outline-none"
               style={{
                 background: "var(--surface)",
                 borderRadius: 18,
@@ -649,7 +672,7 @@ export default function KnowledgePage() {
               }}
             >
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-                <h3 style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", margin: 0 }}>
+                <h3 id="kb-form-title" style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", margin: 0 }}>
                   {editingId ? "Modifier l'entrée" : "Nouvelle source"}
                 </h3>
                 <button
@@ -674,6 +697,7 @@ export default function KnowledgePage() {
                       key={mode}
                       type="button"
                       onClick={() => setFormMode(mode)}
+                      aria-pressed={formMode === mode}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -685,7 +709,7 @@ export default function KnowledgePage() {
                         fontFamily: "var(--font-sans)",
                         cursor: "pointer",
                         border: "1px solid transparent",
-                        background: formMode === mode ? "var(--coral)" : "var(--bg-tint)",
+                        background: formMode === mode ? "var(--coral)" : "color-mix(in srgb, var(--text) 7%, var(--surface))",
                         color: formMode === mode ? "#fff" : "var(--text-2)",
                       }}
                     >
@@ -708,8 +732,9 @@ export default function KnowledgePage() {
                 )}
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-sm font-medium text-jenny-text">Catégorie</label>
+                  <label htmlFor="kb-category" className="text-sm font-medium text-jenny-text">Catégorie</label>
                   <select
+                    id="kb-category"
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
                     className="h-11 px-4 rounded-xl bg-jenny-surface border border-jenny-divider text-sm text-jenny-text focus:outline-none focus:ring-2 focus:ring-jenny-coral/30 focus:border-jenny-coral"
@@ -722,8 +747,9 @@ export default function KnowledgePage() {
 
                 {formMode === "text" ? (
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-medium text-jenny-text">Contenu</label>
+                    <label htmlFor="kb-content" className="text-sm font-medium text-jenny-text">Contenu</label>
                     <textarea
+                      id="kb-content"
                       value={content}
                       onChange={(e) => setContent(e.target.value)}
                       placeholder="Le contenu que Jenny pourra utiliser..."
@@ -734,13 +760,13 @@ export default function KnowledgePage() {
                   </div>
                 ) : formMode === "pdf" ? (
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-medium text-jenny-text">Fichier PDF</label>
-                    <div className="border-2 border-dashed border-jenny-divider rounded-xl p-6 text-center hover:border-jenny-coral/30 transition-colors">
+                    <label htmlFor="pdf-upload" className="text-sm font-medium text-jenny-text">Fichier PDF</label>
+                    <div className="relative border-2 border-dashed border-jenny-divider rounded-xl p-6 text-center hover:border-jenny-coral/30 focus-within:border-jenny-coral focus-within:ring-2 focus-within:ring-jenny-coral/30 transition-colors">
                       <input
                         type="file"
                         accept=".pdf"
                         onChange={(e) => setFile(e.target.files?.[0] || null)}
-                        className="hidden"
+                        className="sr-only"
                         id="pdf-upload"
                       />
                       <label htmlFor="pdf-upload" className="cursor-pointer">
@@ -753,16 +779,16 @@ export default function KnowledgePage() {
                   </div>
                 ) : (
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-medium text-jenny-text">
+                    <label htmlFor="files-upload" className="text-sm font-medium text-jenny-text">
                       Fichiers (PDF, .txt, .md)
                     </label>
-                    <div className="border-2 border-dashed border-jenny-divider rounded-xl p-6 text-center hover:border-jenny-coral/30 transition-colors">
+                    <div className="relative border-2 border-dashed border-jenny-divider rounded-xl p-6 text-center hover:border-jenny-coral/30 focus-within:border-jenny-coral focus-within:ring-2 focus-within:ring-jenny-coral/30 transition-colors">
                       <input
                         type="file"
                         accept=".pdf,.txt,.md"
                         multiple
                         onChange={(e) => setFiles(Array.from(e.target.files || []))}
-                        className="hidden"
+                        className="sr-only"
                         id="files-upload"
                       />
                       <label htmlFor="files-upload" className="cursor-pointer">
@@ -787,14 +813,14 @@ export default function KnowledgePage() {
                 )}
 
                 {formError && (
-                  <div className="p-3 rounded-xl bg-jenny-error/10 text-jenny-error text-sm flex items-center gap-2">
+                  <div role="alert" className="p-3 rounded-xl bg-jenny-error/10 text-jenny-error text-sm flex items-center gap-2">
                     <AlertCircle className="w-4 h-4 flex-shrink-0" />
                     {formError}
                   </div>
                 )}
 
                 <div className="flex gap-3 justify-end pt-2">
-                  <Button variant="secondary" type="button" onClick={resetForm}>
+                  <Button variant="ghost" type="button" onClick={resetForm} className="border border-jenny-divider">
                     Annuler
                   </Button>
                   <Button type="submit" isLoading={isSaving}>
@@ -954,7 +980,9 @@ export default function KnowledgePage() {
                     ) : (
                       <button
                         type="button"
-                        aria-label="Actions"
+                        aria-label={`Actions pour ${entry.title || "cette source"}`}
+                        aria-haspopup="menu"
+                        aria-expanded={menuOpenId === entry.id}
                         onClick={(e) => {
                           e.stopPropagation();
                           setMenuOpenId((cur) => (cur === entry.id ? null : entry.id));

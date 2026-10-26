@@ -22,7 +22,7 @@ const NIGHT_BG =
 
 // Classes partagées par les champs — strictement identiques à l'écran login.
 const FIELD_CLASS =
-  "w-full h-12 px-4 rounded-[11px] bg-white border border-jenny-divider text-[14.5px] text-jenny-text placeholder:text-jenny-text-secondary/50 outline-none transition-all duration-150 hover:border-jenny-text-secondary/30 focus:border-jenny-coral focus:ring-2 focus:ring-jenny-coral/20";
+  "w-full h-12 px-4 rounded-[11px] bg-jenny-surface border border-jenny-divider text-[14.5px] text-jenny-text placeholder:text-jenny-text-secondary/50 outline-none transition-all duration-150 hover:border-jenny-text-secondary/30 focus:border-jenny-coral focus:ring-2 focus:ring-jenny-coral/20";
 
 const LABEL_CLASS =
   "block font-mono text-[12px] font-semibold tracking-[0.06em] uppercase text-jenny-text-secondary mb-1.5";
@@ -57,9 +57,7 @@ export default function ForgotPasswordPage() {
         const detail = (err.data as { detail?: string })?.detail;
         setError(detail || "Impossible d'envoyer le code. Réessayez dans un instant.");
       } else {
-        setError(
-          "Impossible de se connecter au serveur. Vérifiez que le backend est lancé sur localhost:8000."
-        );
+        setError("Impossible de joindre le serveur. Réessayez dans un instant.");
       }
     } finally {
       setIsLoading(false);
@@ -100,9 +98,7 @@ export default function ForgotPasswordPage() {
           setError(detail || "La réinitialisation a échoué. Réessayez.");
         }
       } else {
-        setError(
-          "Impossible de se connecter au serveur. Vérifiez que le backend est lancé sur localhost:8000."
-        );
+        setError("Impossible de joindre le serveur. Réessayez dans un instant.");
       }
     } finally {
       setIsLoading(false);
@@ -118,7 +114,7 @@ export default function ForgotPasswordPage() {
           <span className="w-[34px] h-[34px] rounded-[9px] overflow-hidden bg-jenny-coral block">
             <Image
               src="/jenny.png"
-              alt="Jenny"
+              alt=""
               width={34}
               height={34}
               className="object-cover w-full h-full"
@@ -191,6 +187,7 @@ export default function ForgotPasswordPage() {
                   <motion.div
                     initial={{ opacity: 0, y: -4 }}
                     animate={{ opacity: 1, y: 0 }}
+                    role="alert"
                     className="p-3.5 rounded-[11px] bg-jenny-error/[0.08] border border-jenny-error/15 text-jenny-error text-sm leading-relaxed"
                   >
                     {error}
@@ -311,6 +308,7 @@ export default function ForgotPasswordPage() {
                   <motion.div
                     initial={{ opacity: 0, y: -4 }}
                     animate={{ opacity: 1, y: 0 }}
+                    role="alert"
                     className="p-3.5 rounded-[11px] bg-jenny-error/[0.08] border border-jenny-error/15 text-jenny-error text-sm leading-relaxed"
                   >
                     {error}
@@ -353,6 +351,7 @@ export default function ForgotPasswordPage() {
                 animate="show"
                 exit="hidden"
                 className="text-center"
+                role="status"
               >
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}

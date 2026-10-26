@@ -31,6 +31,7 @@ import { BusinessHoursSection } from "@/components/settings/business-hours-secti
 import { SlaSection } from "@/components/settings/sla-section";
 import { ApiKeysSection } from "@/components/settings/api-keys-section";
 import { AuditSection } from "@/components/settings/audit-section";
+import { BookingLink } from "@/components/booking-link";
 import { cn, roleLabel } from "@/lib/utils";
 
 // Fuseaux horaires courants (IANA) — francophones en tête.
@@ -102,6 +103,8 @@ export default function SettingsPage() {
   const [bizDescription, setBizDescription] = useState("");
   const [bizTimezone, setBizTimezone] = useState("Europe/Paris");
   const [bizSlug, setBizSlug] = useState("");
+  // nom enregistré, pas la saisie
+  const [bizSavedName, setBizSavedName] = useState("");
   const [savingBiz, setSavingBiz] = useState(false);
   const [bizMsg, setBizMsg] = useState<Feedback>(null);
 
@@ -112,6 +115,7 @@ export default function SettingsPage() {
     setBizDescription(b.description || "");
     setBizTimezone(b.timezone || "Europe/Paris");
     setBizSlug(b.slug || "");
+    setBizSavedName(b.name || "");
   };
 
   const loadBusiness = useCallback(async () => {
@@ -231,6 +235,21 @@ export default function SettingsPage() {
             </div>
           </Card>
         </motion.div>
+
+        {/* lien de réservation */}
+        {loadingBiz ? (
+          <div className="h-[236px] rounded-2xl animate-shimmer" aria-hidden="true" />
+        ) : (
+          bizSlug && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.03 }}
+            >
+              <BookingLink slug={bizSlug} businessName={bizSavedName || user.business_name || ""} />
+            </motion.div>
+          )
+        )}
 
         {/* Compte : informations */}
         <motion.div
@@ -360,7 +379,7 @@ export default function SettingsPage() {
                     id="biz-timezone"
                     value={bizTimezone}
                     onChange={(e) => setBizTimezone(e.target.value)}
-                    className="h-12 px-4 rounded-xl bg-white border border-jenny-divider text-[0.9375rem] text-jenny-text focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral hover:border-jenny-text-secondary/30 transition-all"
+                    className="h-12 px-4 rounded-xl bg-jenny-surface border border-jenny-divider text-[0.9375rem] text-jenny-text focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral hover:border-jenny-text-secondary/30 transition-all"
                   >
                     {TIMEZONES.map((tz) => (
                       <option key={tz} value={tz}>
@@ -383,14 +402,21 @@ export default function SettingsPage() {
                     onChange={(e) => setBizDescription(e.target.value)}
                     placeholder="Présentez votre activité en quelques mots..."
                     rows={4}
-                    className="w-full px-4 py-3 rounded-xl bg-white border border-jenny-divider text-[0.9375rem] text-jenny-text placeholder:text-jenny-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral hover:border-jenny-text-secondary/30 transition-all resize-none"
+                    className="w-full px-4 py-3 rounded-xl bg-jenny-surface border border-jenny-divider text-[0.9375rem] text-jenny-text placeholder:text-jenny-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral hover:border-jenny-text-secondary/30 transition-all resize-none"
                   />
                 </div>
 
                 {bizSlug && (
                   <p className="text-xs text-jenny-text-secondary">
-                    Identifiant&nbsp;:{" "}
-                    <span className="font-mono text-jenny-text">{bizSlug}</span>
+                    Page publique&nbsp;:{" "}
+                    <a
+                      href={`/book/${encodeURIComponent(bizSlug)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-jenny-text hover:text-jenny-coral underline-offset-2 hover:underline"
+                    >
+                      /book/{bizSlug}
+                    </a>
                   </p>
                 )}
 
