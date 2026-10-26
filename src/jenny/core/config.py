@@ -5,6 +5,9 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# secret jwt par défaut
+DEFAULT_JWT_SECRET = "change-me-in-production"
+
 
 class Settings(BaseSettings):
     """Configuration principale de Jenny."""
@@ -15,6 +18,8 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        # pas de secret dans les erreurs
+        hide_input_in_errors=True,
     )
 
     # application
@@ -22,6 +27,7 @@ class Settings(BaseSettings):
     debug: bool = True
     log_level: str = "INFO"
     app_name: str = "Jenny"
+    # forcé à True en prod
     require_auth: bool = False
     # seed du compte démo
     auto_seed: bool = False
@@ -42,6 +48,14 @@ class Settings(BaseSettings):
     # requêtes autorisées par IP
     rate_limit_max_requests: int = 120
     rate_limit_window_seconds: int = 60
+    # POST /auth/* par IP
+    rate_limit_auth_max_requests: int = 20
+    # chat par IP
+    rate_limit_chat_max_requests: int = 30
+    # chat par salon
+    rate_limit_chat_business_max_requests: int = 300
+    # proxys devant l'API (XFF)
+    rate_limit_proxy_hops: int = 1
 
     # LLM
     openai_api_key: str = ""
@@ -93,6 +107,8 @@ class Settings(BaseSettings):
     snapchat_client_id: str = ""
     snapchat_client_secret: str = ""
     snapchat_access_token: str = ""
+    # secret partagé du webhook
+    snapchat_webhook_secret: str = ""
 
     # email SMTP
     smtp_host: str = "smtp.gmail.com"
@@ -125,6 +141,7 @@ class Settings(BaseSettings):
 
     # webhooks Meta (HMAC)
     facebook_app_secret: str = ""
+    # ignoré en prod
     skip_meta_signature: bool = False
 
     # origine publique de l'API
@@ -132,8 +149,10 @@ class Settings(BaseSettings):
     public_api_base_url: str = ""
 
     # chiffrement des identifiants (Fernet)
-    # vide = stockés en clair
+    # obligatoire en prod
     master_key: str = ""
+    # clair permis hors prod
+    allow_plaintext_credentials: bool = False
 
     # business par défaut (dev)
     default_business_id: str = ""
@@ -142,7 +161,7 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     google_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
-    jwt_secret: str = "change-me-in-production"
+    jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     jwt_exp_minutes: int = 60 * 24
 
@@ -176,8 +195,45 @@ class Settings(BaseSettings):
     def is_test(self) -> bool:
         return self.env == "test"
 
+    @property
+    def auth_required(self) -> bool:
+        """Auth exigée (toujours en prod)."""
+        return self.require_auth or self.is_prod
+
+    @property
+    def meta_signature_skipped(self) -> bool:
+        """Saut du HMAC Meta, jamais en prod."""
+        return self.skip_meta_signature and not self.is_prod
+
+
+class InsecureConfigError(RuntimeError):
+    """Config prod pas sûre."""
+
+
+def check_prod_secrets(settings: Settings) -> None:
+    """Refuse une prod mal configurée."""
+    if not settings.is_prod:
+        return
+    errors: list[str] = []
+    if not settings.jwt_secret.strip() or settings.jwt_secret == DEFAULT_JWT_SECRET:
+        errors.append("JENNY_JWT_SECRET doit être défini (valeur par défaut interdite)")
+    key = settings.master_key.strip()
+    if not key:
+        errors.append("JENNY_MASTER_KEY doit être définie (clé Fernet)")
+    else:
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(key.encode())
+        except Exception:
+            errors.append("JENNY_MASTER_KEY invalide (clé Fernet attendue)")
+    if errors:
+        raise InsecureConfigError("Démarrage refusé en prod : " + " ; ".join(errors))
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Settings en singleton."""
-    return Settings()
+    settings = Settings()
+    check_prod_secrets(settings)
+    return settings
