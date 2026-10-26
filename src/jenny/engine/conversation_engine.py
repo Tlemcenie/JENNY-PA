@@ -141,6 +141,14 @@ _NEW_BOOKING_RE = re.compile(
 )
 # « avancer » : un report
 _AVANCE_RE = re.compile(r"\bavanc", re.I)
+# « je garde », « comme prévu »
+_KEEP_RE = re.compile(
+    r"\b(?:je|on)\s+(?:le\s+|la\s+|l['’]\s?)?(?:garde|reste|conserve|laisse|maintiens)\b"  # noqa: RUF001
+    r"|\bcomme\s+pr[ée]vu\b|\bchang\w*+\s+rien\b|\bpas\s+de\s+changement"
+    # « je ne veux plus décaler »
+    r"|\b(?:plus|pas)\s+(?:la\s+peine\s+de\s+|besoin\s+de\s+)?(?:d[ée]cal|d[ée]plac|report|chang)",
+    re.I,
+)
 # intentions d'au revoir
 _BYE_INTENTS = frozenset({"closing", "greeting", "small_talk"})
 # mots d'un créneau seul
@@ -510,6 +518,37 @@ def picks_offered_slot(
     )
 
 
+def current_slots(
+    offer: dict[str, Any], *, today: date, booked: tuple[str | None, str | None] = (None, None)
+) -> list[tuple[str | None, str | None]]:
+    """Créneaux possibles du rdv actuel."""
+    found = [booked] if any(booked) else []
+    # report raté : la base le dit
+    when = offer.get("when") if offer.get("operation") == "reschedule" else None
+    if when and not offer.get("success"):
+        day, hour = parse_fr_date(when, today=today), parse_fr_time(when)
+        if day and hour and (slot := (day.isoformat(), hour.strftime("%H:%M"))) not in found:
+            found.append(slot)
+    return found or [(None, None)]
+
+
+def keeps_current_slot(
+    message: str, *, today: date, booked: tuple[str | None, str | None] = (None, None)
+) -> bool:
+    """Refuse l'offre, garde son rdv ?"""
+    m = message or ""
+    day, hour = parse_fr_date(m, today=today), parse_fr_time(m)
+    d = day.isoformat() if day else None
+    h = hour.strftime("%H:%M") if hour else None
+    # autre créneau : vrai report
+    if (d and d != booked[0]) or (h and h != booked[1]):
+        return False
+    # son créneau, ou son jour seul
+    if d and (h or not _ALT_LEAD_RE.match(m)):
+        return True
+    return declines_offer(m) or bool(_KEEP_RE.search(m))
+
+
 def _filled(state: ConversationState, name: str) -> str | None:
     """Valeur d'un slot rempli."""
     slot = state.slots.get(name)
@@ -800,26 +839,40 @@ class ConversationEngine:
             "manage_appointment",
             "escalation",
         ) or (_model_intent == "complaint" and _COMPLAINT_SIGNAL_RE.search(_msg_txt))
+        # rdv actuel : fil ou base
+        _booked_now = current_slots(
+            _prev_ar, today=today, booked=(state.booked_date, state.booked_time)
+        )
         # au revoir après créneaux proposés
         _keep_days = _offered
         if _offered and is_farewell(_msg_txt, today=today):
             # garde le jour si vrai choix
-            _keep_days = picks_offered_slot(
-                _msg_txt,
-                today=today,
-                offer=_prev_ar,
-                asked_day=_filled(state, "date"),
-                booked=(state.booked_date, state.booked_time),
+            _keep_days = all(
+                picks_offered_slot(
+                    _msg_txt,
+                    today=today,
+                    offer=_prev_ar,
+                    asked_day=_filled(state, "date"),
+                    booked=b,
+                )
+                for b in _booked_now
             )
         # « bon week-end » : pas un jour
         _when_txt = strip_farewell(_msg_txt, keep_days=_keep_days)
         _farewell = is_farewell(_msg_txt, today=today, keep_days=_keep_days)
-        if _offered and _farewell:
+        # « non merci, je garde demain »
+        _stays = (
+            _offered
+            and not _farewell
+            and any(keeps_current_slot(_when_txt, today=today, booked=b) for b in _booked_now)
+        )
+        if _offered and (_farewell or _stays):
             # offre close : vieux créneau oublié
             for name in ("operation", "date", "time"):
                 state.slots.pop(name, None)
         # jour ou heure dans le message
-        _slot_in_msg = bool(parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt))
+        _names_when = bool(parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt))
+        _slot_in_msg = _names_when and not _stays
         # rdv sans mot-clé
         _has_when = False
         if not _blocks_appt_override:
@@ -829,7 +882,7 @@ class ConversationEngine:
         )
         _strong_appt = bool(_STRONG_APPOINTMENT_RE.search(_msg_txt))
         _wants_appt = _strong_appt or (_has_when and _has_service)
-        if _wants_appt and not _blocks_appt_override and not _farewell:
+        if _wants_appt and not _blocks_appt_override and not (_farewell or _stays):
             logger.info(
                 "engine.intent.appointment_override",
                 was=intent_result["intent"],
@@ -911,10 +964,14 @@ class ConversationEngine:
             and not _STRONG_APPOINTMENT_RE.search(_when_txt)
             and len(re.findall(r"\w+", _when_txt)) <= 4
         )
-        if _bye_only and intent_result["intent"] in (
-            "appointment",
-            "manage_appointment",
-            "planning",
+        # il garde son rdv : on clôt
+        _stay_close = _stays and (
+            intent_result["intent"] in ("appointment", "manage_appointment")
+            or (intent_result["intent"] == "planning" and "?" not in _msg_txt)
+        )
+        if _stay_close or (
+            _bye_only
+            and intent_result["intent"] in ("appointment", "manage_appointment", "planning")
         ):
             logger.info("engine.intent.farewell_to_closing", was=intent_result["intent"])
             intent_result = {
@@ -934,7 +991,9 @@ class ConversationEngine:
         _resume_appointment_after_info = False
         if state.pending_intent and state.pending_intent != intent:
             msg_l = _msg_txt
-            real_closing = (intent == "closing" and bool(_CLOSING_RE.search(msg_l))) or _farewell
+            real_closing = (
+                (intent == "closing" and bool(_CLOSING_RE.search(msg_l))) or _farewell or _stays
+            )
             # il choisit un créneau proposé
             if _keep_days and _slot_in_msg:
                 real_closing = False
@@ -1002,9 +1061,12 @@ class ConversationEngine:
         confirm_too = bool(name_value) and mgmt_op == "confirm"
         if confirm_too:
             mgmt_op = None
+        # « je ne veux plus décaler »
+        if _stays and mgmt_op == "reschedule" and (_names_when or _KEEP_RE.search(msg_text)):
+            mgmt_op = None
 
         # report implicite sans mot-clé
-        if mgmt_op is None and not joining_waitlist and not name_value:
+        if mgmt_op is None and not joining_waitlist and not name_value and not _stays:
             _appt_slot = state.slots.get("appointment_id")
             if (
                 _appt_slot is not None
@@ -1077,14 +1139,14 @@ class ConversationEngine:
             if (naming and entity_name == "name") or (phoning and entity_name == "phone"):
                 continue
             # « à ce soir » : pas un créneau
-            if _when_txt != _msg_txt and entity_name in ("date", "time"):
+            if (_when_txt != _msg_txt or _stays) and entity_name in ("date", "time"):
                 continue
             clean = coerce_entity(entity_name, entity_value, message=msg_text, today=today)
             if clean is not None:
                 state.set_slot(entity_name, clean, entity_type=entity_name.upper())
 
         # dates/heures en absolu
-        if intent in ("appointment", "manage_appointment"):
+        if intent in ("appointment", "manage_appointment") and not _stays:
             msg = msg_text.strip()
             # sans la formule d'au revoir
             _day = parse_fr_date(_when_txt, today=today)
