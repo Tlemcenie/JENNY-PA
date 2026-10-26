@@ -6,14 +6,18 @@ Webhooks d'entrée pour les connecteurs :
 
 Chaque route valide le payload, appelle le connecteur approprié,
 et retourne le résultat d'ingestion.
+
+/form et /email exigent un JWT ou une clé API (``X-API-Key``) : le salon est
+celui du compte, jamais celui passé en query.
 """
 
+import hmac
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query
 
-from jenny.api.dependencies import DbSession
+from jenny.api.dependencies import CurrentPrincipal, DbSession, OptionalTenant, resolve_business_id
 from jenny.connectors.email.schema import EmailPayload
 from jenny.connectors.email.service import EmailConnectorService
 from jenny.connectors.forms.schema import FormSubmissionPayload
@@ -58,6 +62,18 @@ async def _notify_inbound_after_ingest(
     )
 
 
+def _target_business(principal: CurrentPrincipal | None, requested: UUID | None) -> UUID:
+    """Salon du compte, query ignorée."""
+    business_id = resolve_business_id(principal)
+    if requested is not None and requested != business_id:
+        logger.warning(
+            "ingest.business_id_ignored",
+            requested=str(requested),
+            business_id=str(business_id),
+        )
+    return business_id
+
+
 def _to_response(result: IngestionResult) -> MessageResponse:
     """Convertit un IngestionResult en MessageResponse."""
     msg = result.message
@@ -76,9 +92,12 @@ def _to_response(result: IngestionResult) -> MessageResponse:
 @router.post("/form", response_model=MessageResponse, status_code=201)
 async def ingest_form(
     payload: FormSubmissionPayload,
-    business_id: Annotated[UUID, Query(..., description="ID du business destinataire")],
     background_tasks: BackgroundTasks,
     db: DbSession,
+    principal: OptionalTenant,
+    business_id: Annotated[
+        UUID | None, Query(description="Ignoré : salon du compte")
+    ] = None,
 ) -> MessageResponse:
     """Réceptionne une soumission de formulaire.
 
@@ -86,6 +105,7 @@ async def ingest_form(
     puis ingéré en DB avec création automatique du client
     et de la conversation si nécessaire.
     """
+    business_id = _target_business(principal, business_id)
     service = FormConnectorService(db)
     try:
         result = await service.handle_submission(payload, business_id)
@@ -105,15 +125,19 @@ async def ingest_form(
 @router.post("/email", response_model=MessageResponse, status_code=201)
 async def ingest_email(
     payload: EmailPayload,
-    business_id: Annotated[UUID, Query(..., description="ID du business destinataire")],
     background_tasks: BackgroundTasks,
     db: DbSession,
+    principal: OptionalTenant,
+    business_id: Annotated[
+        UUID | None, Query(description="Ignoré : salon du compte")
+    ] = None,
 ) -> MessageResponse:
     """Réceptionne un email entrant.
 
     Même flux que le formulaire : validation, mapping canonique,
     ingestion, déduplication, résolution conversation.
     """
+    business_id = _target_business(principal, business_id)
     service = EmailConnectorService(db)
     try:
         result = await service.handle_email(payload, business_id)
@@ -142,7 +166,9 @@ async def ingest_email_inbound(
     settings = get_settings()
     if not settings.email_inbound_secret:
         raise HTTPException(503, "Inbound email secret non configuré (JENNY_EMAIL_INBOUND_SECRET)")
-    if not x_jenny_inbound_secret or x_jenny_inbound_secret != settings.email_inbound_secret:
+    if not x_jenny_inbound_secret or not hmac.compare_digest(
+        x_jenny_inbound_secret.encode(), settings.email_inbound_secret.encode()
+    ):
         raise HTTPException(401, "Secret inbound invalide")
 
     service = EmailConnectorService(db)

@@ -2,12 +2,23 @@
 
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jenny.db.repositories.base import BaseRepository
 from jenny.domain.models.channel_account import ChannelAccount
+
+
+class ChannelAccountConflictError(HTTPException):
+    """Compte déjà pris (409)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=409,
+            detail="Ce compte est déjà relié à un autre salon.",
+        )
 
 
 class ChannelAccountRepository(BaseRepository[ChannelAccount]):
@@ -19,17 +30,21 @@ class ChannelAccountRepository(BaseRepository[ChannelAccount]):
         channel: str,
         external_account_id: str,
     ) -> UUID | None:
+        """Salon du compte externe (unique)."""
+        if not external_account_id:
+            return None
         stmt = (
             select(ChannelAccount.business_id)
             .where(
                 ChannelAccount.channel == channel,
                 ChannelAccount.external_account_id == external_account_id,
             )
+            # premier lié gagne
+            .order_by(ChannelAccount.created_at.asc())
             .limit(1)
         )
         r = await self.session.execute(stmt)
-        row = r.scalar_one_or_none()
-        return row
+        return r.scalar_one_or_none()
 
     async def get_account(self, business_id: UUID, channel: str) -> ChannelAccount | None:
         """Le compte de canal d'un business (le plus récent si plusieurs)."""
@@ -69,6 +84,10 @@ class ChannelAccountRepository(BaseRepository[ChannelAccount]):
         credentials: dict | None,
     ) -> ChannelAccount:
         """Crée ou met à jour le compte de canal d'un business (1 par canal)."""
+        owner = await self.get_business_for_channel(channel, external_account_id)
+        if owner is not None and owner != business_id:
+            # pas de vol de routage
+            raise ChannelAccountConflictError()
         acct = await self.get_account(business_id, channel)
         if acct is None:
             acct = ChannelAccount(

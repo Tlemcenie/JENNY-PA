@@ -67,8 +67,15 @@ async def _seed_conversation(
     """crée une conversation via formulaire."""
     _SEQ["n"] += 1
     submitted_at = f"2026-06-14T10:{_SEQ['n'] // 60:02d}:{_SEQ['n'] % 60:02d}Z"
+    # ingest : compte du salon requis
+    from uuid import UUID, uuid4
+
+    from jenny.api.auth.jwt_utils import create_access_token
+
+    tok = create_access_token(uuid4(), "seed@x.com", [UUID(bid)])
     r = await client.post(
         f"/api/v1/ingest/form?business_id={bid}",
+        headers={"Authorization": f"Bearer {tok}"},
         json={
             "form_id": "contact",
             "submitted_at": submitted_at,

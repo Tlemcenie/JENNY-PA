@@ -1,21 +1,18 @@
-"""Auth optionnelle : JWT ou clé API pour routes protégées."""
+"""Auth : JWT ou clé API pour routes protégées (toujours exigée en prod)."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from jenny.api.auth.api_key_crypto import verify_api_key
 from jenny.api.auth.jwt_utils import decode_token
+from jenny.api.dependencies import principal_from_api_key
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
 from jenny.db.session import async_session_factory
-from jenny.domain.models.api_key import ApiKey
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -37,6 +34,8 @@ PUBLIC_PREFIXES: tuple[str, ...] = (
     "/api/v1/payments",
     "/api/v1/ingest/email/inbound",
     "/api/v1/public",
+    # chat public, limité en débit
+    "/api/v1/conversation/chat",
 )
 
 
@@ -46,8 +45,20 @@ def _is_public(path: str) -> bool:
     return any(path == p or path.startswith(p + "/") for p in PUBLIC_PREFIXES)
 
 
+def _first_uuid(values: object) -> UUID | None:
+    """Premier UUID valide."""
+    if not isinstance(values, list):
+        return None
+    for raw in values:
+        try:
+            return UUID(str(raw))
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
 class AuthContextMiddleware(BaseHTTPMiddleware):
-    """Si require_auth=True, exige Authorization Bearer (JWT) ou X-API-Key (sk_...)."""
+    """Si l'auth est exigée, demande Authorization Bearer (JWT) ou X-API-Key (sk_...)."""
 
     async def dispatch(
         self,
@@ -58,6 +69,7 @@ class AuthContextMiddleware(BaseHTTPMiddleware):
         request.state.user_id = None
         request.state.business_id = None
         request.state.auth_scopes = None
+        request.state.api_principal = None
 
         # Les requêtes CORS preflight (OPTIONS) n'embarquent jamais le header
         # Authorization : le navigateur les envoie avant la vraie requête. Si on
@@ -66,7 +78,7 @@ class AuthContextMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        if not settings.require_auth:
+        if not settings.auth_required:
             return await call_next(request)
 
         path = request.url.path
@@ -80,36 +92,26 @@ class AuthContextMiddleware(BaseHTTPMiddleware):
         if auth.lower().startswith("bearer "):
             token = auth[7:].strip()
         elif api_key_header.startswith("sk_"):
-            token = api_key_header
+            token = api_key_header.strip()
 
         if not token:
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
 
         if token.startswith("sk_"):
-            prefix = token[:16] if len(token) >= 16 else token
             async with async_session_factory() as session:
-                stmt = select(ApiKey).where(ApiKey.key_prefix == prefix)
-                r = await session.execute(stmt)
-                keys = list(r.scalars().all())
-                matched = False
-                for ak in keys:
-                    if verify_api_key(token, ak.key_hash):
-                        request.state.business_id = ak.business_id
-                        request.state.auth_scopes = ak.scopes
-                        ak.last_used_at = datetime.now(UTC)
-                        matched = True
-                        break
-                if matched:
+                principal = await principal_from_api_key(session, token)
+                if principal is not None:
                     await session.commit()
-            if request.state.business_id is None:
+            if principal is None:
                 return JSONResponse({"detail": "Invalid API key"}, status_code=401)
+            request.state.business_id = principal.business_id
+            # pas de 2e bcrypt
+            request.state.api_principal = principal
         else:
             try:
                 claims = decode_token(token)
-                request.state.user_id = UUID(claims["sub"])
-                bids = claims.get("business_ids") or []
-                if bids:
-                    request.state.business_id = UUID(bids[0])
+                request.state.user_id = UUID(str(claims["sub"]))
+                request.state.business_id = _first_uuid(claims.get("business_ids"))
             except Exception:
                 return JSONResponse({"detail": "Invalid token"}, status_code=401)
 

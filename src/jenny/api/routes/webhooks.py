@@ -1,7 +1,16 @@
-"""Webhooks des connecteurs de messagerie."""
+"""Webhooks des connecteurs de messagerie.
+
+Chaque webhook est authentifié (HMAC Meta, signature Twitter, secret Snapchat)
+et routé vers le salon du compte externe (``channel_accounts``). Le repli sur
+``JENNY_DEFAULT_BUSINESS_ID`` n'existe que hors prod ; en prod un message non
+routable est journalisé puis ignoré (200, pour que le fournisseur n'insiste pas).
+"""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 from collections.abc import Awaitable, Callable  # noqa: TC003
 from datetime import UTC, datetime
@@ -28,7 +37,7 @@ from jenny.connectors.twitter.service import TwitterConnector
 from jenny.connectors.whatsapp.ingest_bridge import message_to_message_in, payload_phone_number_id
 from jenny.connectors.whatsapp.schema import WhatsAppMessage, WhatsAppWebhookPayload
 from jenny.connectors.whatsapp.service import WhatsAppConnector
-from jenny.core.config import get_settings
+from jenny.core.config import Settings, get_settings
 from jenny.core.events import publish_conversation_event
 from jenny.core.exceptions import ValidationError
 from jenny.core.logging import get_logger
@@ -59,6 +68,42 @@ _whatsapp = WhatsAppConnector()
 _instagram = InstagramConnector()
 _twitter = TwitterConnector()
 _snapchat = SnapchatConnector()
+
+
+def _fallback_business(settings: Settings, channel: str, ref: str | None) -> UUID | None:
+    """Salon par défaut, jamais en prod."""
+    if settings.is_prod:
+        logger.warning("webhook.unroutable", channel=channel, ref=ref)
+        return None
+    raw = (settings.default_business_id or "").strip()
+    if not raw:
+        return None
+    try:
+        business_id = UUID(raw)
+    except ValueError:
+        logger.error("webhook.default_business_invalid", channel=channel)
+        return None
+    logger.warning(
+        "webhook.default_business_fallback", channel=channel, ref=ref, business_id=raw
+    )
+    return business_id
+
+
+def _secret_ok(given: str | None, expected: str) -> bool:
+    """Secret partagé, temps constant."""
+    if not given or not expected:
+        return False
+    return hmac.compare_digest(given.encode(), expected.encode())
+
+
+def verify_twitter_signature(body: bytes, header: str | None, consumer_secret: str) -> bool:
+    """Signature x-twitter-webhooks-signature."""
+    if not header or not consumer_secret or not header.startswith("sha256="):
+        return False
+    digest = hmac.new(consumer_secret.encode(), body, hashlib.sha256).digest()
+    expected = "sha256=" + base64.b64encode(digest).decode()
+    return hmac.compare_digest(header.encode(), expected.encode())
+
 
 # moteur partagé (factory)
 
@@ -538,7 +583,7 @@ async def whatsapp_webhook(
     settings = get_settings()
     body = await request.body()
 
-    if not settings.skip_meta_signature:
+    if not settings.meta_signature_skipped:
         secret = settings.facebook_app_secret
         if not secret or not verify_meta_signature(body, x_hub_signature_256, secret):
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
@@ -561,11 +606,8 @@ async def whatsapp_webhook(
 
     ch_repo = ChannelAccountRepository(db)
     business_id = await ch_repo.get_business_for_channel("whatsapp", phone_id)
-    if business_id is None and settings.default_business_id:
-        try:
-            business_id = UUID(settings.default_business_id)
-        except ValueError:
-            business_id = None
+    if business_id is None:
+        business_id = _fallback_business(settings, "whatsapp", phone_id)
     if business_id is None:
         logger.error("webhook.whatsapp.no_business", phone_number_id=phone_id)
         return {"status": "ignored", "reason": "no_channel_account_mapping"}
@@ -624,7 +666,7 @@ async def instagram_webhook(
     settings = get_settings()
     body = await request.body()
 
-    if not settings.skip_meta_signature:
+    if not settings.meta_signature_skipped:
         secret = settings.facebook_app_secret
         if not secret or not verify_meta_signature(body, x_hub_signature_256, secret):
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
@@ -647,11 +689,8 @@ async def instagram_webhook(
         if recipient_id
         else None
     )
-    if business_id is None and settings.default_business_id:
-        try:
-            business_id = UUID(settings.default_business_id)
-        except ValueError:
-            business_id = None
+    if business_id is None:
+        business_id = _fallback_business(settings, "instagram", recipient_id)
     if business_id is None:
         logger.error("webhook.instagram.no_business", recipient_id=recipient_id)
         return {"status": "ignored", "reason": "no_channel_account_mapping"}
@@ -692,8 +731,19 @@ async def twitter_webhook(
     background_tasks: BackgroundTasks,
     db: DbSession,
 ) -> dict:
-    """réception DMs Twitter."""
+    """réception DMs Twitter (signée)."""
+    settings = get_settings()
     body = await request.body()
+    secret = settings.twitter_api_secret
+    if secret:
+        sig = request.headers.get("x-twitter-webhooks-signature")
+        if not verify_twitter_signature(body, sig, secret):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    elif settings.is_prod:
+        # prod : signature obligatoire
+        raise HTTPException(status_code=503, detail="Webhook Twitter non configuré")
+    else:
+        logger.warning("webhook.twitter.unsigned_dev")
     try:
         data = json.loads(body)
     except Exception as e:
@@ -705,18 +755,14 @@ async def twitter_webhook(
         logger.warning("webhook.twitter.unsupported_payload", error=str(e))
         return {"status": "ignored", "reason": "unsupported_payload"}
 
-    settings = get_settings()
     ch_repo = ChannelAccountRepository(db)
     business_id = (
         await ch_repo.get_business_for_channel("twitter", payload.for_user_id)
         if payload.for_user_id
         else None
     )
-    if business_id is None and settings.default_business_id:
-        try:
-            business_id = UUID(settings.default_business_id)
-        except ValueError:
-            business_id = None
+    if business_id is None:
+        business_id = _fallback_business(settings, "twitter", payload.for_user_id)
     if business_id is None:
         return {"status": "ignored", "reason": "no_channel_account_mapping"}
 
@@ -748,8 +794,15 @@ async def snapchat_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     db: DbSession,
+    x_jenny_webhook_secret: Annotated[str | None, Header(alias="X-Jenny-Webhook-Secret")] = None,
 ) -> dict:
-    """réception messages Snapchat."""
+    """réception messages Snapchat (secret partagé)."""
+    settings = get_settings()
+    if not settings.snapchat_webhook_secret:
+        # pas de secret : fermé
+        raise HTTPException(status_code=503, detail="Webhook Snapchat non configuré")
+    if not _secret_ok(x_jenny_webhook_secret, settings.snapchat_webhook_secret):
+        raise HTTPException(status_code=401, detail="Secret webhook invalide")
     body = await request.body()
     try:
         data = json.loads(body)
@@ -762,13 +815,13 @@ async def snapchat_webhook(
         logger.warning("webhook.snapchat.unsupported_payload", error=str(e))
         return {"status": "ignored", "reason": "unsupported_payload"}
 
-    settings = get_settings()
-    business_id: UUID | None = None
-    if settings.default_business_id:
-        try:
-            business_id = UUID(settings.default_business_id)
-        except ValueError:
-            business_id = None
+    business_id = (
+        await ChannelAccountRepository(db).get_business_for_channel("snapchat", payload.app_id)
+        if payload.app_id
+        else None
+    )
+    if business_id is None:
+        business_id = _fallback_business(settings, "snapchat", payload.app_id or None)
     if business_id is None:
         return {"status": "ignored", "reason": "no_channel_account_mapping"}
 

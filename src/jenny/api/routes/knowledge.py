@@ -5,11 +5,10 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID  # noqa: TC003
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
-from jenny.api.dependencies import DbSession  # noqa: TC001
-from jenny.core.config import get_settings
+from jenny.api.dependencies import DbSession, TenantUser, resolve_business_id
 from jenny.core.logging import get_logger
 from jenny.rag.knowledge_base import KnowledgeBase, KnowledgeEntry
 
@@ -59,16 +58,6 @@ class KnowledgeStatsResponse(BaseModel):
 # helpers
 
 
-def _enforce_tenant(request: Request, business_id: UUID) -> None:
-    """vérifie le tenant."""
-    settings = get_settings()
-    if not settings.require_auth:
-        return
-    ctx_bid = getattr(request.state, "business_id", None)
-    if ctx_bid is not None and str(ctx_bid) != str(business_id):
-        raise HTTPException(status_code=403, detail="Accès refusé pour ce business")
-
-
 def _to_response(entry: KnowledgeEntry) -> KnowledgeEntryResponse:
     preview = entry.content[:200] + "..." if len(entry.content) > 200 else entry.content
     return KnowledgeEntryResponse(
@@ -88,13 +77,13 @@ def _to_response(entry: KnowledgeEntry) -> KnowledgeEntryResponse:
 
 @router.post("/text", response_model=KnowledgeEntryResponse, status_code=201)
 async def add_text(
-    request: Request,
+    principal: TenantUser,
     body: AddTextRequest,
     db: DbSession,
 ) -> KnowledgeEntryResponse:
     """ajoute du texte."""
-    _enforce_tenant(request, body.business_id)
-    kb = KnowledgeBase(business_id=body.business_id, session=db)
+    business_id = resolve_business_id(principal, body.business_id)
+    kb = KnowledgeBase(business_id=business_id, session=db)
     try:
         entry = await kb.add_text(
             content=body.content,
@@ -109,7 +98,7 @@ async def add_text(
 
 @router.post("/pdf", response_model=KnowledgeEntryResponse, status_code=201)
 async def add_pdf(
-    request: Request,
+    principal: TenantUser,
     db: DbSession,
     file: Annotated[UploadFile, File(..., description="Fichier PDF à ingérer")],
     business_id: Annotated[UUID, Form(..., description="ID du business")],
@@ -117,7 +106,7 @@ async def add_pdf(
     category: Annotated[str, Form(description="Catégorie")] = "general",
 ) -> KnowledgeEntryResponse:
     """upload un pdf."""
-    _enforce_tenant(request, business_id)
+    business_id = resolve_business_id(principal, business_id)
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Le fichier doit être un PDF")
 
@@ -142,12 +131,12 @@ async def add_pdf(
 
 @router.get("/entries/{business_id}", response_model=list[KnowledgeEntryResponse])
 async def list_entries(
-    request: Request,
+    principal: TenantUser,
     db: DbSession,
     business_id: UUID,
 ) -> list[KnowledgeEntryResponse]:
     """liste les entrées."""
-    _enforce_tenant(request, business_id)
+    business_id = resolve_business_id(principal, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     entries = await kb.list_entries()
     return [_to_response(e) for e in entries]
@@ -155,13 +144,13 @@ async def list_entries(
 
 @router.delete("/entries/{business_id}/{entry_id}")
 async def delete_entry(
-    request: Request,
+    principal: TenantUser,
     db: DbSession,
     business_id: UUID,
     entry_id: str,
 ) -> dict:
     """supprime une entrée."""
-    _enforce_tenant(request, business_id)
+    business_id = resolve_business_id(principal, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     if not await kb.delete_entry(entry_id):
         raise HTTPException(status_code=404, detail="Entrée non trouvée")
@@ -178,14 +167,14 @@ class UpdateEntryRequest(BaseModel):
 
 @router.put("/entries/{business_id}/{entry_id}", response_model=KnowledgeEntryResponse)
 async def update_entry(
-    request: Request,
+    principal: TenantUser,
     db: DbSession,
     business_id: UUID,
     entry_id: str,
     body: UpdateEntryRequest,
 ) -> KnowledgeEntryResponse:
     """modifie une entrée."""
-    _enforce_tenant(request, business_id)
+    business_id = resolve_business_id(principal, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     try:
         entry = await kb.update_text_entry(
@@ -208,14 +197,14 @@ class KnowledgeSearchHit(BaseModel):
 
 @router.get("/search/{business_id}", response_model=list[KnowledgeSearchHit])
 async def search_knowledge(
-    request: Request,
+    principal: TenantUser,
     db: DbSession,
     business_id: UUID,
     q: Annotated[str, Query(min_length=2, max_length=500)],
     top_k: Annotated[int, Query(ge=1, le=20)] = 5,
 ) -> list[KnowledgeSearchHit]:
     """recherche sémantique."""
-    _enforce_tenant(request, business_id)
+    business_id = resolve_business_id(principal, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     try:
         docs = await kb.search(q, top_k=top_k)
@@ -242,14 +231,14 @@ class MultiImportResult(BaseModel):
 
 @router.post("/files", response_model=MultiImportResult, status_code=201)
 async def add_files(
-    request: Request,
+    principal: TenantUser,
     db: DbSession,
     files: Annotated[list[UploadFile], File(..., description="PDF, .txt ou .md")],
     business_id: Annotated[UUID, Form(..., description="ID du business")],
     category: Annotated[str, Form(description="Catégorie")] = "general",
 ) -> MultiImportResult:
     """importe plusieurs fichiers."""
-    _enforce_tenant(request, business_id)
+    business_id = resolve_business_id(principal, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     imported: list[KnowledgeEntryResponse] = []
     errors: list[dict] = []
@@ -286,12 +275,12 @@ async def add_files(
 
 @router.get("/stats/{business_id}", response_model=KnowledgeStatsResponse)
 async def get_stats(
-    request: Request,
+    principal: TenantUser,
     db: DbSession,
     business_id: UUID,
 ) -> KnowledgeStatsResponse:
     """stats du business."""
-    _enforce_tenant(request, business_id)
+    business_id = resolve_business_id(principal, business_id)
     kb = KnowledgeBase(business_id=business_id, session=db)
     stats = await kb.stats()
     return KnowledgeStatsResponse(**stats)

@@ -47,7 +47,7 @@ async def test_ingest_form_missing_required_fields(async_client: AsyncClient) ->
 
 @pytest.mark.asyncio
 async def test_ingest_form_missing_business_id(async_client: AsyncClient) -> None:
-    """Sans business_id en query param, retourne 422."""
+    """Sans compte (le salon vient du compte), retourne 401."""
     response = await async_client.post(
         "/api/v1/ingest/form",
         json={
@@ -56,7 +56,7 @@ async def test_ingest_form_missing_business_id(async_client: AsyncClient) -> Non
             "message": "Bonjour",
         },
     )
-    assert response.status_code == 422
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
