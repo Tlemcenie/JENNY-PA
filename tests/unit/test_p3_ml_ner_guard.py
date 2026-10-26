@@ -44,7 +44,9 @@ class TestFiltre:
     def test_accepte(self, span: str) -> None:
         assert looks_like_service(span)
 
-    @pytest.mark.parametrize("span", ["ouverts", "vraie", "8", "tatouage", "rdv", "pneus", "très"])
+    @pytest.mark.parametrize(
+        "span", ["ouverts", "vraie", "8", "tatouage", "rdv", "pneus", "très", "nombre"]
+    )
     def test_refuse(self, span: str) -> None:
         assert not looks_like_service(span)
 

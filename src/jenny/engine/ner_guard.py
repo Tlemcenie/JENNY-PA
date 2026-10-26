@@ -106,6 +106,8 @@ def _word_ok(word: str) -> bool:
         if (
             len(word) >= 6
             and len(stem) >= 5
+            # « nombre » n'est pas « ombre »
+            and word[0] == stem[0]
             and SequenceMatcher(None, word, stem).ratio() >= FUZZY_MIN
         ):
             return True
