@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from jenny.api.dependencies import CurrentUser, DbSession
 from jenny.core.logging import get_logger
 from jenny.domain.models.prestation import Prestation
+from jenny.rag import kb_sync  # noqa: F401 (suivi de la KB)
 from jenny.rag.kb_coiffeur import (
     DEFAULT_COIFFEUR,
     build_entries,
@@ -219,8 +220,9 @@ async def _seed_knowledge(db: DbSession, bid: UUID) -> int:
             business, prestas, demo=False, include_prices=False, staff=staff
         )
         kb = KnowledgeBase(business_id=bid, session=db)
+        # vieilles fiches prix retirées
         stats = await sync_real_entries(
-            kb, entries, families=real_families(include_prices=False)
+            kb, entries, families=real_families(include_prices=True)
         )
     except Exception as exc:
         # store vectoriel indispo : on ignore
@@ -238,7 +240,9 @@ async def seed_coiffeur(db: DbSession, principal: CurrentUser) -> SeedCoiffeurRe
     Idempotent : si le business possède déjà des prestations, on ne duplique rien
     (renvoie 0 prestation créée). Les fiches KB viennent des vraies données du
     salon (horaires saisis, acompte, rappels, équipe) : à appeler après la
-    saisie des horaires. Relancer le seed les remet à jour.
+    saisie des horaires. Relancer le seed les remet à jour, sans toucher aux
+    fiches retouchées ou supprimées par le gérant. Ensuite elles suivent
+    seules les changements du salon (voir jenny.rag.kb_sync).
     """
     bid = principal.business_id
     if bid is None:
