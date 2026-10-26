@@ -25,6 +25,9 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/insights", tags=["Insights"])
 
+# fenêtre mini 1re réponse
+_FIRST_RESPONSE_DAYS = 30
+
 
 class ChannelStat(BaseModel):
     channel: str
@@ -222,19 +225,23 @@ async def get_insights(
 
     # ── Temps de 1ʳᵉ réponse moyen (entre 1er message client et 1ʳᵉ réponse) ──
     # Calculé en Python pour rester portable Postgres/SQLite (pas d'EXTRACT EPOCH).
+    # conversations récentes seulement
+    fr_since = datetime.now(UTC) - timedelta(days=max(days, _FIRST_RESPONSE_DAYS))
+    recent = select(Conversation.id).where(
+        Conversation.business_id == bid, Conversation.created_at >= fr_since
+    )
+    first_in = func.min(case((Message.direction == "inbound", Message.created_at)))
+    first_out = func.min(case((Message.direction == "outbound", Message.created_at)))
     fr_rows = (
         await db.execute(
-            select(
-                Message.conversation_id,
-                func.min(
-                    case((Message.direction == "inbound", Message.created_at))
-                ).label("first_in"),
-                func.min(
-                    case((Message.direction == "outbound", Message.created_at))
-                ).label("first_out"),
+            select(Message.conversation_id, first_in, first_out)
+            .where(
+                Message.business_id == bid,
+                Message.created_at >= fr_since,
+                Message.conversation_id.in_(recent),
             )
-            .where(Message.business_id == bid)
             .group_by(Message.conversation_id)
+            .having(first_in.is_not(None), first_out.is_not(None))
         )
     ).all()
     diffs = [
