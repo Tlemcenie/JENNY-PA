@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
@@ -95,6 +103,7 @@ export default function BookingClient({ slug, children }: { slug: string; childr
   const [slots, setSlots] = useState<PublicSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsError, setSlotsError] = useState<string | null>(null);
+  const slotsReq = useRef(0);
 
   // créneau choisi
   const [chosenSlot, setChosenSlot] = useState<PublicSlot | null>(null);
@@ -180,12 +189,16 @@ export default function BookingClient({ slug, children }: { slug: string; childr
   // 3. créneaux par date, coiffeur, prestation
   const loadSlots = useCallback(
     async (dateIso: string) => {
+      // seule la dernière réponse compte
+      const req = ++slotsReq.current;
       setSlotsLoading(true);
       setSlotsError(null);
       try {
         const res = await getPublicSlots(slug, dateIso, { duration, staffId, prestationId });
+        if (req !== slotsReq.current) return;
         setSlots(res.slots);
       } catch (err) {
+        if (req !== slotsReq.current) return;
         setSlots([]);
         setSlotsError(
           err instanceof ApiError && err.status === 404
@@ -195,7 +208,7 @@ export default function BookingClient({ slug, children }: { slug: string; childr
               : "Impossible de charger les créneaux. Réessayez."
         );
       } finally {
-        setSlotsLoading(false);
+        if (req === slotsReq.current) setSlotsLoading(false);
       }
     },
     [slug, duration, staffId, prestationId]
