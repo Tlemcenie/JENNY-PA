@@ -5,15 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
+import numpy as np
 import pytest
 
-from jenny.core.config import get_settings
+from jenny.core.config import Settings, get_settings
 from jenny.engine import factory
 from jenny.engine.conversation_engine import EngineRequest
 from jenny.rag import embeddings
 from jenny.rag.embeddings import SentenceTransformerEmbedder
 
-HEAD = Path("checkpoints/intent_head/head.joblib")
+# chemin de prod (joblib ou npz)
+HEAD = Path(Settings.model_fields["intent_head_path"].default)
 
 pytestmark = [
     pytest.mark.real_embedder,
@@ -40,23 +42,24 @@ async def test_build_engine_partage_mpnet(prod_settings, db_tables, monkeypatch)
     """build_engine : un mpnet, vrai tour."""
     engine = factory.build_engine()
     head = engine.intent_predictor
-    if getattr(head, "encoder", None) is None:
+    encoder = getattr(head, "encoder", None)
+    if encoder is None:
         pytest.skip("tête indisponible (modèle HF absent du cache ?)")
     emb = engine.retriever.embedder
     # vrai singleton de prod
     assert type(emb) is SentenceTransformerEmbedder
     assert emb is embeddings.get_default_embedder()
-    assert emb._model is head.encoder
-    assert list(embeddings._ST_MODELS.values()) == [head.encoder]
+    assert emb._model is encoder
+    assert list(embeddings._ST_MODELS.values()) == [encoder]
 
-    calls: list[str] = []
-    real_query = emb.embed_query
+    calls: list[object] = []
+    real_encode = encoder.encode
 
-    async def _spy(text: str) -> list[float]:
-        calls.append(text)
-        return await real_query(text)
+    def _spy(texts, *args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(texts)
+        return real_encode(texts, *args, **kwargs)
 
-    monkeypatch.setattr(emb, "embed_query", _spy)
+    monkeypatch.setattr(encoder, "encode", _spy)
     resp = await engine.process(
         EngineRequest(
             conversation_id=uuid4(),
@@ -66,8 +69,14 @@ async def test_build_engine_partage_mpnet(prod_settings, db_tables, monkeypatch)
         )
     )
     assert resp.response_text
-    # le rag a bien encodé
+    # l'intention a encodé
     assert calls
+    n = len(calls)
+    # rag : même objet modèle
+    vec = await emb.embed_query("Vous faites des balayages ?")
+    assert len(calls) == n + 1
+    assert len(vec) == 768
+    direct = real_encode("Vous faites des balayages ?", convert_to_numpy=True)
+    assert np.allclose(vec, direct, atol=1e-5)
     # toujours un seul modèle
-    assert list(embeddings._ST_MODELS.values()) == [head.encoder]
-    assert len(await real_query("Vous êtes ouverts le samedi ?")) == 768
+    assert list(embeddings._ST_MODELS.values()) == [encoder]
