@@ -13,22 +13,43 @@ import { NotificationBell } from "@/components/layout/notification-bell";
 import { UserMenu } from "@/components/layout/user-menu";
 import { LlmSwitcher } from "@/components/layout/llm-switcher";
 
+// titre par route
 const pageTitleKeys: Record<string, string> = {
   "/dashboard": "nav.dashboard",
   "/chat": "nav.chat",
+  "/assistant": "nav.assistant",
   "/conversations": "nav.conversations",
-  "/customers": "nav.customers",
-  "/channels": "nav.channels",
+  "/calendar": "nav.calendar",
+  "/prestations": "nav.prestations",
+  "/brain": "nav.brain",
   "/knowledge": "nav.knowledge",
+  "/learning": "nav.learning",
+  "/analytics": "nav.analytics",
+  "/stats": "nav.stats",
+  "/channels": "nav.channels",
+  "/efficacy": "nav.efficacy",
+  "/lab": "nav.lab",
+  "/customers": "nav.customers",
+  "/messages": "nav.messages",
   "/profile": "nav.settings",
 };
+
+// pages sans h1 à elles
+const PAGES_WITHOUT_H1 = new Set(["/chat", "/conversations", "/profile"]);
+
+function titleKeyFor(pathname: string): string | undefined {
+  if (pageTitleKeys[pathname]) return pageTitleKeys[pathname];
+  // sous-pages : /customers/123
+  const root = "/" + (pathname.split("/")[1] ?? "");
+  return pageTitleKeys[root];
+}
 
 export function Topbar() {
   const pathname = usePathname();
   const { t } = useTranslation();
   const [apiStatus, setApiStatus] = useState<"ok" | "error" | "loading">("loading");
 
-  const titleKey = pageTitleKeys[pathname];
+  const titleKey = titleKeyFor(pathname);
   const title = titleKey ? t(titleKey) : "Jenny";
 
   useEffect(() => {
@@ -50,7 +71,12 @@ export function Topbar() {
     <header className="h-14 bg-jenny-surface border-b border-jenny-divider flex items-center justify-between px-4 md:px-6">
       {/* Spacer for mobile hamburger */}
       <div className="w-10 md:hidden" />
-      <h1 className="text-base md:text-lg font-semibold text-jenny-text">{title}</h1>
+      {/* le h1 reste dans la page */}
+      {PAGES_WITHOUT_H1.has(pathname) ? (
+        <h1 className="text-base md:text-lg font-semibold text-jenny-text truncate min-w-0">{title}</h1>
+      ) : (
+        <p className="text-base md:text-lg font-semibold text-jenny-text truncate min-w-0">{title}</p>
+      )}
       <div className="flex items-center gap-2">
         <button
           onClick={() => window.dispatchEvent(new Event("jenny:command-open"))}
