@@ -85,9 +85,7 @@ async def global_search(
                     cast(Conversation.tags, String).ilike(pattern),
                 ),
             )
-            .order_by(
-                func.coalesce(Conversation.last_message_at, Conversation.created_at).desc()
-            )
+            .order_by(func.coalesce(Conversation.last_message_at, Conversation.created_at).desc())
             .limit(limit)
         )
     ).all()

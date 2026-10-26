@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy import text
@@ -13,6 +13,9 @@ from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from jenny.db import session as db_session
 from jenny.db.session import build_engines, engine_options, session_factory
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 PG = "postgresql+asyncpg://u:p@db.example:5432/jenny"
 LIVE_PG = os.environ.get("JENNY_TEST_POSTGRES_URL", "")
@@ -22,7 +25,12 @@ LLM_S = 0.2
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("JENNY_SQL_ECHO", "JENNY_DB_POOLER", "JENNY_DB_POOL_SIZE", "JENNY_DB_MAX_OVERFLOW"):
+    for name in (
+        "JENNY_SQL_ECHO",
+        "JENNY_DB_POOLER",
+        "JENNY_DB_POOL_SIZE",
+        "JENNY_DB_MAX_OVERFLOW",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 

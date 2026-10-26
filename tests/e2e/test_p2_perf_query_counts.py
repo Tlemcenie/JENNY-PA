@@ -138,7 +138,11 @@ async def _seed_customer(bid: UUID, n_conv: int = 3, n_msg: int = 8) -> UUID:
         s.add(Order(business_id=bid, customer_id=cust.id, reference="CMD-1", status="paid"))
         s.add(
             SupportTicket(
-                business_id=bid, customer_id=cust.id, reference="T-1", subject="Retard", status="open"
+                business_id=bid,
+                customer_id=cust.id,
+                reference="T-1",
+                subject="Retard",
+                status="open",
             )
         )
         return cust.id
@@ -306,7 +310,9 @@ async def test_customers_routes_query_count(client: AsyncClient, db_tables: None
 
     with count_sql() as stmts:
         r = await client.patch(
-            f"/api/v1/customers/{cid}", headers=headers, json={"notes": "aime le café", "tags": ["vip"]}
+            f"/api/v1/customers/{cid}",
+            headers=headers,
+            json={"notes": "aime le café", "tags": ["vip"]},
         )
     assert r.status_code == 200, r.text
     _report("PATCH /customers/{id}", stmts)
@@ -345,7 +351,9 @@ async def test_search_query_count(client: AsyncClient, db_tables: None) -> None:
     with count_sql() as more:
         r = await client.get("/api/v1/search", params={"q": "Léa"}, headers=headers)
     assert r.status_code == 200, r.text
-    assert r.json()["customers"] == [{"id": str(cid), "full_name": "Léa Martin", "email": "lea@client.fr"}]
+    assert r.json()["customers"] == [
+        {"id": str(cid), "full_name": "Léa Martin", "email": "lea@client.fr"}
+    ]
     assert len(stmts) <= 3, stmts
     assert len(more) <= 3, more
 

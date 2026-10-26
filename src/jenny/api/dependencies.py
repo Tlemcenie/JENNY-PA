@@ -161,9 +161,7 @@ async def principal_from_api_key(db: AsyncSession, raw: str) -> CurrentPrincipal
     if not raw.startswith("sk_"):
         return None
     # sans le salon (selectin)
-    rows = await db.execute(
-        select(ApiKey).where(ApiKey.key_prefix == raw[:16]).options(NO_REL)
-    )
+    rows = await db.execute(select(ApiKey).where(ApiKey.key_prefix == raw[:16]).options(NO_REL))
     now = datetime.now(UTC)
     for key in rows.scalars().all():
         if api_key_expired(key.expires_at, now):

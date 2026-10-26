@@ -28,7 +28,9 @@ def _obj(table: str) -> SimpleNamespace:
 
 
 def _migrations_text() -> str:
-    return "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "migrations/versions").glob("*.py"))
+    return "\n".join(
+        p.read_text(encoding="utf-8") for p in (ROOT / "migrations/versions").glob("*.py")
+    )
 
 
 def test_raw_objects_ignored() -> None:
@@ -36,12 +38,20 @@ def test_raw_objects_ignored() -> None:
     assert include_name("document_embeddings", "table", {}) is False
     assert include_object(_obj("document_embeddings"), "ix_x", "index", True, None) is False
     assert include_object(_obj("document_embeddings"), "content_tsv", "column", True, None) is False
-    assert include_object(_obj("appointments"), "appointments_no_overlap", "index", True, None) is False
     assert (
-        include_object(_obj("appointments"), "appointments_end_after_start", "check_constraint", True, None)
+        include_object(_obj("appointments"), "appointments_no_overlap", "index", True, None)
         is False
     )
-    assert include_object(_obj("messages"), "ix_messages_business_received", "index", True, None) is False
+    assert (
+        include_object(
+            _obj("appointments"), "appointments_end_after_start", "check_constraint", True, None
+        )
+        is False
+    )
+    assert (
+        include_object(_obj("messages"), "ix_messages_business_received", "index", True, None)
+        is False
+    )
 
 
 def test_protected_only_when_missing_from_models() -> None:

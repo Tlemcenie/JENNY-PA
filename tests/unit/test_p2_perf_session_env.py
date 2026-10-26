@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy.pool import NullPool
 
 from jenny.core.config import Settings
 from jenny.db.session import engine_options
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 PG = "postgresql+asyncpg://u:p@db.example:5432/jenny"
 _VARS = ("JENNY_SQL_ECHO", "JENNY_DB_POOLER", "JENNY_DB_POOL_SIZE", "JENNY_DB_MAX_OVERFLOW")

@@ -32,7 +32,12 @@ async def _persist(bid, cid, facts) -> None:  # type: ignore[no-untyped-def]
     result = EngineResponse(response_text="Noté !", intent="faq", extracted_facts=facts)
     async with async_session_factory() as s:
         await persist_engine_signals(
-            s, business_id=bid, customer_id=cid, conversation_id=None, channel="whatsapp", result=result
+            s,
+            business_id=bid,
+            customer_id=cid,
+            conversation_id=None,
+            channel="whatsapp",
+            result=result,
         )
 
 

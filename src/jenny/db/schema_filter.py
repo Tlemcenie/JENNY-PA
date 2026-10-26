@@ -68,7 +68,9 @@ def _table_name(obj: Any) -> str | None:
     return getattr(table, "name", None)
 
 
-def include_object(obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any) -> bool:
+def include_object(
+    obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any
+) -> bool:
     """Ignore ce qui est géré à la main dans les migrations."""
     if type_ == "table":
         return name not in TABLES_HORS_ORM
