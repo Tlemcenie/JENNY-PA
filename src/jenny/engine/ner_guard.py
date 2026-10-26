@@ -84,6 +84,8 @@ _JOIN = " et "
 # « pas de coloration »
 _NEG_WORDS = {"pas", "sans", "jamais", "ni"}
 _NEG_WINDOW = 2
+# mots vides des noms
+_FILLERS = {"une", "des", "les", "pour", "avec", "mon", "mes", "son", "ses"}
 
 
 def plain(text: str) -> str:
@@ -146,6 +148,55 @@ def clean_service(span: str) -> str:
             continue
         break
     return " ".join(words).strip(" .,;:!?…")
+
+
+def _same_word(word: str, ref: str) -> bool:
+    """même mot, préfixe ou faute."""
+    w, r = word.rstrip("sx"), ref.rstrip("sx")
+    if w == r or (len(w) >= 4 and r.startswith(w)):
+        return True
+    # balyage -> balayage
+    return len(w) >= 6 and w[0] == r[0] and SequenceMatcher(None, w, r).ratio() >= FUZZY_MIN
+
+
+def _keywords(text: str) -> list[str]:
+    """mots utiles d'un nom."""
+    return [w for w in re.findall(r"[a-z]+", plain(text)) if len(w) > 2 and w not in _FILLERS]
+
+
+def _covers(words: list[str], refs: list[str]) -> bool:
+    """chaque mot trouvé en face."""
+    return bool(words) and all(any(_same_word(w, r) for r in refs) for w in words)
+
+
+def _one_service(part: str, catalog: list[str]) -> str | None:
+    """une presta du catalogue, sinon rien."""
+    words = _keywords(part)
+    named = [(n, _keywords(n)) for n in catalog]
+    # nom du catalogue cité en entier
+    full = [(n, k) for n, k in named if _covers(k, words)]
+    if full:
+        top = max(len(k) for _, k in full)
+        full = [n for n, k in full if len(k) == top]
+        return full[0] if len(full) == 1 else None
+    # « colo », « soin » : un seul candidat
+    part_of = [n for n, k in named if _covers(words, k)]
+    return part_of[0] if len(part_of) == 1 else None
+
+
+def catalog_service(value: str | None, catalog: list[str] | None) -> str | None:
+    """presta du ner, si le catalogue la connaît."""
+    if not value or not catalog:
+        return None
+    found: list[str] = []
+    for part in plain(value).split(_JOIN):
+        name = _one_service(part, catalog)
+        # inconnue ou ambiguë : on demande
+        if name is None:
+            return None
+        if name not in found:
+            found.append(name)
+    return _JOIN.join(found) if found else None
 
 
 class GuardedNERPredictor(NERPredictor):
