@@ -45,10 +45,12 @@ import {
   createReview,
   deleteAppointment,
   exportAppointmentsIcs,
+  humanError,
   listAppointments,
+  listPrestations,
   subscribeToConversationEvents,
   updateAppointment,
-  ApiError,
+  type Prestation,
 } from "@/lib/api";
 import {
   createAppointmentWithStaff,
@@ -119,11 +121,13 @@ function toDateValue(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-function extractError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return (err.data as { detail?: string })?.detail || `Erreur ${err.status}`;
-  }
-  return fallback;
+// HH:mm + minutes, borné à 23:59
+function addMinutes(time: string, minutes: number): string {
+  const [h, m] = time.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return time;
+  const total = Math.min(h * 60 + m + minutes, 23 * 60 + 59);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
 }
 
 // formulaire de création
@@ -136,6 +140,7 @@ interface CreateForm {
   location: string;
   description: string;
   staff: string; // "auto", "" ou id
+  prestationId: string; // "" = aucune
 }
 
 function emptyForm(day: Date, hour = 9, staff = "auto"): CreateForm {
@@ -148,6 +153,7 @@ function emptyForm(day: Date, hour = 9, staff = "auto"): CreateForm {
     location: "",
     description: "",
     staff,
+    prestationId: "",
   };
 }
 
@@ -167,6 +173,7 @@ export default function CalendarPage() {
   // équipe + filtre coiffeur
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [staffFilter, setStaffFilter] = useState<string>(ALL);
+  const [prestations, setPrestations] = useState<Prestation[]>([]);
 
   // modale de création
   const [createOpen, setCreateOpen] = useState(false);
@@ -214,9 +221,7 @@ export default function CalendarPage() {
       });
       setAppointments(res.appointments);
     } catch (err) {
-      setError(
-        extractError(err, "Impossible de charger l'agenda. Vérifiez que le backend est démarré.")
-      );
+      setError(humanError(err, "Impossible de charger l'agenda."));
     } finally {
       setIsLoading(false);
     }
@@ -231,6 +236,13 @@ export default function CalendarPage() {
     listStaff()
       .then((res) => setStaff(res.staff.filter((m) => m.is_active)))
       .catch(() => setStaff([]));
+  }, []);
+
+  // catalogue : durée + compétences
+  useEffect(() => {
+    listPrestations()
+      .then((res) => setPrestations(res.prestations.filter((p) => p.is_active)))
+      .catch(() => setPrestations([]));
   }, []);
 
   const visible = useMemo(() => {
@@ -279,7 +291,7 @@ export default function CalendarPage() {
     try {
       await exportAppointmentsIcs();
     } catch (err) {
-      toast.error(extractError(err, "Échec de l'export de l'agenda."));
+      toast.error(humanError(err, "Échec de l'export de l'agenda."));
     } finally {
       setExporting(false);
     }
@@ -316,6 +328,20 @@ export default function CalendarPage() {
     setCreateOpen(false);
   };
 
+  // prestation : titre + fin auto
+  const pickPrestation = (id: string) =>
+    setForm((f) => {
+      const prev = prestations.find((p) => p.id === f.prestationId);
+      const next = prestations.find((p) => p.id === id);
+      const keepTitle = f.title.trim() && f.title !== prev?.name;
+      return {
+        ...f,
+        prestationId: id,
+        title: next && !keepTitle ? next.name : f.title,
+        endTime: next ? addMinutes(f.startTime, next.duration_minutes) : f.endTime,
+      };
+    });
+
   const submitCreate = async (e: FormEvent) => {
     e.preventDefault();
     if (!form.title.trim()) {
@@ -342,12 +368,13 @@ export default function CalendarPage() {
         description: form.description.trim() || null,
         staff_id: form.staff && form.staff !== "auto" ? form.staff : null,
         auto_assign_staff: form.staff === "auto",
+        prestation_id: form.prestationId || null,
       });
       toast.success("Rendez-vous créé.");
       setCreateOpen(false);
       await fetchAppointments();
     } catch (err) {
-      toast.error(extractError(err, "Échec de la création du rendez-vous."));
+      toast.error(humanError(err, "Échec de la création du rendez-vous."));
     } finally {
       setSaving(false);
     }
@@ -362,7 +389,7 @@ export default function CalendarPage() {
       toast.success(status === "confirmed" ? "Rendez-vous confirmé." : "Rendez-vous annulé.");
       await fetchAppointments();
     } catch (err) {
-      toast.error(extractError(err, "Échec de la mise à jour."));
+      toast.error(humanError(err, "Échec de la mise à jour."));
     } finally {
       setActionBusy(false);
     }
@@ -378,7 +405,7 @@ export default function CalendarPage() {
       toast.success("Client marqué absent.");
       await fetchAppointments();
     } catch (err) {
-      toast.error(extractError(err, "Échec de la mise à jour."));
+      toast.error(humanError(err, "Échec de la mise à jour."));
     } finally {
       setActionBusy(false);
     }
@@ -394,7 +421,7 @@ export default function CalendarPage() {
       toast.success(updated.staff_name ? `RDV attribué à ${updated.staff_name}.` : "RDV sans coiffeur.");
       await fetchAppointments();
     } catch (err) {
-      toast.error(extractError(err, "Ce coiffeur n'est pas libre sur ce créneau."));
+      toast.error(humanError(err, "Ce coiffeur n'est pas libre sur ce créneau."));
     } finally {
       setActionBusy(false);
     }
@@ -410,7 +437,7 @@ export default function CalendarPage() {
       toast.success("Notes enregistrées.");
       await fetchAppointments();
     } catch (err) {
-      toast.error(extractError(err, "Échec de l'enregistrement des notes."));
+      toast.error(humanError(err, "Échec de l'enregistrement des notes."));
     } finally {
       setActionBusy(false);
     }
@@ -429,7 +456,7 @@ export default function CalendarPage() {
       });
       toast.success("Avis enregistré.");
     } catch (err) {
-      toast.error(extractError(err, "Échec de l'enregistrement de l'avis."));
+      toast.error(humanError(err, "Échec de l'enregistrement de l'avis."));
     } finally {
       setActionBusy(false);
     }
@@ -451,7 +478,7 @@ export default function CalendarPage() {
       setSelected(null);
       await fetchAppointments();
     } catch (err) {
-      toast.error(extractError(err, "Échec de la suppression."));
+      toast.error(humanError(err, "Échec de la suppression."));
     } finally {
       setActionBusy(false);
     }
@@ -654,6 +681,30 @@ export default function CalendarPage() {
             </div>
 
             <form onSubmit={submitCreate} className="space-y-4">
+              {prestations.length > 0 && (
+                <Field label="Prestation (optionnel)" htmlFor="appt-prestation">
+                  <select
+                    id="appt-prestation"
+                    value={form.prestationId}
+                    onChange={(e) => pickPrestation(e.target.value)}
+                    aria-describedby={staff.length > 0 ? "appt-prestation-hint" : undefined}
+                    className="h-11 px-3.5 rounded-xl bg-jenny-bg border border-jenny-divider text-[0.9rem] text-jenny-text focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral transition-all cursor-pointer"
+                  >
+                    <option value="">Aucune (titre libre)</option>
+                    {prestations.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} · {p.duration_minutes} min
+                      </option>
+                    ))}
+                  </select>
+                  {staff.length > 0 && (
+                    <span id="appt-prestation-hint" className="text-[11.5px] text-jenny-text-secondary">
+                      En automatique, Jenny choisit un coiffeur qui sait la faire.
+                    </span>
+                  )}
+                </Field>
+              )}
+
               <Field label="Titre" htmlFor="appt-title">
                 <input
                   id="appt-title"
@@ -682,7 +733,18 @@ export default function CalendarPage() {
                     id="appt-start"
                     type="time"
                     value={form.startTime}
-                    onChange={(e) => setForm((f) => ({ ...f, startTime: e.target.value }))}
+                    onChange={(e) => {
+                      const startTime = e.target.value;
+                      setForm((f) => {
+                        // durée de la prestation gardée
+                        const p = prestations.find((x) => x.id === f.prestationId);
+                        return {
+                          ...f,
+                          startTime,
+                          endTime: p ? addMinutes(startTime, p.duration_minutes) : f.endTime,
+                        };
+                      });
+                    }}
                     required
                     className="h-11 px-3.5 rounded-xl bg-jenny-bg border border-jenny-divider text-[0.9rem] text-jenny-text focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral transition-all"
                   />
