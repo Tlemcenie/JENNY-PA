@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 # ── Image frontend Jenny (Next.js 16, sortie standalone) — prête Cloud Run ──
-# NEXT_PUBLIC_API_URL est inliné AU BUILD (variable publique Next) : il faut donc
-# le passer en build-arg avec l'URL de l'API déployée.
+# NEXT_PUBLIC_API_URL et NEXT_PUBLIC_SITE_URL sont inlinés AU BUILD (variables
+# publiques Next) : il faut donc les passer en build-arg.
+#  - NEXT_PUBLIC_API_URL  : URL de l'API déployée ;
+#  - NEXT_PUBLIC_SITE_URL : URL publique du front (metadataBase, og:image,
+#    canonical, sitemap). Vide = localhost dans les balises OG.
 
 FROM node:22-slim AS deps
 WORKDIR /app
@@ -11,7 +14,9 @@ RUN npm ci
 FROM node:22-slim AS builder
 WORKDIR /app
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ARG NEXT_PUBLIC_SITE_URL=
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
     NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

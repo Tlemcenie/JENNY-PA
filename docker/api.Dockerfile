@@ -1,12 +1,14 @@
 # ──────────────────────────────────────────────
-# Jenny API — Dockerfile
+# Jenny API — Dockerfile (dev, docker compose)
+# Prod : docker/api.prod.Dockerfile
 # ──────────────────────────────────────────────
 FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HOME=/opt/hf
 
 WORKDIR /app
 
@@ -17,11 +19,19 @@ RUN apt-get update && \
         curl && \
     rm -rf /var/lib/apt/lists/*
 
+# torch CPU : pas de CUDA
+RUN pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.5,<3.0"
+
+# src avant l'install éditable
 COPY pyproject.toml ./
 COPY README.md ./
-RUN pip install -e ".[dev]" || pip install .
-
 COPY src/ ./src/
+RUN pip install -e ".[dev]"
+
+# mpnet en cache dans l'image
+ARG EMBED_MODEL=paraphrase-multilingual-mpnet-base-v2
+RUN python -c "from sentence_transformers import SentenceTransformer as S; S('${EMBED_MODEL}', device='cpu')"
+
 COPY ml/ ./ml/
 COPY nanogpt/ ./nanogpt/
 COPY pipelines/ ./pipelines/
