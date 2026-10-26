@@ -163,6 +163,7 @@ def downgrade() -> None:
     op.drop_table("messages")
     op.drop_table("conversations")
     op.drop_table("customers")
-    op.drop_table("businesses")
+    # FK vers businesses : avant
     op.drop_table("document_embeddings")
+    op.drop_table("businesses")
     op.execute("DROP EXTENSION IF EXISTS vector")
