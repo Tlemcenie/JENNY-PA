@@ -15,7 +15,7 @@ from fastapi import HTTPException
 
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
-from jenny.db.repositories.channel_account_repo import ChannelAccountRepository
+from jenny.db.repositories.channel_account_repo import ROUTED_CHANNELS, ChannelAccountRepository
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -102,10 +102,20 @@ _EXTERNAL_KEY: dict[str, str] = {
 }
 
 
+def _email_identity(data: dict) -> str:
+    """Adresse d'envoi, sinon login."""
+    for key in ("smtp_from_email", "imap_user", "smtp_username"):
+        val = str(data.get(key) or "").strip()
+        if "@" in val:
+            return val.lower()
+    # login générique type resend
+    return str(data.get("smtp_username") or data.get("imap_user") or "").strip()
+
+
 def external_account_id_for(channel: str, data: dict) -> str:
     """Identifiant pour le routage webhook."""
     if channel == "email":
-        return str(data.get("smtp_from_email") or data.get("imap_user") or data.get("smtp_username") or "")
+        return _email_identity(data)
     return str(data.get(_EXTERNAL_KEY.get(channel, "external_account_id"), "") or "")
 
 
@@ -269,7 +279,15 @@ async def resolve_raw(
         if acct is not None and acct.credentials_:
             data = decrypt_credentials(acct.credentials_)
             if data:
-                data.setdefault(_EXTERNAL_KEY.get(channel, "external_account_id"), acct.external_account_id)
+                if channel in ROUTED_CHANNELS:
+                    data.setdefault(
+                        _EXTERNAL_KEY.get(channel, "external_account_id"), acct.external_account_id
+                    )
+                elif channel == "email" and not data.get("smtp_from_email"):
+                    # expéditeur = login si adresse
+                    ident = _email_identity(data)
+                    if "@" in ident:
+                        data["smtp_from_email"] = ident
                 if _has_token(channel, data):
                     return data
     return _creds_from_env(channel)
