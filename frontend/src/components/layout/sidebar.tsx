@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { getConversationStats, subscribeToConversationEvents } from "@/lib/api";
+import { getConversationStats } from "@/lib/api";
 import {
   LayoutDashboard,
   MessageCircle,
   MessagesSquare,
-  Mail,
   Users,
   Radio,
   BookOpen,
@@ -26,58 +25,167 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  FlaskConical,
   Sparkles,
   Menu,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { ThemeSwitch } from "@/components/ui/theme-switch";
+import {
+  useRealtimeRefresh,
+  useRealtimeStatus,
+} from "@/components/providers/realtime-provider";
 
-// Navigation principale + section « Compte », dans l'ordre de la DA Jenny Front.
-const navItems = [
-  { href: "/dashboard", icon: LayoutDashboard, labelKey: "nav.dashboard", accent: false, section: "main" },
-  { href: "/chat", icon: MessageCircle, labelKey: "nav.chat", accent: true, section: "main" },
-  { href: "/assistant", icon: Sparkles, labelKey: "nav.assistant", accent: false, section: "main" },
-  { href: "/conversations", icon: MessagesSquare, labelKey: "nav.conversations", accent: false, section: "main" },
-  { href: "/calendar", icon: CalendarDays, labelKey: "nav.calendar", accent: false, section: "main" },
-  { href: "/prestations", icon: Scissors, labelKey: "nav.prestations", accent: false, section: "main" },
-  { href: "/brain", icon: Brain, labelKey: "nav.brain", accent: false, section: "main" },
-  { href: "/knowledge", icon: BookOpen, labelKey: "nav.knowledge", accent: false, section: "main" },
-  { href: "/learning", icon: Lightbulb, labelKey: "nav.learning", accent: false, section: "main" },
-  { href: "/analytics", icon: BarChart3, labelKey: "nav.analytics", accent: false, section: "main" },
-  { href: "/efficacy", icon: Gauge, labelKey: "nav.efficacy", accent: false, section: "main" },
-  { href: "/lab", icon: Cpu, labelKey: "nav.lab", accent: false, section: "main" },
-  { href: "/stats", icon: TrendingUp, labelKey: "nav.stats", accent: false, section: "main" },
-  { href: "/channels", icon: Radio, labelKey: "nav.channels", accent: false, section: "main" },
-  { href: "/customers", icon: Users, labelKey: "nav.customers", accent: false, section: "account" },
-  { href: "/messages", icon: Mail, labelKey: "nav.messages", accent: false, section: "account" },
-  { href: "/profile", icon: Settings, labelKey: "nav.settings", accent: false, section: "account" },
+type NavItem = { href: string; icon: LucideIcon; labelKey: string; accent?: boolean };
+
+// menu principal
+const mainItems: NavItem[] = [
+  { href: "/dashboard", icon: LayoutDashboard, labelKey: "nav.dashboard" },
+  { href: "/chat", icon: MessageCircle, labelKey: "nav.chat", accent: true },
+  { href: "/assistant", icon: Sparkles, labelKey: "nav.assistant" },
+  { href: "/conversations", icon: MessagesSquare, labelKey: "nav.conversations" },
+  { href: "/calendar", icon: CalendarDays, labelKey: "nav.calendar" },
+  { href: "/prestations", icon: Scissors, labelKey: "nav.prestations" },
+  { href: "/brain", icon: Brain, labelKey: "nav.brain" },
+  { href: "/knowledge", icon: BookOpen, labelKey: "nav.knowledge" },
+  { href: "/learning", icon: Lightbulb, labelKey: "nav.learning" },
+  { href: "/analytics", icon: BarChart3, labelKey: "nav.analytics" },
+  { href: "/stats", icon: TrendingUp, labelKey: "nav.stats" },
+  { href: "/channels", icon: Radio, labelKey: "nav.channels" },
 ];
+
+// vitrine technique, repliée
+const labItems: NavItem[] = [
+  { href: "/efficacy", icon: Gauge, labelKey: "nav.efficacy" },
+  { href: "/lab", icon: Cpu, labelKey: "nav.lab" },
+];
+
+// section compte
+const accountItems: NavItem[] = [
+  { href: "/customers", icon: Users, labelKey: "nav.customers" },
+  { href: "/profile", icon: Settings, labelKey: "nav.settings" },
+];
+
+const LAB_KEY = "jenny-nav-lab-open";
+
+function isActivePath(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(href + "/");
+}
+
+function NavLink({
+  item,
+  pathname,
+  expanded,
+  onClose,
+  badge,
+}: {
+  item: NavItem;
+  pathname: string;
+  expanded: boolean;
+  onClose: () => void;
+  badge?: number;
+}) {
+  const { t } = useTranslation();
+  const isActive = isActivePath(pathname, item.href);
+  const label = t(item.labelKey);
+  return (
+    <Link
+      href={item.href}
+      onClick={onClose}
+      aria-current={isActive ? "page" : undefined}
+      title={expanded ? undefined : label}
+      className={cn(
+        "flex items-center gap-3 px-3 py-2.5 rounded-2xl transition-all duration-200 ease-out group relative",
+        isActive
+          ? "text-white bg-gradient-to-r from-white/[0.13] to-white/[0.04] shadow-[0_6px_18px_-8px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.07)]"
+          : "text-white/45 hover:text-white/80 hover:bg-white/[0.055] hover:translate-x-[2px]"
+      )}
+    >
+      {isActive && (
+        <motion.div
+          layoutId="nav-indicator"
+          className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-jenny-coral rounded-r-full"
+          transition={{ type: "spring", stiffness: 350, damping: 30 }}
+        />
+      )}
+      <item.icon
+        className={cn("w-[18px] h-[18px] flex-shrink-0", item.accent && isActive && "text-jenny-coral")}
+      />
+      {expanded && <span className="text-[0.8125rem] font-medium">{label}</span>}
+      {badge !== undefined && badge > 0 && (
+        <span
+          className={cn(
+            "bg-jenny-coral text-white text-[10px] font-semibold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center",
+            expanded ? "ml-auto" : "absolute top-1 right-1"
+          )}
+          title={`${badge} conversation${badge > 1 ? "s" : ""} sans réponse`}
+        >
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
+      {item.accent && expanded && isActive && (
+        <Sparkles className="w-3.5 h-3.5 text-jenny-coral/70 ml-auto" />
+      )}
+    </Link>
+  );
+}
 
 function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; mobileOpen: boolean; onClose: () => void }) {
   const pathname = usePathname();
   const { logout, user } = useAuth();
   const { t } = useTranslation();
   const expanded = !collapsed || mobileOpen;
-  const [awaiting, setAwaiting] = useState(0);
+  const live = useRealtimeStatus();
+  const [awaiting, setAwaiting] = useState<number | null>(null);
+  const [statsFailed, setStatsFailed] = useState(false);
+  const [labOpen, setLabOpen] = useState(false);
+  const labActive = labItems.some((i) => isActivePath(pathname, i.href));
 
-  // Compteur « à traiter » live (mis à jour via SSE).
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const refresh = () => getConversationStats().then((s) => setAwaiting(s.awaiting)).catch(() => {});
-    refresh();
-    const unsub = subscribeToConversationEvents(() => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(refresh, 600);
-    });
-    return () => {
-      unsub();
-      if (timer) clearTimeout(timer);
-    };
+  // compteur à traiter
+  const refresh = useCallback(() => {
+    getConversationStats()
+      .then((s) => {
+        setAwaiting(s.awaiting);
+        setStatsFailed(false);
+      })
+      .catch(() => setStatsFailed(true));
   }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useRealtimeRefresh(refresh);
+
+  // groupe labo mémorisé
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (localStorage.getItem(LAB_KEY) === "1") setLabOpen(true);
+    } catch {
+      // stockage bloqué
+    }
+  }, []);
+
+  const toggleLab = () => {
+    setLabOpen((o) => {
+      const next = !o;
+      try {
+        localStorage.setItem(LAB_KEY, next ? "1" : "0");
+      } catch {
+        // tant pis
+      }
+      return next;
+    });
+  };
+
+  const showLab = labOpen || labActive;
 
   return (
     <>
@@ -106,74 +214,66 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
           </span>
         )}
         {mobileOpen && (
-          <button onClick={onClose} className="ml-auto text-white/40 hover:text-white/70 p-1">
+          <button onClick={onClose} aria-label="Fermer le menu" className="ml-auto text-white/40 hover:text-white/70 p-1">
             <X className="w-5 h-5" />
           </button>
         )}
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 py-3 px-2.5 space-y-0.5 overflow-y-auto">
-        {navItems.map((item, i) => {
-          const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
-          const showSection =
-            expanded && item.section === "account" && navItems[i - 1]?.section !== "account";
-          return (
-            <div key={item.href} className="contents">
-              {showSection && (
-                <div className="px-3.5 pt-4 pb-1.5 font-mono text-[10px] tracking-[0.16em] uppercase text-white/25 font-semibold">
-                  {t("nav.account")}
-                </div>
-              )}
-            <Link
-              href={item.href}
-              onClick={onClose}
-              className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-2xl transition-all duration-200 ease-out group relative",
-                isActive
-                  ? "text-white bg-gradient-to-r from-white/[0.13] to-white/[0.04] shadow-[0_6px_18px_-8px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.07)]"
-                  : "text-white/45 hover:text-white/80 hover:bg-white/[0.055] hover:translate-x-[2px]"
-              )}
-            >
-              {isActive && (
-                <motion.div
-                  layoutId="nav-indicator"
-                  className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-jenny-coral rounded-r-full"
-                  transition={{ type: "spring", stiffness: 350, damping: 30 }}
-                />
-              )}
-              <item.icon
-                className={cn(
-                  "w-[18px] h-[18px] flex-shrink-0",
-                  item.accent && isActive && "text-jenny-coral"
-                )}
+      <nav aria-label="Navigation principale" className="flex-1 py-3 px-2.5 space-y-0.5 overflow-y-auto">
+        {mainItems.map((item) => (
+          <NavLink
+            key={item.href}
+            item={item}
+            pathname={pathname}
+            expanded={expanded}
+            onClose={onClose}
+            badge={item.href === "/conversations" ? awaiting ?? 0 : undefined}
+          />
+        ))}
+
+        {/* groupe labo */}
+        <button
+          type="button"
+          onClick={toggleLab}
+          aria-expanded={showLab}
+          title={expanded ? undefined : t("nav.labGroup", { defaultValue: "Labo" })}
+          className={cn(
+            "w-full flex items-center gap-3 px-3 pt-4 pb-1.5 rounded-xl text-white/30 hover:text-white/60 transition-colors",
+            !expanded && "justify-center px-0"
+          )}
+        >
+          <FlaskConical className={cn("w-[15px] h-[15px] flex-shrink-0", expanded && "hidden")} />
+          {expanded && (
+            <>
+              <span className="font-mono text-[10px] tracking-[0.16em] uppercase font-semibold">
+                {t("nav.labGroup", { defaultValue: "Labo" })}
+              </span>
+              <ChevronDown
+                className={cn("w-3.5 h-3.5 ml-auto transition-transform", showLab ? "rotate-0" : "-rotate-90")}
               />
-              {expanded && (
-                <span className="text-[0.8125rem] font-medium">{t(item.labelKey)}</span>
-              )}
-              {item.href === "/conversations" && awaiting > 0 && (
-                <span
-                  className={cn(
-                    "bg-jenny-coral text-white text-[10px] font-semibold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center",
-                    expanded ? "ml-auto" : "absolute top-1 right-1"
-                  )}
-                  title={`${awaiting} conversation${awaiting > 1 ? "s" : ""} à traiter`}
-                >
-                  {awaiting > 99 ? "99+" : awaiting}
-                </span>
-              )}
-              {item.accent && expanded && isActive && (
-                <Sparkles className="w-3.5 h-3.5 text-jenny-coral/70 ml-auto" />
-              )}
-            </Link>
-            </div>
-          );
-        })}
+            </>
+          )}
+        </button>
+        {showLab &&
+          labItems.map((item) => (
+            <NavLink key={item.href} item={item} pathname={pathname} expanded={expanded} onClose={onClose} />
+          ))}
+
+        {expanded && (
+          <div className="px-3.5 pt-4 pb-1.5 font-mono text-[10px] tracking-[0.16em] uppercase text-white/25 font-semibold">
+            {t("nav.account")}
+          </div>
+        )}
+        {accountItems.map((item) => (
+          <NavLink key={item.href} item={item} pathname={pathname} expanded={expanded} onClose={onClose} />
+        ))}
       </nav>
 
       {/* Footer */}
       <div className="p-2.5 border-t border-white/[0.06]">
-        {/* Carte auto-pilote (DA) */}
+        {/* état réel du flux */}
         {expanded && (
           <div
             className="mx-1 mb-2 p-3.5 rounded-xl border border-jenny-coral/20"
@@ -182,19 +282,41 @@ function SidebarInner({ collapsed, mobileOpen, onClose }: { collapsed: boolean; 
                 "linear-gradient(135deg, rgba(255,127,106,0.12), rgba(255,127,106,0.04))",
             }}
           >
-            <div className="font-mono text-[10px] tracking-[0.14em] uppercase text-jenny-coral font-semibold mb-2">
-              {t("nav.autopilot")}
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="font-mono text-[10px] tracking-[0.14em] uppercase text-jenny-coral font-semibold">
+                {t("nav.liveTitle", { defaultValue: "Suivi en direct" })}
+              </span>
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10.5px] font-semibold tracking-wide",
+                  live
+                    ? "bg-jenny-success/15 border-jenny-success/25 text-jenny-success"
+                    : "bg-jenny-warning/15 border-jenny-warning/25 text-jenny-warning"
+                )}
+              >
+                <span className="relative flex w-1.5 h-1.5">
+                  {live && (
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-current opacity-60 animate-ping" />
+                  )}
+                  <span className="relative inline-flex w-1.5 h-1.5 rounded-full bg-current" />
+                </span>
+                {live
+                  ? t("nav.liveOn", { defaultValue: "Connecté" })
+                  : t("nav.liveOff", { defaultValue: "Reconnexion…" })}
+              </span>
             </div>
-            <p className="text-white/70 text-[12px] leading-snug mb-2.5">{t("nav.autopilotDesc")}</p>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-jenny-coral/15 border border-jenny-coral/25">
-              <span className="relative flex w-1.5 h-1.5">
-                <span className="absolute inline-flex h-full w-full rounded-full bg-jenny-coral opacity-60 animate-ping" />
-                <span className="relative inline-flex w-1.5 h-1.5 rounded-full bg-jenny-coral" />
-              </span>
-              <span className="text-jenny-coral text-[10.5px] font-semibold tracking-wide">
-                {t("nav.autopilotOn")}
-              </span>
-            </span>
+            <p className="text-white/70 text-[12px] leading-snug">
+              {awaiting === null
+                ? statsFailed
+                  ? t("nav.liveError", { defaultValue: "Serveur injoignable pour le moment." })
+                  : t("nav.liveUnknown", { defaultValue: "Chargement des conversations…" })
+                : awaiting > 0
+                  ? t("nav.liveAwaiting", {
+                      count: awaiting,
+                      defaultValue: `${awaiting} conversation${awaiting > 1 ? "s" : ""} sans réponse.`,
+                    })
+                  : t("nav.liveClear", { defaultValue: "Aucune conversation en attente." })}
+            </p>
           </div>
         )}
         {expanded && user && (
@@ -236,6 +358,7 @@ export function Sidebar() {
       {/* Mobile trigger */}
       <button
         onClick={() => setMobileOpen(true)}
+        aria-label="Ouvrir le menu"
         className="fixed top-3.5 left-3.5 z-50 md:hidden w-10 h-10 rounded-xl bg-jenny-sidebar flex items-center justify-center text-white/80 shadow-lg"
       >
         <Menu className="w-5 h-5" />
@@ -280,7 +403,8 @@ export function Sidebar() {
         {/* Collapse toggle */}
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="absolute -right-3 top-[72px] w-6 h-6 bg-white border border-jenny-divider rounded-full flex items-center justify-center text-jenny-text-secondary/70 hover:text-jenny-text hover:border-jenny-coral/30 transition-all shadow-sm"
+          aria-label={collapsed ? "Déplier le menu" : "Replier le menu"}
+          className="absolute -right-3 top-[72px] w-6 h-6 bg-jenny-surface border border-jenny-divider rounded-full flex items-center justify-center text-jenny-text-secondary/70 hover:text-jenny-text hover:border-jenny-coral/30 transition-all shadow-sm"
         >
           {collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronLeft className="w-3 h-3" />}
         </button>

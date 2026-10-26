@@ -14,7 +14,7 @@ import {
   Check,
   Cpu,
 } from "lucide-react";
-import { getJennyMetrics, type JennyMetrics, ApiError } from "@/lib/api";
+import { getJennyMetrics, humanError, type JennyMetrics } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/shared/error-state";
@@ -31,7 +31,9 @@ import {
 // Toute clé inconnue est rendue telle quelle (humanisée) plutôt qu'ignorée,
 // afin de ne jamais masquer un critère renvoyé par le back.
 const CRITERION_LABELS: Record<string, string> = {
-  persona_humaine: "Persona humaine",
+  pas_de_fuite_interne: "Pas de jargon technique",
+  // ancien nom du critère
+  persona_humaine: "Ton naturel (ancien critère)",
   langue: "Bonne langue",
   clarification: "Clarification",
   lacune_detectee: "Lacunes détectées",
@@ -154,17 +156,7 @@ export default function EfficacyPage() {
     try {
       setMetrics(await getJennyMetrics());
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(
-          `Erreur ${err.status}: ${
-            (err.data as { detail?: string })?.detail || err.statusText
-          }`
-        );
-      } else {
-        setError(
-          "Impossible de charger l'efficacité de Jenny. Vérifiez que le backend est démarré."
-        );
-      }
+      setError(humanError(err, "Impossible de charger l'efficacité de Jenny."));
     } finally {
       setIsLoading(false);
     }
@@ -270,7 +262,7 @@ export default function EfficacyPage() {
                             </span>
                           </span>
                         </div>
-                        <div className="h-2 rounded-full bg-jenny-bg-tint overflow-hidden">
+                        <div className="h-2 rounded-full bg-jenny-divider/40 overflow-hidden">
                           <motion.div
                             className="h-full rounded-full"
                             style={{ background: color, transformOrigin: "left" }}
@@ -303,6 +295,9 @@ export default function EfficacyPage() {
                   d&apos;essai exécuté, le score d&apos;efficacité et le détail par critère
                   s&apos;afficheront ici.
                 </p>
+                <code className="mt-2 inline-block font-mono text-[12px] px-2.5 py-1.5 rounded-lg bg-jenny-bg border border-jenny-divider text-jenny-text">
+                  python -m jenny.scripts.run_eval
+                </code>
               </div>
             </Card>
           )}
@@ -350,7 +345,7 @@ export default function EfficacyPage() {
             sub={
               !metrics.satisfaction || metrics.satisfaction.total_rated === 0
                 ? "aucun avis"
-                : `${metrics.satisfaction.positive} 👍 · ${metrics.satisfaction.negative} 👎`
+                : `${metrics.satisfaction.positive} positifs · ${metrics.satisfaction.negative} négatifs`
             }
           />
         </motion.div>

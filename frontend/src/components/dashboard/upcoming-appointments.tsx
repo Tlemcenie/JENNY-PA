@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { easeOutExpo, staggerContainer, staggerItem } from "@/lib/motion";
+import { useRealtimeRefresh } from "@/components/providers/realtime-provider";
 
 // Pastille de statut — aligne les libellés/couleurs sur la page calendrier.
 const STATUS_META: Record<string, { label: string; dot: string; text: string }> = {
@@ -56,27 +57,35 @@ export function UpcomingAppointments() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const activeRef = useRef(true);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await listAppointments({
+        start: new Date().toISOString(),
+        limit: 5,
+      });
+      if (!activeRef.current) return;
+      setAppointments(res.appointments);
+      setHasError(false);
+    } catch {
+      // erreur discrète, réessayable
+      if (activeRef.current) setHasError(true);
+    } finally {
+      if (activeRef.current) setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const res = await listAppointments({
-          start: new Date().toISOString(),
-          limit: 5,
-        });
-        if (active) setAppointments(res.appointments);
-      } catch {
-        // Erreur silencieuse : un échec ne doit pas casser le dashboard.
-        if (active) setHasError(true);
-      } finally {
-        if (active) setIsLoading(false);
-      }
-    })();
+    activeRef.current = true;
+    void load();
     return () => {
-      active = false;
+      activeRef.current = false;
     };
-  }, []);
+  }, [load]);
+
+  // rdv pris par jenny en direct
+  useRealtimeRefresh(() => void load(), 800);
 
   return (
     <Card className="p-6">
@@ -116,11 +125,20 @@ export function UpcomingAppointments() {
             </div>
           ))}
         </div>
-      ) : hasError ? (
-        // Erreur discrète
-        <p className="text-[13px] text-jenny-text-secondary py-2">
-          Impossible de charger les rendez-vous pour le moment.
-        </p>
+      ) : hasError && appointments.length === 0 ? (
+        // erreur discrète
+        <div className="flex items-center gap-3 flex-wrap py-2">
+          <p className="text-[13px] text-jenny-text-secondary flex-1">
+            Impossible de charger les rendez-vous pour le moment.
+          </p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="text-[12.5px] font-semibold text-jenny-coral hover:underline underline-offset-2"
+          >
+            Réessayer
+          </button>
+        </div>
       ) : appointments.length === 0 ? (
         // État vide élégant
         <div className="flex flex-col items-center justify-center text-center py-8 px-4">

@@ -9,10 +9,10 @@ import {
   getUnreadNotificationCount,
   markNotificationRead,
   markAllNotificationsRead,
-  subscribeToConversationEvents,
   type NotificationItem,
 } from "@/lib/api";
 import { RelativeTime } from "@/components/ui/relative-time";
+import { useRealtimeRefresh } from "@/components/providers/realtime-provider";
 import { listStagger, listItem } from "@/lib/motion";
 
 const KIND_ICON: Record<string, typeof Bell> = {
@@ -33,7 +33,13 @@ export function NotificationBell() {
   const [unread, setUnread] = useState(0);
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [listError, setListError] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const openRef = useRef(open);
+
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
 
   const refreshCount = useCallback(() => {
     getUnreadNotificationCount()
@@ -43,26 +49,28 @@ export function NotificationBell() {
 
   const loadList = useCallback(() => {
     setLoading(true);
+    setListError(false);
     listNotifications(false, 30)
       .then((r) => {
         setItems(r.notifications);
         setUnread(r.unread);
       })
-      .catch(() => {})
+      .catch(() => setListError(true))
       .finally(() => setLoading(false));
   }, []);
 
-  // Compteur initial + rafraîchissement sur événements temps réel et en
-  // secours toutes les 60 s (certaines notifs viennent du worker, hors SSE).
+  // compteur initial + secours 60 s
   useEffect(() => {
     refreshCount();
-    const unsub = subscribeToConversationEvents(() => refreshCount());
     const poll = setInterval(refreshCount, 60000);
-    return () => {
-      unsub();
-      clearInterval(poll);
-    };
+    return () => clearInterval(poll);
   }, [refreshCount]);
+
+  // flux partagé, regroupé
+  useRealtimeRefresh(() => {
+    if (openRef.current) loadList();
+    else refreshCount();
+  });
 
   // Charge la liste à l'ouverture (synchro avec un système externe : l'API).
   useEffect(() => {
@@ -152,6 +160,19 @@ export function NotificationBell() {
               {loading && items.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm text-jenny-text-secondary">
                   Chargement…
+                </div>
+              ) : listError && items.length === 0 ? (
+                <div className="px-4 py-8 flex flex-col items-center gap-2 text-center">
+                  <span className="text-sm text-jenny-text-secondary">
+                    Impossible de charger les notifications.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={loadList}
+                    className="text-xs font-semibold text-jenny-coral hover:underline underline-offset-2"
+                  >
+                    Réessayer
+                  </button>
                 </div>
               ) : items.length === 0 ? (
                 <div className="px-4 py-10 flex flex-col items-center gap-2 text-jenny-text-secondary">

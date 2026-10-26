@@ -25,7 +25,7 @@ import {
   type KnowledgeGap,
   type GapStats,
   type GapRecap,
-  ApiError,
+  humanError,
 } from "@/lib/api";
 import { channelLabel, intentLabel, formatRelativeTime, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import { SkeletonCard } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { staggerContainer, staggerItem, fadeInUp, springSnappy } from "@/lib/motion";
 
 // ── Filtre de statut (onglets) ──
@@ -61,6 +62,7 @@ const STAT_CARDS: {
 
 export default function LearningPage() {
   const toast = useToast();
+  const confirm = useConfirm();
 
   const [filter, setFilter] = useState<StatusFilter>("open");
   const [gaps, setGaps] = useState<KnowledgeGap[]>([]);
@@ -94,11 +96,7 @@ export default function LearningPage() {
       setGaps(gapsData.gaps || []);
       setStats(statsData);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(`Erreur ${err.status}: ${(err.data as { detail?: string })?.detail || err.statusText}`);
-      } else {
-        setError("Impossible de charger les lacunes d'apprentissage.");
-      }
+      setError(humanError(err, "Impossible de charger les lacunes d'apprentissage."));
     } finally {
       setIsLoading(false);
     }
@@ -157,10 +155,15 @@ export default function LearningPage() {
     setKbWarningId(null);
     try {
       const res = await answerKnowledgeGap(gap.id, answer, saveToKb);
-      // KB indisponible alors que la case était cochée → avertissement discret.
+      // base indispo : on prévient
       if (saveToKb && !res.saved_to_kb) {
-        setKbWarningId(gap.id);
-        toast.success("Réponse enregistrée.");
+        if (filter === "open") {
+          // la carte va disparaître
+          toast.warning("Réponse enregistrée. L'ajout à la base se fera plus tard.");
+        } else {
+          setKbWarningId(gap.id);
+          toast.success("Réponse enregistrée.");
+        }
       } else if (res.saved_to_kb) {
         toast.success("Réponse enregistrée et ajoutée à la base.");
       } else {
@@ -177,11 +180,7 @@ export default function LearningPage() {
       // Le récap reflète l'état des lacunes ouvertes → on l'invalide.
       setRecap(null);
     } catch (err) {
-      const msg =
-        err instanceof ApiError
-          ? (err.data as { detail?: string })?.detail || "Échec de l'enregistrement."
-          : "Impossible d'enregistrer la réponse.";
-      toast.error(msg);
+      toast.error(humanError(err, "Impossible d'enregistrer la réponse."));
     } finally {
       setSubmittingId(null);
     }
@@ -189,7 +188,13 @@ export default function LearningPage() {
 
   // ── Ignore une lacune (confirmation légère) ──
   const handleDismiss = async (gap: KnowledgeGap) => {
-    if (!window.confirm("Ignorer cette question ? Jenny ne la signalera plus.")) return;
+    const ok = await confirm({
+      title: "Ignorer cette question ?",
+      message: "Jenny ne la signalera plus.",
+      confirmLabel: "Ignorer",
+      danger: true,
+    });
+    if (!ok) return;
     setDismissingId(gap.id);
     try {
       await dismissKnowledgeGap(gap.id);
@@ -206,7 +211,7 @@ export default function LearningPage() {
 
   const emptyCopy: Record<StatusFilter, { title: string; description: string }> = {
     open: {
-      title: "Jenny a répondu à tout 🎉",
+      title: "Jenny a répondu à tout",
       description:
         "Aucune question en attente. Quand un client posera une question à laquelle Jenny ne sait pas répondre, elle apparaîtra ici.",
     },
@@ -228,9 +233,9 @@ export default function LearningPage() {
           <div className="font-mono text-[11px] tracking-[0.22em] uppercase text-jenny-coral mb-2">
             — apprentissage —
           </div>
-          <h2 className="font-display text-[clamp(28px,4vw,36px)] leading-[1] tracking-[-0.02em] text-jenny-text">
+          <h1 className="font-display text-[clamp(28px,4vw,36px)] leading-[1] tracking-[-0.02em] text-jenny-text">
             Ce que Jenny doit <span className="italic text-jenny-coral">apprendre.</span>
-          </h2>
+          </h1>
           <p className="text-sm text-jenny-text-secondary mt-0.5">
             Répondez aux questions de clients que Jenny n&apos;a pas su traiter. Vos réponses
             enrichissent sa base de connaissances — elle saura répondre la prochaine fois.

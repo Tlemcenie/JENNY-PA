@@ -11,7 +11,8 @@ import {
   Inbox,
   RefreshCw,
 } from "lucide-react";
-import { listMessages, type Message, ApiError } from "@/lib/api";
+import Link from "next/link";
+import { humanError, listMessages, type Message } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { formatRelativeTime, channelLabel, statusLabel, categoryLabel, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -39,7 +40,13 @@ export default function MessagesPage() {
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
 
   const fetchMessages = useCallback(async (resetCursor = true) => {
-    if (!businessId) return;
+    // pas de salon : on sort proprement
+    if (!businessId) {
+      setMessages([]);
+      setHasMore(false);
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     setError(null);
     try {
@@ -57,11 +64,7 @@ export default function MessagesPage() {
       setCursor(data.next_cursor);
       setHasMore(!!data.next_cursor);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(`Erreur ${err.status}: ${(err.data as { detail?: string })?.detail || err.statusText}`);
-      } else {
-        setError("Impossible de charger les messages. Vérifiez que le backend est démarré.");
-      }
+      setError(humanError(err, "Impossible de charger les messages."));
     } finally {
       setIsLoading(false);
     }
@@ -110,6 +113,14 @@ export default function MessagesPage() {
           animate="show"
           className="p-4 border-b border-jenny-divider space-y-3"
         >
+          <h1 className="sr-only">Messages</h1>
+          <p className="text-[12px] text-jenny-text-secondary leading-snug">
+            Journal en lecture seule. Pour répondre, passez par{" "}
+            <Link href="/conversations" className="text-jenny-coral font-semibold hover:underline">
+              Conversations
+            </Link>
+            .
+          </p>
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-jenny-text-secondary">
               {messages.length} message{messages.length > 1 ? "s" : ""}
@@ -163,7 +174,7 @@ export default function MessagesPage() {
                 className={cn(
                   "px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-all",
                   selectedStatus === st
-                    ? "bg-jenny-text text-white"
+                    ? "bg-jenny-text text-jenny-surface"
                     : "bg-jenny-divider/30 text-jenny-text-secondary hover:bg-jenny-divider"
                 )}
               >
@@ -313,9 +324,12 @@ export default function MessagesPage() {
               {selectedMessage.conversation_id && (
                 <Card className="p-4">
                   <span className="text-xs text-jenny-text-secondary">Conversation</span>
-                  <p className="text-xs font-mono text-jenny-text-secondary mt-0.5 truncate">
-                    {selectedMessage.conversation_id}
-                  </p>
+                  <Link
+                    href={`/conversations?open=${selectedMessage.conversation_id}`}
+                    className="block text-sm font-semibold text-jenny-coral hover:underline mt-0.5"
+                  >
+                    Ouvrir la conversation
+                  </Link>
                 </Card>
               )}
             </div>

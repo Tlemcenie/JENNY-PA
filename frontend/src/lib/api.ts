@@ -18,6 +18,24 @@ class ApiError extends Error {
   }
 }
 
+/** message d'erreur lisible */
+export function humanError(err: unknown, fallback = "Impossible de charger ces données."): string {
+  if (err instanceof ApiError) {
+    const detail = (err.data as { detail?: unknown } | undefined)?.detail;
+    if (err.status === 401) return "Votre session a expiré. Reconnectez-vous.";
+    if (err.status === 403) return "Vous n'avez pas accès à cette information.";
+    if (err.status === 404) return "Cette information est introuvable.";
+    if (err.status >= 500) return "Le service est momentanément indisponible. Réessayez dans un instant.";
+    if (typeof detail === "string" && detail.trim()) return detail;
+    return fallback;
+  }
+  // fetch coupé, pas de réseau
+  if (err instanceof TypeError) {
+    return "Connexion au serveur impossible. Vérifiez votre connexion puis réessayez.";
+  }
+  return fallback;
+}
+
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("jenny_token");
@@ -466,6 +484,7 @@ export interface BusinessConfig {
 // personnalité configurable
 export interface JennyPersona {
   tone?: string; // pro | cool | vendeur | chaleureux
+  sector?: string; // secteur du salon
   sliders?: Record<string, number>; // formel↔décontracté, concis↔détaillé, …
   tutoiement?: boolean;
   vocab?: string[];
@@ -1083,16 +1102,53 @@ export interface RealtimeEvent {
   notification_id?: string | null;
 }
 
-/** abonnement au flux SSE */
-export function subscribeToConversationEvents(
-  onEvent: (event: RealtimeEvent) => void,
-  onConnectionChange?: (connected: boolean) => void
-): () => void {
+interface RealtimeListener {
+  onEvent: (event: RealtimeEvent) => void;
+  onConnectionChange?: (connected: boolean) => void;
+}
+
+// un seul flux par onglet
+const realtimeHub: {
+  listeners: Set<RealtimeListener>;
+  connected: boolean;
+  stop: (() => void) | null;
+} = { listeners: new Set(), connected: false, stop: null };
+
+function setRealtimeConnected(next: boolean): void {
+  if (realtimeHub.connected === next) return;
+  realtimeHub.connected = next;
+  for (const l of [...realtimeHub.listeners]) {
+    try {
+      l.onConnectionChange?.(next);
+    } catch {
+      // un abonné cassé n'arrête pas les autres
+    }
+  }
+}
+
+function dispatchRealtime(event: RealtimeEvent): void {
+  for (const l of [...realtimeHub.listeners]) {
+    try {
+      l.onEvent(event);
+    } catch {
+      // idem
+    }
+  }
+}
+
+/** délai de reconnexion avec jitter */
+export function realtimeBackoff(attempt: number, random: () => number = Math.random): number {
+  const base = Math.min(15000, 1000 * 2 ** Math.max(0, attempt));
+  // moitié fixe, moitié au hasard
+  return Math.round(base / 2 + random() * (base / 2));
+}
+
+function startRealtimeStream(): () => void {
   const controller = new AbortController();
   let closed = false;
 
   async function loop() {
-    let backoff = 1000;
+    let attempt = 0;
     while (!closed) {
       try {
         const token = getToken();
@@ -1101,9 +1157,10 @@ export function subscribeToConversationEvents(
           signal: controller.signal,
         });
         if (!res.ok || !res.body) throw new Error(`SSE ${res.status}`);
+        if (closed) break; // coupé entre-temps
 
-        onConnectionChange?.(true);
-        backoff = 1000;
+        setRealtimeConnected(true);
+        attempt = 0;
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -1121,20 +1178,23 @@ export function subscribeToConversationEvents(
             if (!dataLine) continue; // heartbeat ou ligne d'event
             const payload = dataLine.slice(5).trim();
             if (!payload) continue;
+            let parsed: RealtimeEvent;
             try {
-              onEvent(JSON.parse(payload) as RealtimeEvent);
+              parsed = JSON.parse(payload) as RealtimeEvent;
             } catch {
-              // trame partielle, on ignore
+              continue; // trame partielle
             }
+            if (!closed) dispatchRealtime(parsed);
           }
         }
       } catch {
         if (closed || controller.signal.aborted) break;
-        onConnectionChange?.(false);
       }
       if (closed) break;
-      await new Promise((r) => setTimeout(r, backoff));
-      backoff = Math.min(backoff * 2, 15000);
+      // flux coupé, même proprement
+      setRealtimeConnected(false);
+      await new Promise((r) => setTimeout(r, realtimeBackoff(attempt)));
+      attempt += 1;
     }
   }
 
@@ -1142,8 +1202,37 @@ export function subscribeToConversationEvents(
 
   return () => {
     closed = true;
-    onConnectionChange?.(false);
     controller.abort();
+  };
+}
+
+/** abonnement au flux SSE partagé */
+export function subscribeToConversationEvents(
+  onEvent: (event: RealtimeEvent) => void,
+  onConnectionChange?: (connected: boolean) => void
+): () => void {
+  const listener: RealtimeListener = { onEvent, onConnectionChange };
+  realtimeHub.listeners.add(listener);
+
+  if (!realtimeHub.stop) {
+    realtimeHub.connected = false;
+    realtimeHub.stop = startRealtimeStream();
+  } else if (realtimeHub.connected && onConnectionChange) {
+    // déjà connecté : on prévient
+    queueMicrotask(() => {
+      if (realtimeHub.listeners.has(listener) && realtimeHub.connected) onConnectionChange(true);
+    });
+  }
+
+  return () => {
+    if (!realtimeHub.listeners.delete(listener)) return;
+    onConnectionChange?.(false);
+    // plus personne : on coupe
+    if (realtimeHub.listeners.size === 0 && realtimeHub.stop) {
+      realtimeHub.stop();
+      realtimeHub.stop = null;
+      realtimeHub.connected = false;
+    }
   };
 }
 

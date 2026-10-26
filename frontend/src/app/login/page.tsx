@@ -6,16 +6,13 @@ import Link from "next/link";
 import Image from "next/image";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useAuth } from "@/lib/auth-context";
-import { ApiError } from "@/lib/api";
+import { ApiError, humanError } from "@/lib/api";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { BrandedLoader } from "@/components/ui/branded-loader";
 import { PressableButton } from "@/components/ui/pressable-button";
 import { staggerContainer, staggerItem } from "@/lib/motion";
 
-// Page de connexion — DA « Jenny Front » : split-screen, formulaire sur fond
-// clair à gauche, panneau nuit profonde + citation éditoriale et mascotte
-// flottante à droite. Recrée l'écran ScreenLogin du handoff. La logique d'auth
-// (état, handler de soumission, redirections) est strictement préservée.
+// page de connexion, écran partagé
 
 const NIGHT_BG =
   "radial-gradient(ellipse at 30% 20%, rgba(255,127,106,0.18) 0%, transparent 55%), #0E0B14";
@@ -46,9 +43,14 @@ export default function LoginPage() {
           router.push(`/verify?email=${encodeURIComponent(email)}`);
           return;
         }
-        setError(detail || "Email ou mot de passe incorrect.");
+        if (err.status === 401) {
+          setError(detail || "Email ou mot de passe incorrect.");
+        } else {
+          setError(humanError(err, "Connexion impossible pour le moment. Réessayez."));
+        }
       } else {
-        setError("Impossible de se connecter au serveur. Vérifiez que le backend est lancé sur localhost:8000.");
+        // serveur injoignable
+        setError("Connexion au serveur impossible pour le moment. Vérifiez votre connexion et réessayez.");
       }
     } finally {
       setIsLoading(false);
@@ -89,9 +91,8 @@ export default function LoginPage() {
             variants={staggerItem}
             className="text-[14.5px] leading-[1.55] text-jenny-text-secondary mb-9"
           >
-            Pendant votre absence, elle a traité{" "}
-            <b className="text-jenny-text font-semibold">47 conversations</b> et signalé 3 messages
-            qui demandent votre attention.
+            Retrouvez vos conversations, votre agenda et les questions que Jenny vous a
+            mises de côté.
           </motion.p>
 
           <motion.form
@@ -212,26 +213,28 @@ export default function LoginPage() {
         style={{ background: NIGHT_BG }}
       >
         <div className="absolute inset-0 p-16 flex flex-col">
-          {/* Citation */}
+          {/* ce que fait jenny, sans faux avis */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
-            className="my-auto max-w-[480px]"
+            className="relative z-10 my-auto max-w-[440px]"
           >
-            <p className="font-display italic text-[48px] leading-[1.1] tracking-[-0.015em] text-[#F4F1ED]/95 mb-8">
-              « En 3 semaines avec Jenny, on a doublé notre conversion sur Insta. Je n&apos;ouvre
-              quasi plus l&apos;app moi-même. »
+            <p className="font-display italic text-[44px] leading-[1.1] tracking-[-0.015em] text-[#F4F1ED]/95 mb-8">
+              L&apos;assistante virtuelle de votre salon, qui vous passe la main quand il le faut.
             </p>
-            <div className="flex items-center gap-3.5">
-              <div className="w-11 h-11 rounded-full bg-jenny-coral flex items-center justify-center text-white font-bold">
-                CL
-              </div>
-              <div>
-                <div className="text-[14.5px] font-semibold text-white">Camille Laurent</div>
-                <div className="text-[12.5px] text-[#F4F1ED]/50">Fondatrice, Atelier Caramel</div>
-              </div>
-            </div>
+            <ul className="space-y-3">
+              {[
+                "WhatsApp, Instagram et e-mail au même endroit",
+                "Rendez-vous posés directement dans votre agenda",
+                "Se présente toujours comme assistante virtuelle",
+              ].map((line) => (
+                <li key={line} className="flex items-center gap-3 text-[14.5px] text-[#F4F1ED]/80">
+                  <span className="w-1.5 h-1.5 rounded-full bg-jenny-coral shrink-0" />
+                  {line}
+                </li>
+              ))}
+            </ul>
           </motion.div>
 
           {/* Mascotte flottante */}

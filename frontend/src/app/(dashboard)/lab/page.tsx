@@ -21,7 +21,7 @@ import {
   type NanoGptTraining,
   type ModelComparison,
   type ModelComparisonResult,
-  ApiError,
+  humanError,
 } from "@/lib/api";
 
 /** Page labo du modèle maison. */
@@ -108,7 +108,7 @@ function CodeBlock({ lines }: { lines: string[] }) {
     <pre
       className="jmono"
       style={{
-        background: "var(--bg-tint)",
+        background: "var(--bg)",
         border: "1px solid var(--divider)",
         borderRadius: 10,
         padding: "12px 14px",
@@ -373,7 +373,7 @@ function ModelRow({ r }: { r: ModelComparisonResult }) {
               {r.label}
             </span>
             {r.available ? (
-              <span className="jbadge jbadge--mint">CONNECTÉ</span>
+              <span className="jbadge jbadge--mint">DISPONIBLE</span>
             ) : (
               <span className="jbadge jbadge--slate">INDISPONIBLE</span>
             )}
@@ -430,7 +430,7 @@ function ModelRow({ r }: { r: ModelComparisonResult }) {
           style={{
             fontSize: 12,
             color: "var(--text-2)",
-            background: "var(--bg-tint)",
+            background: "var(--bg)",
             borderRadius: 8,
             padding: "7px 10px",
           }}
@@ -470,7 +470,7 @@ function ModelRow({ r }: { r: ModelComparisonResult }) {
             display: "flex",
             flexDirection: "column",
             gap: 8,
-            background: "var(--bg-tint)",
+            background: "var(--bg)",
             border: "1px solid var(--divider)",
             borderRadius: 10,
             padding: "10px 12px",
@@ -504,14 +504,16 @@ function ComparisonCard({ comparison }: { comparison: ModelComparison }) {
   const results = comparison.results;
   const hasData = results.length > 0;
 
-  // données des barres
-  const barData = results.map((r) => ({
-    name: r.label.split("—")[0].trim() || r.label,
-    score: r.score_pct ?? 0,
-    latency: r.avg_latency_ms ?? 0,
-    available: r.available,
-    isNano: r.key === "nanogpt" || r.provider === "nanogpt",
-  }));
+  // que les modèles mesurés
+  const barData = results
+    .filter((r) => r.available && (r.score_pct != null || r.avg_latency_ms != null))
+    .map((r) => ({
+      name: r.label.split("—")[0].trim() || r.label,
+      score: r.score_pct ?? 0,
+      latency: r.avg_latency_ms ?? 0,
+      available: r.available,
+      isNano: r.key === "nanogpt" || r.provider === "nanogpt",
+    }));
 
   const scoreColor = (d: (typeof barData)[number]) =>
     !d.available ? SLATE : d.isNano ? SLATE : "var(--coral)";
@@ -576,10 +578,11 @@ function ComparisonCard({ comparison }: { comparison: ModelComparison }) {
           </div>
 
           {/* deux mini-graphes */}
+          {barData.length > 0 && (
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(260px, 100%), 1fr))",
               gap: 18,
             }}
           >
@@ -673,6 +676,7 @@ function ComparisonCard({ comparison }: { comparison: ModelComparison }) {
               </div>
             </div>
           </div>
+          )}
         </>
       )}
     </section>
@@ -682,13 +686,13 @@ function ComparisonCard({ comparison }: { comparison: ModelComparison }) {
 // squelette de chargement
 function LabSkeleton() {
   return (
-    <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
+    <div className="jx h-full overflow-y-auto px-4 py-6 md:px-8 md:py-7" style={{ background: "var(--bg)" }}>
       <div style={{ maxWidth: 960, margin: "0 auto" }}>
         <div
           style={{
             height: 14,
             width: 130,
-            background: "var(--bg-tint)",
+            background: "var(--divider-soft)",
             borderRadius: 6,
             marginBottom: 14,
           }}
@@ -697,16 +701,16 @@ function LabSkeleton() {
           style={{
             height: 40,
             width: 300,
-            background: "var(--bg-tint)",
+            background: "var(--divider-soft)",
             borderRadius: 8,
             marginBottom: 28,
           }}
         />
         <div
           className="jcard"
-          style={{ height: 420, marginBottom: 24, background: "var(--bg-tint)" }}
+          style={{ height: 420, marginBottom: 24, background: "var(--divider-soft)" }}
         />
-        <div className="jcard" style={{ height: 360, background: "var(--bg-tint)" }} />
+        <div className="jcard" style={{ height: 360, background: "var(--divider-soft)" }} />
       </div>
     </div>
   );
@@ -733,17 +737,7 @@ export default function LabPage() {
       const [, c] = await Promise.all([fetchTraining(), getModelComparison()]);
       setComparison(c);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(
-          `Erreur ${err.status} : ${
-            (err.data as { detail?: string })?.detail || err.statusText
-          }`
-        );
-      } else {
-        setError(
-          "Impossible de charger le modèle maison. Vérifiez que le backend est démarré."
-        );
-      }
+      setError(humanError(err, "Impossible de charger le modèle maison."));
     } finally {
       setIsLoading(false);
     }
@@ -767,7 +761,7 @@ export default function LabPage() {
 
   if (error) {
     return (
-      <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
+      <div className="jx h-full overflow-y-auto px-4 py-6 md:px-8 md:py-7" style={{ background: "var(--bg)" }}>
         <div style={{ maxWidth: 960, margin: "0 auto" }}>
           <div
             className="jcard"
@@ -799,7 +793,7 @@ export default function LabPage() {
   }
 
   return (
-    <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
+    <div className="jx h-full overflow-y-auto px-4 py-6 md:px-8 md:py-7" style={{ background: "var(--bg)" }}>
       <div style={{ maxWidth: 960, margin: "0 auto" }}>
         {/* en-tête */}
         <header style={{ marginBottom: 28 }}>

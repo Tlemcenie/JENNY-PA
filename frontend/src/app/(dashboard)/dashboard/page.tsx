@@ -1,13 +1,21 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
+import { useEffect, useState, useCallback, type ReactNode } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { Calendar, Eye, BarChart3 } from "lucide-react";
-import { getInsights, subscribeToConversationEvents, type Insights, ApiError } from "@/lib/api";
+import { BarChart3, MessagesSquare } from "lucide-react";
+import { getInsights, humanError, type Insights } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { OnboardingBanner } from "@/components/dashboard/onboarding-banner";
 import { SatisfactionCard } from "@/components/dashboard/satisfaction-card";
+import { SetupChecklist } from "@/components/dashboard/setup-checklist";
+import { RecentConversations } from "@/components/dashboard/recent-conversations";
+import { useRealtimeRefresh } from "@/components/providers/realtime-provider";
+import { SkeletonCard } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/shared/error-state";
+import { EmptyState } from "@/components/shared/empty-state";
+import { MiniSpark } from "@/components/jenny/jenny-ui";
+import { JennyAvatar } from "@/components/ui/jenny-avatar";
+import { channelLabel, intentLabel } from "@/lib/utils";
 
 // charts chargés à la demande
 const MessageVolumeChart = dynamic(
@@ -23,12 +31,8 @@ const UpcomingAppointments = dynamic(
   () => import("@/components/dashboard/upcoming-appointments"),
   { ssr: false, loading: () => <div className="h-64 rounded-2xl bg-jenny-divider/30 animate-pulse" /> }
 );
-import { SkeletonCard } from "@/components/ui/skeleton";
-import { ErrorState } from "@/components/shared/error-state";
-import { EmptyState } from "@/components/shared/empty-state";
-import { MiniSpark, ChannelChip, StatusBadge } from "@/components/jenny/jenny-ui";
-import { JennyAvatar } from "@/components/ui/jenny-avatar";
-import { intentLabel } from "@/lib/utils";
+
+const PERIODS = [7, 30] as const;
 
 // prénom du compte
 function firstNameOf(fullName?: string | null): string {
@@ -43,40 +47,34 @@ function frDateLabel(d: Date): string {
   return `${day.charAt(0).toUpperCase()}${day.slice(1)} · ${time}`;
 }
 
-// série douce pour sparkline
-function gentleSeries(target: number, points = 12, invert = false): number[] {
-  const t = Math.max(0, target);
-  const start = t * 0.55;
-  const out = Array.from({ length: points }, (_, i) => {
-    const k = points === 1 ? 1 : i / (points - 1);
-    return start + (t - start) * k;
-  });
-  return invert ? out.slice().reverse() : out;
+// durée lisible
+function formatMinutes(m: number): string {
+  if (m < 1) return "< 1 min";
+  if (m >= 60) return `${(m / 60).toFixed(1).replace(".", ",")} h`;
+  return `${Math.round(m)} min`;
+}
+
+function plural(n: number, word: string): string {
+  return `${n.toLocaleString("fr-FR")} ${word}${n > 1 ? "s" : ""}`;
 }
 
 function StatCard({
   label,
   value,
-  delta,
-  deltaTone = "up",
+  hint,
   spark,
   color = "var(--coral)",
 }: {
   label: string;
   value: ReactNode;
-  delta?: string;
-  deltaTone?: "up" | "down" | "neutral";
+  hint?: string;
   spark?: number[];
   color?: string;
 }) {
-  const deltaColor =
-    deltaTone === "down"
-      ? "var(--error)"
-      : deltaTone === "neutral"
-        ? "var(--text-2)"
-        : "var(--success)";
+  // courbe seulement si vraie série
+  const showSpark = !!spark && spark.length >= 2 && spark.some((v) => v > 0);
   return (
-    <div className="jcard jlift" style={{ padding: 20 }}>
+    <div className="jcard jlift" style={{ padding: 20, minWidth: 0 }}>
       <div
         style={{
           fontSize: 11,
@@ -91,38 +89,18 @@ function StatCard({
         {label}
       </div>
       <div
-        style={{
-          display: "flex",
-          alignItems: "flex-end",
-          justifyContent: "space-between",
-          marginBottom: 10,
-          gap: 8,
-        }}
+        className="jserif"
+        style={{ fontSize: 40, lineHeight: 1, letterSpacing: "-0.02em", color: "var(--text)", marginBottom: 8 }}
       >
-        <div
-          className="jserif"
-          style={{ fontSize: 42, lineHeight: 1, letterSpacing: "-0.02em", color: "var(--text)" }}
-        >
-          {value}
-        </div>
-        {delta && (
-          <span
-            style={{
-              fontSize: 11.5,
-              fontWeight: 700,
-              color: deltaColor,
-              fontFamily: "var(--mono)",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {delta}
-          </span>
-        )}
+        {value}
       </div>
-      {spark && spark.length >= 2 ? (
-        <MiniSpark values={spark} color={color} width={236} height={32} />
-      ) : (
-        <div style={{ height: 32 }} />
+      {hint && (
+        <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: showSpark ? 10 : 0 }}>{hint}</div>
+      )}
+      {showSpark && (
+        <div style={{ overflow: "hidden" }} aria-hidden>
+          <MiniSpark values={spark} color={color} width={236} height={32} />
+        </div>
       )}
     </div>
   );
@@ -133,10 +111,8 @@ export default function DashboardPage() {
   const [insights, setInsights] = useState<Insights | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [live, setLive] = useState(false);
-  const [chartDays, setChartDays] = useState(7);
+  const [chartDays, setChartDays] = useState<number>(7);
   const [now, setNow] = useState<Date | null>(null);
-  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchInsights = useCallback(async () => {
     setIsLoading(true);
@@ -144,32 +120,26 @@ export default function DashboardPage() {
     try {
       setInsights(await getInsights(chartDays));
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(
-          `Erreur ${err.status}: ${
-            (err.data as { detail?: string })?.detail || err.statusText
-          }`
-        );
-      } else {
-        setError("Impossible de charger le tableau de bord. Vérifiez que le backend est démarré.");
-      }
+      setError(humanError(err, "Impossible de charger le tableau de bord."));
     } finally {
       setIsLoading(false);
     }
   }, [chartDays]);
 
   // refresh silencieux via sse
-  const silentRefreshInsights = useCallback(async () => {
+  const silentRefresh = useCallback(async () => {
     try {
       setInsights(await getInsights(chartDays));
     } catch {
-      // on ignore l'échec
+      // on garde l'affichage
     }
   }, [chartDays]);
 
   useEffect(() => {
-    fetchInsights();
+    void fetchInsights();
   }, [fetchInsights]);
+
+  useRealtimeRefresh(() => void silentRefresh(), 800);
 
   // horloge côté client
   useEffect(() => {
@@ -178,25 +148,12 @@ export default function DashboardPage() {
     return () => clearInterval(id);
   }, []);
 
-  // kpis live via sse
-  useEffect(() => {
-    const unsubscribe = subscribeToConversationEvents(
-      () => {
-        if (refreshTimer.current) clearTimeout(refreshTimer.current);
-        refreshTimer.current = setTimeout(() => void silentRefreshInsights(), 500);
-      },
-      (connected) => setLive(connected)
-    );
-    return () => {
-      unsubscribe();
-      if (refreshTimer.current) clearTimeout(refreshTimer.current);
-    };
-  }, [silentRefreshInsights]);
+  const shell = "jx h-full overflow-y-auto px-4 py-6 md:px-8 md:py-7";
 
-  if (isLoading) {
+  if (isLoading && !insights) {
     return (
-      <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+      <div className={shell} style={{ background: "var(--bg)" }}>
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3.5">
           {Array.from({ length: 4 }).map((_, i) => (
             <SkeletonCard key={i} />
           ))}
@@ -205,9 +162,9 @@ export default function DashboardPage() {
     );
   }
 
-  if (error) {
+  if (error && !insights) {
     return (
-      <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
+      <div className={shell} style={{ background: "var(--bg)" }}>
         <ErrorState message={error} onRetry={fetchInsights} />
       </div>
     );
@@ -216,74 +173,22 @@ export default function DashboardPage() {
   if (!insights) return null;
 
   const firstName = firstNameOf(user?.full_name);
+  const series = insights.messages_last_7_days;
+  const periodTotal = series.reduce((s, d) => s + d.count, 0);
   const hasActivity = insights.conversations_total > 0 || insights.messages_total > 0;
+  const convTotal = insights.conversations_total;
 
-  // taux résolution = part non escaladée
-  const resolutionRate = Math.max(0, Math.min(1, 1 - insights.escalation_rate));
-  const messagesSpark = insights.messages_last_7_days.map((d) => d.count);
+  // part non escaladée
+  const resolutionPct =
+    convTotal > 0 ? Math.round(Math.max(0, Math.min(1, 1 - insights.escalation_rate)) * 100) : null;
 
-  const firstResponseValue =
-    insights.avg_first_response_minutes == null
-      ? "—"
-      : insights.avg_first_response_minutes >= 60
-        ? `${(insights.avg_first_response_minutes / 60).toFixed(1)} h`
-        : `${Math.round(insights.avg_first_response_minutes)} min`;
-
-  // sparklines dérivées
-  const resolutionSpark = gentleSeries(resolutionRate * 100);
-  const conversationsSpark = gentleSeries(insights.conversations_total);
-  const responseSpark = gentleSeries(insights.avg_first_response_minutes ?? 0, 12, true);
-
-  const stats: {
-    label: string;
-    value: ReactNode;
-    delta?: string;
-    deltaTone?: "up" | "down" | "neutral";
-    spark?: number[];
-    color?: string;
-  }[] = [
-    {
-      label: "Messages traités",
-      value: insights.messages_total.toLocaleString("fr-FR"),
-      delta: `${insights.messages_inbound} entrants`,
-      deltaTone: "neutral",
-      spark: messagesSpark.length >= 2 ? messagesSpark : conversationsSpark,
-      color: "var(--coral)",
-    },
-    {
-      label: "Temps de 1ʳᵉ réponse",
-      value: firstResponseValue,
-      delta: "moyenne",
-      deltaTone: "neutral",
-      spark: insights.avg_first_response_minutes == null ? undefined : responseSpark,
-      color: "var(--slate)",
-    },
-    {
-      label: "Taux résolution Jenny",
-      value: `${Math.round(resolutionRate * 100)}%`,
-      delta: `${(insights.escalation_rate * 100).toFixed(0)}% escaladé`,
-      deltaTone: "neutral",
-      spark: resolutionSpark,
-      color: "var(--success)",
-    },
-    {
-      label: "Conversations",
-      value: insights.conversations_total.toLocaleString("fr-FR"),
-      delta: `${insights.conversations_open} ouvertes`,
-      deltaTone: "neutral",
-      spark: conversationsSpark,
-      color: "var(--coral)",
-    },
-  ];
-
-  // vraies données par canal
   const totalIntents = Math.max(1, insights.top_intents.reduce((s, i) => s + i.count, 0));
-  const topIntentLabel = insights.top_intents[0] ? intentLabel(insights.top_intents[0].intent) : null;
+  const topIntent = insights.top_intents[0] ?? null;
   const topChannel = insights.by_channel[0]?.channel ?? null;
 
   return (
-    <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
-      <OnboardingBanner />
+    <div className={shell} style={{ background: "var(--bg)" }}>
+      <SetupChecklist knowledgeEntries={insights.knowledge_entries} onChanged={() => void silentRefresh()} />
 
       {/* accueil */}
       <div style={{ display: "flex", alignItems: "flex-end", marginBottom: 28, gap: 16, flexWrap: "wrap" }}>
@@ -298,45 +203,53 @@ export default function DashboardPage() {
               marginBottom: 8,
             }}
           >
-            {now ? frDateLabel(now) : " "}
+            {now ? frDateLabel(now) : " "}
           </div>
           <h1
             className="jserif"
-            style={{ fontSize: 44, lineHeight: 1, letterSpacing: "-0.02em", color: "var(--text)", margin: 0 }}
+            style={{ fontSize: "clamp(32px, 5vw, 44px)", lineHeight: 1.05, letterSpacing: "-0.02em", color: "var(--text)", margin: 0 }}
           >
-            Bonjour {firstName}. Jenny a géré{" "}
-            <span style={{ fontStyle: "italic", color: "var(--coral)" }}>
-              {insights.messages_total.toLocaleString("fr-FR")} message{insights.messages_total > 1 ? "s" : ""}
-            </span>{" "}
-            récemment.
+            Bonjour {firstName}.
           </h1>
+          <p style={{ fontSize: 14.5, color: "var(--text-2)", marginTop: 8 }}>
+            {hasActivity ? (
+              <>
+                <b style={{ color: "var(--coral)" }}>{plural(periodTotal, "message")}</b> échangé
+                {periodTotal > 1 ? "s" : ""} ces {chartDays} derniers jours.
+              </>
+            ) : (
+              "Jenny est prête. Les chiffres apparaîtront dès les premiers messages."
+            )}
+          </p>
         </div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          <button
-            type="button"
-            onClick={() => setChartDays(7)}
-            className="jlift"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              height: 32,
-              padding: "0 13px",
-              borderRadius: "var(--r-btn)",
-              fontSize: 12.5,
-              fontWeight: 600,
-              fontFamily: "var(--font-sans)",
-              background: "transparent",
-              color: "var(--text)",
-              border: "1px solid var(--divider)",
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            <Calendar style={{ width: 13, height: 13 }} />7 derniers jours
-          </button>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div role="group" aria-label="Période" style={{ display: "flex", gap: 6 }}>
+            {PERIODS.map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setChartDays(d)}
+                aria-pressed={chartDays === d}
+                style={{
+                  height: 32,
+                  padding: "0 12px",
+                  borderRadius: "var(--r-btn)",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  fontFamily: "var(--font-sans)",
+                  cursor: "pointer",
+                  border: "1px solid",
+                  borderColor: chartDays === d ? "transparent" : "var(--divider)",
+                  background: chartDays === d ? "var(--text)" : "transparent",
+                  color: chartDays === d ? "var(--surface)" : "var(--text)",
+                }}
+              >
+                {d} jours
+              </button>
+            ))}
+          </div>
           <Link
-            href="/inbox"
+            href="/conversations"
             className="jlift"
             style={{
               display: "inline-flex",
@@ -352,16 +265,24 @@ export default function DashboardPage() {
               color: "#fff",
               border: "1px solid transparent",
               boxShadow: "var(--shadow-pop)",
-              cursor: "pointer",
               whiteSpace: "nowrap",
               textDecoration: "none",
             }}
           >
-            <Eye style={{ width: 13, height: 13 }} />
-            Voir le live
+            <MessagesSquare style={{ width: 13, height: 13 }} />
+            Conversations
           </Link>
         </div>
       </div>
+
+      {error && (
+        <div role="alert" className="jcard" style={{ padding: 12, marginBottom: 18, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, color: "var(--text-2)", flex: 1 }}>{error}</span>
+          <button type="button" className="jpill" onClick={() => void fetchInsights()}>
+            Réessayer
+          </button>
+        </div>
+      )}
 
       {!hasActivity && (
         <div style={{ marginBottom: 24 }}>
@@ -374,172 +295,61 @@ export default function DashboardPage() {
       )}
 
       {/* ligne de stats */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-          gap: 14,
-          marginBottom: 24,
-        }}
-      >
-        {stats.map((s) => (
-          <StatCard
-            key={s.label}
-            label={s.label}
-            value={s.value}
-            delta={s.delta}
-            deltaTone={s.deltaTone}
-            spark={s.spark}
-            color={s.color}
-          />
-        ))}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5 mb-6">
+        <StatCard
+          label={`Messages · ${chartDays} j`}
+          value={periodTotal.toLocaleString("fr-FR")}
+          hint={`${insights.messages_total.toLocaleString("fr-FR")} depuis le début`}
+          spark={series.map((d) => d.count)}
+        />
+        <StatCard
+          label="1ʳᵉ réponse"
+          value={
+            insights.avg_first_response_minutes == null ? "—" : formatMinutes(insights.avg_first_response_minutes)
+          }
+          hint={insights.avg_first_response_minutes == null ? "pas encore mesuré" : "délai moyen, tout l'historique"}
+        />
+        <StatCard
+          label="Sans escalade"
+          value={resolutionPct == null ? "—" : `${resolutionPct}%`}
+          hint={
+            convTotal > 0
+              ? `${plural(insights.conversations_escalated, "escalade")} sur ${plural(convTotal, "conversation")}`
+              : "aucune conversation"
+          }
+        />
+        <StatCard
+          label="Conversations"
+          value={convTotal.toLocaleString("fr-FR")}
+          hint={`${plural(insights.conversations_open, "ouverte")} · ${plural(insights.customers_total, "client")}`}
+        />
       </div>
 
       {/* deux colonnes */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 18, alignItems: "start" }}>
-        {/* activité en direct */}
-        <div className="jcard" style={{ padding: 20 }}>
-          <div style={{ display: "flex", alignItems: "center", marginBottom: 16, gap: 10, flexWrap: "wrap" }}>
-            <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.01em", color: "var(--text)" }}>
-              Activité en direct
-            </div>
-            <span
-              style={{
-                padding: "2px 8px",
-                background: live ? "rgba(16,185,129,0.1)" : "rgba(245,158,11,0.12)",
-                color: live ? "var(--success)" : "var(--warning)",
-                borderRadius: 999,
-                fontSize: 10,
-                fontWeight: 700,
-                fontFamily: "var(--mono)",
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-              }}
-              title={live ? "Mise à jour en temps réel" : "Reconnexion au flux…"}
-            >
-              <span
-                className={live ? "animate-pulse" : undefined}
-                style={{
-                  width: 6,
-                  height: 6,
-                  background: live ? "var(--success)" : "var(--warning)",
-                  borderRadius: "50%",
-                }}
-              />
-              {live ? "EN DIRECT" : "HORS LIGNE"}
-            </span>
-            <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-2)" }}>
-              {insights.conversations_open} conversation{insights.conversations_open > 1 ? "s" : ""} active
-              {insights.conversations_open > 1 ? "s" : ""}
-            </span>
-          </div>
-
-          {insights.by_channel.length === 0 ? (
-            <p style={{ fontSize: 13, color: "var(--text-2)", padding: "8px 0" }}>
-              Aucune conversation pour le moment.
-            </p>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {insights.by_channel.map((row, i) => {
-                const escalated = insights.escalation_rate > 0.5;
-                const status = escalated ? "human" : "jenny";
-                return (
-                  <div
-                    key={row.channel}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 12,
-                      padding: "10px 0",
-                      borderBottom:
-                        i < insights.by_channel.length - 1 ? "1px solid var(--divider-soft)" : "none",
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
-                        <ChannelChip ch={row.channel} />
-                        <span
-                          className="jmono"
-                          style={{
-                            fontSize: 9,
-                            letterSpacing: "0.08em",
-                            color: "var(--text-3)",
-                            padding: "1px 5px",
-                            background: "var(--bg-tint)",
-                            borderRadius: 4,
-                          }}
-                        >
-                          {row.count} conv.
-                        </span>
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 12.5,
-                          color: "var(--text-2)",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {Math.round((row.count / Math.max(1, insights.conversations_total)) * 100)}% des
-                        conversations sur ce canal
-                      </div>
-                    </div>
-                    <StatusBadge status={status} />
-                  </div>
-                );
-              })}
-            </div>
-          )}
+      <div className="grid grid-cols-1 lg:grid-cols-[1.3fr_1fr] gap-[18px] items-start">
+        <div style={{ display: "flex", flexDirection: "column", gap: 18, minWidth: 0 }}>
+          <RecentConversations />
 
           {/* volume de messages */}
-          <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--divider-soft)" }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 12,
-                gap: 8,
-              }}
-            >
-              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
-                Messages ({chartDays} derniers jours)
-              </span>
-              <div style={{ display: "flex", gap: 6 }}>
-                {[7, 30].map((d) => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setChartDays(d)}
-                    style={{
-                      padding: "2px 10px",
-                      borderRadius: 999,
-                      fontSize: 11,
-                      fontWeight: 600,
-                      fontFamily: "var(--mono)",
-                      cursor: "pointer",
-                      border: "1px solid",
-                      borderColor: chartDays === d ? "transparent" : "var(--divider)",
-                      background: chartDays === d ? "var(--coral)" : "transparent",
-                      color: chartDays === d ? "#fff" : "var(--text-2)",
-                    }}
-                  >
-                    {d}j
-                  </button>
-                ))}
-              </div>
+          <div className="jcard" style={{ padding: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 12 }}>
+              Messages par jour ({chartDays} derniers jours)
             </div>
-            <MessageVolumeChart data={insights.messages_last_7_days} days={chartDays} />
+            {periodTotal === 0 ? (
+              <p style={{ fontSize: 13, color: "var(--text-2)", padding: "24px 0", textAlign: "center" }}>
+                Aucun message sur cette période.
+              </p>
+            ) : (
+              <MessageVolumeChart data={series} days={chartDays} />
+            )}
           </div>
         </div>
 
         {/* colonne insights */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          {/* carte satisfaction */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 18, minWidth: 0 }}>
           <SatisfactionCard />
-          {/* insight de jenny */}
+
+          {/* ce qui ressort, données réelles */}
           <div
             className="jcard"
             style={{
@@ -560,29 +370,28 @@ export default function DashboardPage() {
                   fontWeight: 600,
                 }}
               >
-                insight de jenny
+                ce qui ressort
               </span>
             </div>
             <div
               className="jserif"
-              style={{ fontSize: 24, lineHeight: 1.15, letterSpacing: "-0.01em", marginBottom: 14, color: "var(--text)" }}
+              style={{ fontSize: 22, lineHeight: 1.2, letterSpacing: "-0.01em", marginBottom: 14, color: "var(--text)" }}
             >
               <span style={{ fontStyle: "italic" }}>
-                {topIntentLabel ? (
+                {topIntent ? (
                   <>
-                    « La demande n°1 cette semaine, c&apos;est <b>{topIntentLabel}</b>
+                    « La demande n°1, c&apos;est <b>{intentLabel(topIntent.intent)}</b> (
+                    {plural(topIntent.count, "conversation")}).
                     {topChannel ? (
                       <>
                         {" "}
-                        — surtout via <b>{topChannel}</b>
+                        Canal le plus utilisé : <b>{channelLabel(topChannel)}</b>.
                       </>
                     ) : null}
-                    . Je gère {Math.round(resolutionRate * 100)}% sans intervention. »
+                    {resolutionPct != null ? <> Je gère {resolutionPct}% des conversations sans escalade.</> : null} »
                   </>
                 ) : (
-                  <>
-                    « Dès que les conversations arrivent, je vous résume ici ce qui ressort le plus. »
-                  </>
+                  <>« Dès que les conversations arrivent, je vous résume ici ce qui ressort le plus. »</>
                 )}
               </span>
             </div>
@@ -610,7 +419,7 @@ export default function DashboardPage() {
                 Configurer Jenny
               </Link>
               <Link
-                href="/inbox"
+                href="/learning"
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -628,15 +437,18 @@ export default function DashboardPage() {
                   whiteSpace: "nowrap",
                 }}
               >
-                Voir l&apos;inbox
+                Questions sans réponse
               </Link>
             </div>
           </div>
 
           {/* top intentions */}
           <div className="jcard" style={{ padding: 20 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, color: "var(--text)" }}>
-              Top intentions cette semaine
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4, color: "var(--text)" }}>
+              Demandes les plus fréquentes
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--text-3)", marginBottom: 14 }}>
+              toutes conversations confondues
             </div>
             {insights.top_intents.length === 0 ? (
               <p style={{ fontSize: 13, color: "var(--text-2)" }}>Aucune donnée pour le moment.</p>
@@ -665,7 +477,7 @@ export default function DashboardPage() {
                         {r.count} · {pct}%
                       </span>
                     </div>
-                    <div style={{ height: 4, background: "var(--bg-tint)", borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ height: 4, background: "var(--divider-soft)", borderRadius: 2, overflow: "hidden" }}>
                       <div
                         style={{
                           width: `${pct}%`,

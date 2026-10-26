@@ -2,9 +2,10 @@
 
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
-import { subscribeToConversationEvents, type RealtimeEvent } from "@/lib/api";
+import type { RealtimeEvent } from "@/lib/api";
 import { channelLabel } from "@/lib/utils";
 import { playNotificationSound } from "@/lib/sound";
+import { useRealtimeEvent } from "@/components/providers/realtime-provider";
 
 /** notificateur temps réel global. */
 export function RealtimeNotifier() {
@@ -43,38 +44,32 @@ export function RealtimeNotifier() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
-  // abonnement sse unique
-  useEffect(() => {
-    const watching = () =>
-      pathnameRef.current === "/conversations" && !document.hidden;
+  // flux partagé du layout
+  useRealtimeEvent((event: RealtimeEvent) => {
+    if (event.kind !== "inbound") return; // seuls les entrants alertent
+    const path = pathnameRef.current;
+    // déjà sous les yeux
+    if (!document.hidden && (path === "/conversations" || path === "/chat")) return;
+    countRef.current += 1;
+    applyTitle();
+    playNotificationSound(); // bip discret
+    // annonce lecteurs d'écran
+    const canal = event.channel ? ` (${channelLabel(event.channel)})` : "";
+    window.dispatchEvent(
+      new CustomEvent("jenny:announce", { detail: `Nouveau message reçu${canal}` })
+    );
 
-    const handle = (event: RealtimeEvent) => {
-      if (event.kind !== "inbound") return; // seuls les entrants alertent
-      if (watching()) return; // l'utilisateur les voit déjà
-      countRef.current += 1;
-      applyTitle();
-      playNotificationSound(); // bip discret
-      // annonce lecteurs d'écran
-      const canalA = event.channel ? ` (${channelLabel(event.channel)})` : "";
-      window.dispatchEvent(
-        new CustomEvent("jenny:announce", { detail: `Nouveau message reçu${canalA}` })
-      );
-
-      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-        const canal = event.channel ? ` (${channelLabel(event.channel)})` : "";
-        try {
-          new Notification("Nouveau message", {
-            body: `Un client vous a écrit${canal}.`,
-            tag: "jenny-inbound", // regroupe les notifs
-          });
-        } catch {
-          // on ignore
-        }
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      try {
+        new Notification("Nouveau message", {
+          body: `Un client vous a écrit${canal}.`,
+          tag: "jenny-inbound", // regroupe les notifs
+        });
+      } catch {
+        // on ignore
       }
-    };
-
-    return subscribeToConversationEvents(handle);
-  }, []);
+    }
+  });
 
   return null;
 }

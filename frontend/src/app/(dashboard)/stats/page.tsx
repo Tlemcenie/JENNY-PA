@@ -16,7 +16,8 @@ import {
   Star,
   UserX,
 } from "lucide-react";
-import { getSalonStats, type SalonStats, ApiError } from "@/lib/api";
+import Link from "next/link";
+import { getSalonStats, humanError, type SalonStats } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/shared/error-state";
@@ -114,7 +115,7 @@ function MetricBar({
           {display ?? value}
         </span>
       </div>
-      <div className="h-2 rounded-full bg-jenny-bg-tint overflow-hidden">
+      <div className="h-2 rounded-full bg-jenny-divider/40 overflow-hidden">
         <motion.div
           className="h-full rounded-full bg-jenny-coral"
           style={{ transformOrigin: "left" }}
@@ -170,17 +171,7 @@ export default function StatsPage() {
     try {
       setStats(await getSalonStats(days));
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(
-          `Erreur ${err.status}: ${
-            (err.data as { detail?: string })?.detail || err.statusText
-          }`
-        );
-      } else {
-        setError(
-          "Impossible de charger les statistiques du salon. Vérifiez que le backend est démarré."
-        );
-      }
+      setError(humanError(err, "Impossible de charger les statistiques du salon."));
     } finally {
       setIsLoading(false);
     }
@@ -204,6 +195,8 @@ export default function StatsPage() {
 
   if (!stats) return null;
 
+  // pas de rdv passé : pas de taux
+  const noPast = stats.appointments_total === 0;
   const maxPrestation = stats.top_prestations.reduce((m, p) => Math.max(m, p.count), 0);
   const maxHour = stats.peak_hours.reduce((m, h) => Math.max(m, h.count), 0);
   const sortedHours = [...stats.peak_hours].sort((a, b) => a.hour - b.hour);
@@ -229,7 +222,7 @@ export default function StatsPage() {
           </div>
 
           {/* Sélecteur de plage (30 / 90 / 365 jours) */}
-          <div className="flex items-center gap-1 p-1 rounded-xl bg-jenny-bg-tint border border-jenny-divider">
+          <div className="flex items-center gap-1 p-1 rounded-xl bg-jenny-divider/40 border border-jenny-divider">
             {RANGES.map((r) => {
               const active = r.days === rangeDays;
               return (
@@ -267,22 +260,26 @@ export default function StatsPage() {
             tint="#22C55E"
             label="Taux de remplissage"
             value={
-              <AnimatedNumber
-                value={stats.fill_rate_pct}
-                format={(n) => `${Math.round(n)}%`}
-              />
+              noPast ? (
+                "—"
+              ) : (
+                <AnimatedNumber value={stats.fill_rate_pct} format={(n) => `${Math.round(n)}%`} />
+              )
             }
+            sub={noPast ? "aucun RDV passé sur la période" : `${stats.appointments_total} RDV passés`}
           />
           <StatCard
             icon={<Clock className="w-5 h-5" />}
             tint="#F59E0B"
             label="Taux d'annulation"
             value={
-              <AnimatedNumber
-                value={stats.cancellation_rate_pct}
-                format={(n) => `${Math.round(n)}%`}
-              />
+              noPast ? (
+                "—"
+              ) : (
+                <AnimatedNumber value={stats.cancellation_rate_pct} format={(n) => `${Math.round(n)}%`} />
+              )
             }
+            sub={noPast ? undefined : `${stats.cancelled} annulé${stats.cancelled > 1 ? "s" : ""}`}
           />
           <StatCard
             icon={<Wallet className="w-5 h-5" />}
@@ -294,6 +291,7 @@ export default function StatsPage() {
                 format={(n) => `${Math.round(n).toLocaleString("fr-FR")} €`}
               />
             }
+            sub="prix du catalogue des RDV à venir"
           />
           <StatCard
             icon={<Trophy className="w-5 h-5" />}
@@ -455,7 +453,10 @@ export default function StatsPage() {
 
               {!stats.deposits.enabled && (
                 <p className="mt-4 pt-4 border-t border-jenny-divider/70 text-[12px] text-jenny-text-secondary/80 leading-snug">
-                  Acompte non activé — activez-le dans les réglages pour réduire les no-shows.
+                  Acompte non activé : il réduit les absences.{" "}
+                  <Link href="/brain" className="font-semibold text-jenny-coral hover:underline">
+                    L&apos;activer
+                  </Link>
                 </p>
               )}
             </Card>

@@ -20,25 +20,28 @@ const PERIODS: { label: string; days: number }[] = [
 ];
 
 export function SatisfactionCard({ className }: { className?: string }) {
-  const [data, setData] = useState<FeedbackMetrics | null>(null);
-  const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(0); // 0 = tout l'historique (par défaut)
+  const [reload, setReload] = useState(0);
+  // résultat lié à sa requête
+  const [result, setResult] = useState<{ key: string; data: FeedbackMetrics | null } | null>(null);
+  const key = `${days}:${reload}`;
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
     getFeedbackMetrics(days)
-      .then((m) => alive && setData(m))
-      .catch(() => {}) // data reste null → état « indisponible »
-      .finally(() => alive && setLoading(false));
+      .then((m) => alive && setResult({ key, data: m }))
+      .catch(() => alive && setResult({ key, data: null })); // échec → état « indisponible »
     return () => {
       alive = false;
     };
-  }, [days]);
+  }, [days, key]);
+
+  const loading = result?.key !== key;
+  const data = result?.data ?? null;
 
   if (loading && !data) {
     return (
-      <Card className={`p-6 ${className ?? ""}`}>
+      <Card className={`jx p-6 ${className ?? ""}`}>
         <Skeleton className="h-4 w-48 mb-4" />
         <Skeleton className="h-12 w-32 mb-4" />
         <Skeleton className="h-4 w-full" />
@@ -48,10 +51,17 @@ export function SatisfactionCard({ className }: { className?: string }) {
 
   if (!data) {
     return (
-      <Card className={`p-6 ${className ?? ""}`}>
+      <Card className={`jx p-6 ${className ?? ""}`}>
         <div className="flex items-center gap-2" style={{ color: "var(--text-2)" }}>
           <Gauge style={{ width: 16, height: 16 }} />
-          <span style={{ fontSize: 13 }}>Satisfaction des réponses indisponible.</span>
+          <span style={{ fontSize: 13, flex: 1 }}>Satisfaction des réponses indisponible.</span>
+          <button
+            type="button"
+            onClick={() => setReload((n) => n + 1)}
+            className="text-[12.5px] font-semibold text-jenny-coral hover:underline underline-offset-2"
+          >
+            Réessayer
+          </button>
         </div>
       </Card>
     );
@@ -70,7 +80,7 @@ export function SatisfactionCard({ className }: { className?: string }) {
           : "var(--error)";
 
   return (
-    <Card className={`p-6 transition-opacity duration-200 ${loading ? "opacity-60" : ""} ${className ?? ""}`}>
+    <Card className={`jx p-6 transition-opacity duration-200 ${loading ? "opacity-60" : ""} ${className ?? ""}`}>
       <div className="flex items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-2">
           <Gauge style={{ width: 16, height: 16, color: "var(--coral)" }} />
