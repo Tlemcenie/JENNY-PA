@@ -29,6 +29,10 @@ class Staff(Base, TimestampMixin):
     )
     # même format que business_hours, null = horaires du salon
     working_hours: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # false = seulement ses compétences
+    all_services: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
 
 
 class StaffSkill(Base):

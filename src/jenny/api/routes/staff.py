@@ -71,6 +71,8 @@ class StaffOut(BaseModel):
     color: str | None = None
     is_active: bool
     working_hours: dict | None = None
+    # false = seulement prestation_ids
+    all_services: bool = True
     prestation_ids: list[str] = []
     upcoming_count: int = 0
 
@@ -86,6 +88,8 @@ class StaffCreate(BaseModel):
     is_active: bool = True
     working_hours: dict | None = None
     prestation_ids: list[UUID] = []
+    # absent = déduit des prestations
+    all_services: bool | None = None
 
     @field_validator("working_hours")
     @classmethod
@@ -104,6 +108,7 @@ class StaffUpdate(BaseModel):
     is_active: bool | None = None
     working_hours: dict | None = None
     prestation_ids: list[UUID] | None = None
+    all_services: bool | None = None
 
     @field_validator("working_hours")
     @classmethod
@@ -118,6 +123,7 @@ class StaffUpdate(BaseModel):
 
 class SkillsPayload(BaseModel):
     prestation_ids: list[UUID] = []
+    all_services: bool | None = None
 
 
 def _require_bid(principal: CurrentPrincipal) -> UUID:
@@ -177,9 +183,46 @@ async def _to_out(db: AsyncSession, member: Staff) -> StaffOut:
         color=member.color,
         is_active=member.is_active,
         working_hours=member.working_hours,
+        all_services=member.all_services,
         prestation_ids=skills.get(member.id, []),
         upcoming_count=upcoming.get(member.id, 0),
     )
+
+
+_NEED_ONE = "Cochez au moins une prestation, ou « Toutes les prestations »"
+
+
+async def _apply_skills(
+    db: AsyncSession,
+    bid: UUID,
+    member: Staff,
+    prestation_ids: list[UUID] | None,
+    all_services: bool | None,
+) -> None:
+    """Pose compétences + drapeau, toujours cohérents."""
+    if all_services is True:
+        # sait tout faire : liste vidée
+        await _set_skills(db, bid, member, [])
+        member.all_services = True
+        return
+    if all_services is None:
+        if prestation_ids is None:
+            return
+        # ancien contrat : vide = tout
+        await _set_skills(db, bid, member, prestation_ids)
+        member.all_services = not prestation_ids
+        return
+    if prestation_ids is not None:
+        if not prestation_ids:
+            raise HTTPException(400, _NEED_ONE)
+        await _set_skills(db, bid, member, prestation_ids)
+    else:
+        count = await db.scalar(
+            select(func.count()).select_from(StaffSkill).where(StaffSkill.staff_id == member.id)
+        )
+        if not count:
+            raise HTTPException(400, _NEED_ONE)
+    member.all_services = False
 
 
 async def _set_skills(db: AsyncSession, bid: UUID, member: Staff, prestation_ids: list[UUID]) -> None:
@@ -227,6 +270,7 @@ async def list_staff(db: DbSession, principal: CurrentUser) -> StaffListResponse
             color=m.color,
             is_active=m.is_active,
             working_hours=m.working_hours,
+            all_services=m.all_services,
             prestation_ids=skills.get(m.id, []),
             upcoming_count=upcoming.get(m.id, 0),
         )
@@ -249,7 +293,7 @@ async def create_staff(body: StaffCreate, db: DbSession, principal: CurrentUser)
     )
     db.add(member)
     await db.flush()
-    await _set_skills(db, bid, member, body.prestation_ids)
+    await _apply_skills(db, bid, member, body.prestation_ids, body.all_services)
     record_audit(
         db,
         business_id=bid,
@@ -379,8 +423,10 @@ async def update_staff(
         member.working_hours = data["working_hours"]
     if "color" in data:
         member.color = data["color"]
-    if data.get("prestation_ids") is not None:
-        await _set_skills(db, member.business_id, member, body.prestation_ids or [])
+    if data.get("prestation_ids") is not None or data.get("all_services") is not None:
+        await _apply_skills(
+            db, member.business_id, member, data.get("prestation_ids"), data.get("all_services")
+        )
     record_audit(
         db,
         business_id=member.business_id,
@@ -401,7 +447,7 @@ async def set_staff_skills(
 ) -> StaffOut:
     """Remplace les prestations du coiffeur (vide = sait tout faire)."""
     member = await _owned(db, principal, staff_id)
-    await _set_skills(db, member.business_id, member, body.prestation_ids)
+    await _apply_skills(db, member.business_id, member, body.prestation_ids, body.all_services)
     await db.commit()
     await db.refresh(member)
     return await _to_out(db, member)
