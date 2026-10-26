@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { BarChart3, MessagesSquare } from "lucide-react";
@@ -108,32 +108,46 @@ function StatCard({
 
 export default function DashboardPage() {
   const { user } = useAuth();
-  const [insights, setInsights] = useState<Insights | null>(null);
+  // données + période réelle
+  const [result, setResult] = useState<{ days: number; data: Insights } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [chartDays, setChartDays] = useState<number>(7);
   const [now, setNow] = useState<Date | null>(null);
+  // ignore les réponses en retard
+  const lastReq = useRef(0);
 
   const fetchInsights = useCallback(async () => {
+    const req = ++lastReq.current;
     setIsLoading(true);
     setError(null);
     try {
-      setInsights(await getInsights(chartDays));
+      const data = await getInsights(chartDays);
+      if (req === lastReq.current) setResult({ days: chartDays, data });
     } catch (err) {
-      setError(humanError(err, "Impossible de charger le tableau de bord."));
+      if (req === lastReq.current) setError(humanError(err, "Impossible de charger le tableau de bord."));
     } finally {
-      setIsLoading(false);
+      if (req === lastReq.current) setIsLoading(false);
     }
   }, [chartDays]);
 
   // refresh silencieux via sse
   const silentRefresh = useCallback(async () => {
+    const req = ++lastReq.current;
     try {
-      setInsights(await getInsights(chartDays));
+      const data = await getInsights(chartDays);
+      if (req === lastReq.current) setResult({ days: chartDays, data });
     } catch {
       // on garde l'affichage
+    } finally {
+      // une requête plus vieille a pu partir
+      if (req === lastReq.current) setIsLoading(false);
     }
   }, [chartDays]);
+
+  const insights = result?.data ?? null;
+  // libellé = période affichée
+  const shownDays = result?.days ?? chartDays;
 
   useEffect(() => {
     void fetchInsights();
@@ -215,7 +229,7 @@ export default function DashboardPage() {
             {hasActivity ? (
               <>
                 <b style={{ color: "var(--coral)" }}>{plural(periodTotal, "message")}</b> échangé
-                {periodTotal > 1 ? "s" : ""} ces {chartDays} derniers jours.
+                {periodTotal > 1 ? "s" : ""} ces {shownDays} derniers jours.
               </>
             ) : (
               "Jenny est prête. Les chiffres apparaîtront dès les premiers messages."
@@ -297,7 +311,7 @@ export default function DashboardPage() {
       {/* ligne de stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5 mb-6">
         <StatCard
-          label={`Messages · ${chartDays} j`}
+          label={`Messages · ${shownDays} j`}
           value={periodTotal.toLocaleString("fr-FR")}
           hint={`${insights.messages_total.toLocaleString("fr-FR")} depuis le début`}
           spark={series.map((d) => d.count)}
@@ -333,14 +347,14 @@ export default function DashboardPage() {
           {/* volume de messages */}
           <div className="jcard" style={{ padding: 20 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 12 }}>
-              Messages par jour ({chartDays} derniers jours)
+              Messages par jour ({shownDays} derniers jours)
             </div>
             {periodTotal === 0 ? (
               <p style={{ fontSize: 13, color: "var(--text-2)", padding: "24px 0", textAlign: "center" }}>
                 Aucun message sur cette période.
               </p>
             ) : (
-              <MessageVolumeChart data={series} days={chartDays} />
+              <MessageVolumeChart data={series} days={shownDays} />
             )}
           </div>
         </div>
