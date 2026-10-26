@@ -2,16 +2,14 @@
 
 Couvre les points d'entrée exposés : webhooks, ingestion, réservation publique, l'auth (bcrypt
 coûteux, cible du brute-force) et le chat (coût LLM, ouvert au public). Limite
-par IP cliente, fenêtre glissante (voir ``core.rate_limit``). Le chat est aussi
-plafonné par salon via :func:`enforce_business_chat_limit`. Au dépassement :
+par IP cliente (IPv6 groupée par /64), fenêtre glissante (voir ``core.rate_limit``).
+Le chat est aussi plafonné par salon via :func:`enforce_business_chat_limit`. Au dépassement :
 HTTP 429 + en-tête ``Retry-After``. Désactivé en ``env=test``.
 """
 
 from __future__ import annotations
 
-import time
-import uuid
-from collections import OrderedDict, deque
+import ipaddress
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
@@ -63,6 +61,26 @@ def _client_ip(request: Request) -> str:
     if real and hops:
         return real.strip()
     return request.client.host if request.client else "unknown"
+
+
+def ip_key(raw: str) -> str:
+    """Clé de limite : IPv4, ou IPv6 en /64."""
+    raw = (raw or "").strip()
+    try:
+        addr = ipaddress.ip_address(raw)
+    except ValueError:
+        return raw[:64]
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped:
+            return str(addr.ipv4_mapped)
+        # une box = un /64
+        return str(ipaddress.ip_network(f"{addr}/64", strict=False))
+    return str(addr)
+
+
+def client_key(request: Request) -> str:
+    """IP du client, IPv6 groupée."""
+    return ip_key(_client_ip(request))
 
 
 def _matches(path: str, prefix: str) -> bool:
@@ -138,76 +156,50 @@ async def enforce_business_chat_limit(business_id: UUID | str) -> None:
 
 
 # ── compteur d'échecs ──
+# On réserve l'essai AVANT le travail coûteux (bcrypt) : contrôle et comptage
+# atomiques, donc une rafale parallèle ne dépasse pas le plafond. Le jeton est
+# rendu si l'essai n'était pas un échec.
 
-_FAIL_MAX_KEYS = 20000
-# repli mémoire, borné
-_fail_hits: OrderedDict[str, deque[float]] = OrderedDict()
+_FAIL = "fail_"
+# pas de plafond
+_NO_CAP = 10**9
 
 
-def _fail_key(bucket: str, key: str) -> str:
-    return f"ratelimit:fail_{bucket}:{key}"
+def _fail_bucket(bucket: str) -> str:
+    return f"{_FAIL}{bucket}"
 
 
 def reset_failures() -> None:
     """Vide les échecs (tests)."""
-    _fail_hits.clear()
+    core_rl.drop_local(f"ratelimit:{_FAIL}")
+
+
+async def reserve_failure(bucket: str, key: str, limit: int, window: int) -> str | None:
+    """Réserve un essai, None si plafond."""
+    ok, _retry, token = await core_rl.take_slot(
+        key, limit=limit, window_seconds=window, bucket=_fail_bucket(bucket)
+    )
+    return token if ok else None
+
+
+async def release_failure(bucket: str, key: str, token: str | None) -> None:
+    """Rend un essai réservé."""
+    await core_rl.release_slot(key, token, bucket=_fail_bucket(bucket))
 
 
 async def recent_failures(bucket: str, key: str, window: int) -> int:
     """Échecs récents, sans compter."""
-    k = _fail_key(bucket, key)
-    now = time.time()
-    redis = await core_rl._get_redis()
-    if redis is not None:
-        try:
-            await redis.zremrangebyscore(k, 0, now - window)
-            return int(await redis.zcard(k))
-        except Exception as exc:  # pragma: no cover - redis instable
-            logger.warning("rate_limit.fail_redis_error", error=str(exc))
-    dq = _fail_hits.get(k)
-    if not dq:
-        return 0
-    while dq and dq[0] <= now - window:
-        dq.popleft()
-    return len(dq)
+    return await core_rl.count_slots(key, window_seconds=window, bucket=_fail_bucket(bucket))
 
 
 async def add_failure(bucket: str, key: str, window: int) -> None:
     """Compte un échec."""
-    k = _fail_key(bucket, key)
-    now = time.time()
-    redis = await core_rl._get_redis()
-    if redis is not None:
-        try:
-            pipe = redis.pipeline()
-            pipe.zadd(k, {f"{now:.6f}:{uuid.uuid4().hex[:8]}": now})
-            pipe.expire(k, window + 1)
-            await pipe.execute()
-            return
-        except Exception as exc:  # pragma: no cover - redis instable
-            logger.warning("rate_limit.fail_redis_error", error=str(exc))
-    dq = _fail_hits.get(k)
-    if dq is None:
-        dq = deque()
-        _fail_hits[k] = dq
-        # vire les plus vieux
-        while len(_fail_hits) > _FAIL_MAX_KEYS:
-            _fail_hits.popitem(last=False)
-    else:
-        _fail_hits.move_to_end(k)
-    dq.append(now)
+    await core_rl.take_slot(key, limit=_NO_CAP, window_seconds=window, bucket=_fail_bucket(bucket))
 
 
 async def clear_failures(bucket: str, key: str) -> None:
     """Remise à zéro (succès)."""
-    k = _fail_key(bucket, key)
-    _fail_hits.pop(k, None)
-    redis = await core_rl._get_redis()
-    if redis is not None:
-        try:
-            await redis.delete(k)
-        except Exception as exc:  # pragma: no cover - redis instable
-            logger.warning("rate_limit.fail_redis_error", error=str(exc))
+    await core_rl.clear_slots(key, bucket=_fail_bucket(bucket))
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -230,7 +222,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         bucket, limit = rule
-        ip = _client_ip(request)
+        # IPv6 : un /64 = un client
+        ip = client_key(request)
         allowed, retry_after = await check_rate_limit(
             ip,
             limit=limit,
