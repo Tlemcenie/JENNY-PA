@@ -168,6 +168,7 @@ async def notify_waitlist_for_freed_slot(
         customer_id=match.customer_id,
         conversation_id=match.conversation_id,
         text=(
+            f"Ici Jenny, l'assistante virtuelle du salon. "
             f"Bonne nouvelle : un créneau{slot_txt} vient de se libérer "
             f"pour « {svc_label} ». Ça vous intéresse ? Répondez-moi et je vous le bloque."
         ),
