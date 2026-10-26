@@ -6,9 +6,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, ClassVar
 from uuid import UUID
 
-from jenny.db.conflicts import is_slot_taken
 from jenny.actions.base import BaseAction
 from jenny.core.logging import get_logger
+from jenny.db.conflicts import is_slot_taken
 
 if TYPE_CHECKING:
     from jenny.domain.models.staff import Staff
@@ -271,27 +271,52 @@ class BookAppointmentDBAction(BaseAction):
                         }
                     also_has = ex_when
 
-            staff_id = pick.staff.id if pick.staff else None
-            staff_name = pick.staff.display_name if pick.staff else None
-            appt = Appointment(
-                business_id=bid,
-                customer_id=customer_id,
-                staff_id=staff_id,
-                title=f"{service_name}",
-                # formaté depuis le datetime réservé
-                description=f"Réservé via Jenny — {start.astimezone(tz).strftime('%d/%m/%Y à %Hh%M')}",
-                channel="chat",
-                start_at=start,
-                end_at=end,
-                status="scheduled",
-                created_by="Jenny",
-            )
-            db.add(appt)
-            try:
-                await db.flush()
-            except Exception as exc:  # créneau pris entre-temps (course)
-                if not is_slot_taken(exc):
-                    raise
+            def _new_appt(staff: Staff | None) -> Appointment:
+                return Appointment(
+                    business_id=bid,
+                    customer_id=customer_id,
+                    staff_id=staff.id if staff else None,
+                    title=f"{service_name}",
+                    # formaté depuis le datetime réservé
+                    description=(
+                        f"Réservé via Jenny — {start.astimezone(tz).strftime('%d/%m/%Y à %Hh%M')}"
+                    ),
+                    channel="chat",
+                    start_at=start,
+                    end_at=end,
+                    status="scheduled",
+                    created_by="Jenny",
+                )
+
+            chosen = pick.staff
+            appt: Appointment | None = None
+            for attempt in range(2):
+                cand = _new_appt(chosen)
+                try:
+                    async with db.begin_nested():
+                        db.add(cand)
+                        await db.flush()
+                    appt = cand
+                    break
+                except Exception as exc:  # créneau pris entre-temps (course)
+                    if not is_slot_taken(exc):
+                        raise
+                    if attempt or wanted_id is not None or not pool.has_staff:
+                        break
+                    # auto : un autre coiffeur libre ?
+                    again = await find_free_staff(
+                        db,
+                        bid,
+                        start,
+                        end,
+                        business=business,
+                        prestation_ids=presta_ids,
+                        pool=pool,
+                    )
+                    if not again.free:
+                        break
+                    chosen = again.staff
+            if appt is None:
                 await db.rollback()
                 alts = await next_free_slots(
                     db, bid, duration, from_day=day, prestation_ids=presta_ids, staff_id=wanted_id
@@ -303,6 +328,8 @@ class BookAppointmentDBAction(BaseAction):
                     "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
                     "message": "Ce créneau vient d'être pris.",
                 }
+            staff_id = chosen.id if chosen else None
+            staff_name = chosen.display_name if chosen else None
 
             local_start = start.astimezone(tz)
             day_label = f"{_WEEKDAYS_FR[local_start.weekday()]} {local_start.day:02d}/{local_start.month:02d}"
