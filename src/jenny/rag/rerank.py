@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from jenny.rag.lexique import coverage, doc_pool, query_terms
+from jenny.rag.lexique import match_score
 
 _WORD_RE = re.compile(r"[a-zà-ÿ0-9]+")
 
@@ -27,7 +27,7 @@ def tokens(text: str) -> set[str]:
 
 def lexical_score(query: str, content: str, title: str = "") -> float:
     """Part des termes de la question couverts."""
-    return coverage(query_terms(query), doc_pool(f"{title}\n{content}" if title else content))
+    return match_score(query, f"{title}\n{content}" if title else content)
 
 
 def blend(vector_score: float, lex: float) -> float:
@@ -66,11 +66,9 @@ def rerank(query: str, docs: list, top_k: int) -> list:
 
     Les objets exposent ``content`` et ``score`` (score muté en place).
     """
-    terms = query_terms(query)
     if not docs:
         return []
     for d in docs:
-        pool = doc_pool(f"{_title_of(d)}\n{d.content}")
-        d.score = blend(d.score, coverage(terms, pool))
+        d.score = blend(d.score, lexical_score(query, d.content, _title_of(d)))
     ranked = sorted(docs, key=lambda d: d.score, reverse=True)
     return ranked[:top_k]

@@ -135,7 +135,7 @@ inclus: inclus incluse incluses inclut incluent inclure compris comprise compris
 annulation: annuler annulation annulations annule annulee decommander desister
   desiste desistez desistement
 report: reporter report deplacer decaler modifier
-cout: frais facture facturer facturee factures payant payante payer penalite penalites
+frais: frais facture facturer facturee factures payant payante payer penalite penalites
   supplement supplementaire gratuit gratuite gratuits gratuites offert offerte offerts gratis
   offre offrez offrir offrons
 prix: prix tarif tarifs tarification coute coutent couter cout montant
@@ -350,3 +350,28 @@ def coverage(terms: list[frozenset[str]], pool: set[str]) -> float:
         return 0.0
     hit = sum(1 for t in terms if is_covered(t, pool))
     return hit / len(terms)
+
+
+# crédit d'un simple synonyme
+SYN_CREDIT = 0.8
+
+
+@lru_cache(maxsize=8192)
+def _doc_stems(text: str) -> frozenset[str]:
+    return frozenset(stem(w) for w in content_words(text))
+
+
+def match_score(query: str, doc_text: str) -> float:
+    """Recouvrement pondéré (mot exact > synonyme)."""
+    words = list(dict.fromkeys(stem(w) for w in content_words(query or "")))
+    if not words:
+        return 0.0
+    stems = _doc_stems(doc_text or "")
+    pool = _doc_pool(doc_text or "")
+    total = 0.0
+    for s in words:
+        if s in stems or any(_cousins(s, p) for p in stems if len(p) >= 5):
+            total += 1.0
+        elif (_CONCEPTS_OF_STEM.get(s, frozenset()) | {s}) & pool:
+            total += SYN_CREDIT
+    return total / len(words)

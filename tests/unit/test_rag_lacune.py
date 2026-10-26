@@ -111,4 +111,4 @@ def test_concepts_lexique() -> None:
     assert "inclus" in keys("compris")
     assert "annulation" in keys("décommander")
     # un mot, plusieurs concepts
-    assert {"cout", "paiement"} <= keys("payer")
+    assert {"frais", "paiement"} <= keys("payer")

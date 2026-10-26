@@ -97,7 +97,10 @@ def test_build_tsquery_propre_et_synonymes() -> None:
 
 def test_lexical_score_flexions_et_synonymes() -> None:
     doc = "La coupe femme comprend le shampoing ; le brushing est en supplément."
-    assert lexical_score("Le brushing est inclus avec la coupe ?", doc) == 1.0
+    # mot exact > simple synonyme
+    assert lexical_score("Le brushing est en supplément avec la coupe ?", doc) == 1.0
+    syn = lexical_score("Le brushing est inclus avec la coupe ?", doc)
+    assert 0.9 < syn < 1.0
     assert lexical_score("Vous faites des extensions ?", doc) == 0.0
 
 
@@ -108,7 +111,8 @@ def test_fuse_mix_remonte_le_bon_doc() -> None:
     ]
     docs = PgVectorStore._fuse(rows, "Le brushing est compris dans la coupe ?")
     assert [d.id for d in docs] == ["a", "b"]
-    assert docs[0].score == pytest.approx(blend(0.60, 1.0))
+    lex = lexical_score("Le brushing est compris dans la coupe ?", rows[1].content)
+    assert docs[0].score == pytest.approx(blend(0.60, lex))
     assert docs[0].vector_score == pytest.approx(0.60)
 
 
