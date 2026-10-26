@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Check, HelpCircle, Send, X } from "lucide-react";
+import { AlertCircle, ArrowRight, Check, HelpCircle, RotateCcw, Send, X } from "lucide-react";
 import {
   answerKnowledgeGap,
   humanError,
@@ -14,6 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 
+const NOT_IN_KB = "Réponse enregistrée, mais pas encore dans la base. Réessayez.";
+
 /** vraies questions sans réponse */
 export function GapsCard({ limit = 3 }: { limit?: number }) {
   const toast = useToast();
@@ -23,6 +25,9 @@ export function GapsCard({ limit = 3 }: { limit?: number }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  // réponses pas encore en base
+  const [notInKb, setNotInKb] = useState<Record<string, string>>({});
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -39,22 +44,57 @@ export function GapsCard({ limit = 3 }: { limit?: number }) {
     void load();
   }, [load]);
 
+  // carte traitée, on la retire
+  const dropGap = (id: string) => {
+    setGaps((prev) => (prev ? prev.filter((g) => g.id !== id) : prev));
+    setTotal((t) => Math.max(0, t - 1));
+    setNotInKb((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  };
+
   const submit = async (gap: KnowledgeGap) => {
     const answer = draft.trim();
     if (!answer) return;
     setSaving(true);
     try {
       const res = await answerKnowledgeGap(gap.id, answer, true);
-      if (res.saved_to_kb) toast.success("Réponse ajoutée à la base : Jenny saura répondre.");
-      else toast.warning("Réponse enregistrée. L'ajout à la base se fera plus tard.");
-      setGaps((prev) => (prev ? prev.filter((g) => g.id !== gap.id) : prev));
-      setTotal((t) => Math.max(0, t - 1));
       setOpenId(null);
       setDraft("");
+      if (res.saved_to_kb) {
+        toast.success("Réponse ajoutée à la base : Jenny saura répondre.");
+        dropGap(gap.id);
+      } else {
+        // la carte reste, on peut réessayer
+        toast.warning(NOT_IN_KB);
+        setNotInKb((prev) => ({ ...prev, [gap.id]: answer }));
+      }
     } catch (err) {
       toast.error(humanError(err, "Impossible d'enregistrer la réponse."));
     } finally {
       setSaving(false);
+    }
+  };
+
+  // relance l'ajout à la base
+  const retry = async (gap: KnowledgeGap) => {
+    const answer = notInKb[gap.id];
+    if (!answer) return;
+    setRetryingId(gap.id);
+    try {
+      const res = await answerKnowledgeGap(gap.id, answer, true);
+      if (res.saved_to_kb) {
+        toast.success("Réponse ajoutée à la base : Jenny saura répondre.");
+        dropGap(gap.id);
+      } else {
+        toast.warning(NOT_IN_KB);
+      }
+    } catch (err) {
+      toast.error(humanError(err, "Impossible d'ajouter la réponse à la base."));
+    } finally {
+      setRetryingId(null);
     }
   };
 
@@ -112,7 +152,7 @@ export function GapsCard({ limit = 3 }: { limit?: number }) {
                     {formatRelativeTime(g.last_seen_at || g.created_at)}
                   </p>
                 </div>
-                {openId !== g.id && (
+                {openId !== g.id && !notInKb[g.id] && (
                   <Button
                     size="sm"
                     onClick={() => {
@@ -125,6 +165,24 @@ export function GapsCard({ limit = 3 }: { limit?: number }) {
                   </Button>
                 )}
               </div>
+              {notInKb[g.id] && (
+                <div
+                  role="status"
+                  className="mt-3 p-2.5 rounded-xl bg-jenny-warning/10 text-jenny-text text-[12.5px] flex items-center gap-2 flex-wrap"
+                >
+                  <AlertCircle className="w-4 h-4 text-jenny-warning shrink-0" />
+                  <span className="flex-1 min-w-[180px]">{NOT_IN_KB}</span>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void retry(g)}
+                    isLoading={retryingId === g.id}
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Réessayer
+                  </Button>
+                </div>
+              )}
               {openId === g.id && (
                 <div className="mt-3 space-y-2">
                   <label className="sr-only" htmlFor={`gap-${g.id}`}>
