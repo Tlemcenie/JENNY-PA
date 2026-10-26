@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from jenny.core.config import get_settings
 from jenny.db.base import Base
+from jenny.db.schema_filter import include_name, include_object
 
 # Importer TOUS les modèles pour que l'autogenerate fonctionne
 import jenny.domain.models  # noqa: F401
@@ -27,35 +28,8 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Tables/index créés en SQL brut, donc SANS modèle ORM. Sans ce filtre,
-# un `alembic revision --autogenerate` les voit comme « en trop » et génère
-# un DROP → ça effacerait toute la base de connaissances RAG.
-_TABLES_HORS_ORM = {"document_embeddings"}
-_INDEX_HORS_ORM = {
-    "ix_messages_content_fts",
-    # index perf (jen_perfidx2_i2j3)
-    "ix_messages_business_received",
-    "ix_messages_business_created",
-    "ix_messages_conversation_created",
-    "ix_messages_customer_id",
-    "ix_conversations_business_status",
-    "ix_conversations_business_last_msg",
-    "ix_conversations_business_recency",
-    "ix_appointments_end_at",
-    "ix_customers_business_instagram",
-    "ix_customers_business_messenger",
-}
-
-
-def include_object(obj, name, type_, reflected, compare_to) -> bool:  # type: ignore[no-untyped-def]
-    """Ignore ce qui est géré à la main dans les migrations."""
-    if type_ == "table" and name in _TABLES_HORS_ORM:
-        return False
-    if type_ == "index" and name in _INDEX_HORS_ORM:
-        return False
-    # index posés en SQL brut sur une table hors ORM
-    return not (type_ == "index" and getattr(obj, "table", None) is not None
-                and obj.table.name in _TABLES_HORS_ORM)
+# objets hors ORM : voir jenny.db.schema_filter
+# (sinon autogenerate génère des DROP)
 
 
 def run_migrations_offline() -> None:
@@ -66,6 +40,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_name=include_name,
         include_object=include_object,
         compare_type=True,
     )
@@ -78,6 +53,7 @@ def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
+        include_name=include_name,
         include_object=include_object,
         compare_type=True,
     )
