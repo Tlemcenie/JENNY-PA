@@ -43,6 +43,19 @@ OUI = [
     "jamais de pub",
     "désabonne-moi",
     "pouvez-vous stopper les messages",
+    # ordre ou demande polie
+    "Ne me contactez jamais",
+    "ne m'envoyez plus rien",
+    "vous ne m'envoyez plus de messages",
+    "pouvez-vous ne plus m'envoyer de messages ?",
+    "vous pouvez ne plus m'envoyer de messages",
+    "je veux plus recevoir de pub",
+    "je ne veux plus rien recevoir",
+    "je souhaite ne plus recevoir de sms",
+    "je ne veux plus de vos offres",
+    "Bonjour plus de pub",
+    "Jamais de promos pour moi",
+    "pas d'offres merci",
 ]
 
 # la négation porte sur le STOP
@@ -87,6 +100,33 @@ AMBIGU = [
     "pas de souci",
     "je ne suis pas intéressée",
     "je n'ai pas dit stop",
+    # plainte : elle veut des offres
+    "Vous ne m'envoyez jamais d'offres",
+    "vous ne m'envoyez pas d'offres ?",
+    "Vous m'envoyez pas les offres ?",
+    "Vous ne me contactez jamais",
+    "vous ne m'écrivez jamais",
+    "vous m'envoyez jamais de promos",
+    "vous n'envoyez pas de promos ?",
+    "vous ne m'envoyez plus d'offres ?",
+    "vous ne m'envoyez plus rien ?",
+    "Vous ne me contactez plus jamais ?",
+    "vous ne pouvez pas m'envoyer les offres ?",
+    "il n'y a jamais de promos",
+    "il n'y a pas d'offres",
+    "il n'y a plus jamais de promos",
+    "y a plus de promos",
+    # question, pas un ordre
+    "Jamais de promos pour moi ?",
+    "pas de pub ?",
+    "Plus de promos ?",
+    # elle veut en recevoir
+    "Je veux recevoir les offres, pas les sms",
+    "Je veux recevoir les offres, pas de sms",
+    "je veux recevoir vos offres",
+    "envoyez-moi les promos svp",
+    "recevoir plus de messages",
+    "stop, envoyez-moi des offres",
     "stop " + "svp " * 20,
 ]
 

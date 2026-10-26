@@ -45,6 +45,9 @@ async def _cliente() -> tuple[Business, Customer]:
         ("stop, ne m'envoyez pas de messages", True),
         ("n'arrêtez pas", False),
         ("stop je voulais dire jeudi", False),
+        # plainte : reste inscrite
+        ("Vous ne m'envoyez jamais d'offres", False),
+        ("Je veux recevoir les offres, pas les sms", False),
     ],
 )
 async def test_desinscription(db_tables, text: str, stop: bool) -> None:
