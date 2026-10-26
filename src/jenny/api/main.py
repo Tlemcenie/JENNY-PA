@@ -50,6 +50,7 @@ from jenny.api.routes import (
     salon_extras,
     salon_stats,
     search,
+    staff,
     webhooks,
 )
 from jenny.core.config import get_settings
@@ -182,6 +183,7 @@ def create_app() -> FastAPI:
     app.include_router(api_keys.router, prefix="/api/v1", tags=["api-keys"])
     app.include_router(appointments.router, prefix="/api/v1", tags=["appointments"])
     app.include_router(prestations.router, prefix="/api/v1", tags=["prestations"])
+    app.include_router(staff.router, prefix="/api/v1", tags=["staff"])
     app.include_router(quotes.router, prefix="/api/v1", tags=["quotes"])
     app.include_router(pending_questions.router, prefix="/api/v1", tags=["pending-questions"])
     app.include_router(admin.router, prefix="/api/v1", tags=["admin"])
