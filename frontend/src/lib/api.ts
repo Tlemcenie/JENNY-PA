@@ -2040,4 +2040,4 @@ export async function getModelComparison(): Promise<ModelComparison> {
   return request<ModelComparison>("/api/v1/nanogpt/comparison");
 }
 
-export { ApiError, getToken, setToken, clearToken };
+export { ApiError, getToken, setToken, clearToken, request };
