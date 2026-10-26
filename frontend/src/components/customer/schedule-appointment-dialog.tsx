@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CalendarPlus, Clock, MapPin, Type as TypeIcon, X } from "lucide-react";
-import { createAppointment, ApiError, type Appointment } from "@/lib/api";
+import { createAppointment, humanError, type Appointment } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useFocusTrap } from "@/lib/use-focus-trap";
 import { Button } from "@/components/ui/button";
@@ -46,11 +46,9 @@ function nextHour(date: Date): string {
   return `${pad(h)}:00`;
 }
 
+// message lisible, sans code
 function extractError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return (err.data as { detail?: string })?.detail || `Erreur ${err.status}`;
-  }
-  return fallback;
+  return humanError(err, fallback);
 }
 
 export function ScheduleAppointmentDialog({

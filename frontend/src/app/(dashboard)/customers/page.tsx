@@ -9,7 +9,7 @@ import {
   exportCustomersCsv,
   importCustomersCsv,
   type CustomerListItem,
-  ApiError,
+  humanError,
 } from "@/lib/api";
 import { CustomerPanel } from "@/components/customer/customer-panel";
 import { useToast } from "@/components/ui/toast";
@@ -23,13 +23,9 @@ import { staggerContainer, staggerItem } from "@/lib/motion";
 
 const PAGE = 36;
 
+// message lisible, sans code
 function extractError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return `Erreur ${err.status}: ${
-      (err.data as { detail?: string })?.detail || err.statusText
-    }`;
-  }
-  return fallback;
+  return humanError(err, fallback);
 }
 
 export default function CustomersPage() {

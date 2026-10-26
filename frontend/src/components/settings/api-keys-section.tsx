@@ -8,7 +8,7 @@ import {
   revokeApiKey,
   type ApiKeyInfo,
   type ApiKeyCreated,
-  ApiError,
+  humanError,
 } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,11 +17,9 @@ import { RelativeTime } from "@/components/ui/relative-time";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
+// message lisible, sans code
 function extractError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return (err.data as { detail?: string })?.detail || `Erreur ${err.status}`;
-  }
-  return fallback;
+  return humanError(err, fallback);
 }
 
 export function ApiKeysSection() {
