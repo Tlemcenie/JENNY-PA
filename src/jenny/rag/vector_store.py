@@ -34,6 +34,10 @@ _CAPS_TTL = 300.0
 _TSQ_WORD_RE = re.compile(r"^[a-z0-9]+$")
 # mots accentués (config french)
 _RAW_WORD_RE = re.compile(r"[^\W\d_]{3,}")
+# fiche générée effacée (sans vecteur)
+TOMBSTONE_KEY = "kb_tombstone"
+# filtre SQL : vrais fragments
+NOT_TOMBSTONE_SQL = f"metadata_->>'{TOMBSTONE_KEY}' IS NULL"
 
 
 class VectorSearchError(RuntimeError):
@@ -480,3 +484,41 @@ class PgVectorStore:
             chunks=count,
         )
         return count
+
+    async def add_tombstone(self, session: AsyncSession, business_id: UUID | str, key: str) -> None:
+        """Note une fiche générée supprimée."""
+        # ni vecteur, ni texte, ni knowledge_id
+        await session.execute(
+            text(
+                f"""
+                INSERT INTO document_embeddings
+                    (business_id, content, source, chunk_index, metadata_, embedding)
+                SELECT CAST(:business_id AS uuid), '', :source, 0, CAST(:metadata AS json), NULL
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM document_embeddings
+                    WHERE business_id = CAST(:business_id AS uuid)
+                      AND metadata_->>'{TOMBSTONE_KEY}' = :key
+                )
+                """
+            ),
+            {
+                "business_id": str(business_id),
+                "source": TOMBSTONE_KEY,
+                "metadata": json.dumps({TOMBSTONE_KEY: key}),
+                "key": key,
+            },
+        )
+
+    async def tombstones(self, session: AsyncSession, business_id: UUID | str) -> set[str]:
+        """Clés des fiches générées supprimées."""
+        rows = await session.execute(
+            text(
+                f"""
+                SELECT DISTINCT metadata_->>'{TOMBSTONE_KEY}' AS key
+                FROM document_embeddings
+                WHERE business_id = :business_id AND NOT ({NOT_TOMBSTONE_SQL})
+                """
+            ),
+            {"business_id": str(business_id)},
+        )
+        return {r.key for r in rows.fetchall() if r.key}

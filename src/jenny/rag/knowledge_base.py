@@ -12,6 +12,7 @@ le retriever RAG pour répondre aux clients.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
@@ -22,9 +23,11 @@ from jenny.core.logging import get_logger
 from jenny.rag.embeddings import get_default_embedder
 from jenny.rag.ingestion import DocumentIngester, build_embed_text, embed_header, reassemble
 from jenny.rag.retriever import embed_query
-from jenny.rag.vector_store import PgVectorStore, lock_entry
+from jenny.rag.vector_store import PgVectorStore, lock_business_kb, lock_entry
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from jenny.rag.embeddings import BaseEmbedder
@@ -122,6 +125,36 @@ class KnowledgeBase:
         self.embedder = embedder or get_default_embedder()
         self.vector_store = vector_store or PgVectorStore(embedding_dim=self.embedder.dimension)
         self.ingester = ingester or DocumentIngester(embedder=self.embedder)
+        # écritures groupées en cours
+        self._batch = False
+
+    async def _commit(self) -> None:
+        """Commit, sauf dans un batch."""
+        if not self._batch:
+            await self.session.commit()
+
+    @asynccontextmanager
+    async def batch(self, *, commit: bool = True) -> AsyncIterator[KnowledgeBase]:
+        """Verrou du salon, un seul commit."""
+        if self._batch:
+            # déjà dans un batch
+            yield self
+            return
+        prepare = getattr(self.embedder, "prepare", None)
+        if prepare is not None:
+            # modèle chargé avant le verrou
+            await prepare()
+        await lock_business_kb(self.session, self.business_id)
+        self._batch = True
+        try:
+            yield self
+        except BaseException:
+            self._batch = False
+            await self.session.rollback()
+            raise
+        self._batch = False
+        if commit:
+            await self.session.commit()
 
     def _require_pgvector(self) -> None:
         """Échoue vite sans Postgres."""
@@ -204,8 +237,10 @@ class KnowledgeBase:
         )
         if not chunk_dicts:
             return 0
+        # bloqué pendant un seed
+        await lock_entry(self.session, self.business_id, knowledge_id)
         count = await self.vector_store.add_chunks(self.session, self.business_id, chunk_dicts)
-        await self.session.commit()
+        await self._commit()
         return count
 
     async def add_text(
@@ -330,15 +365,30 @@ class KnowledgeBase:
             metadata={k: v for k, v in meta.items() if k not in LAYOUT_KEYS},
         )
 
-    async def delete_entry(self, knowledge_id: str) -> bool:
+    async def delete_entry(self, knowledge_id: str, *, tombstone: bool = True) -> bool:
         """Supprime une entrée (tous ses chunks) de la base de connaissances."""
         # pas pendant une réindexation
         await lock_entry(self.session, self.business_id, knowledge_id)
+        key = None
+        if tombstone:
+            chunks = await self.vector_store.entry_chunks(
+                self.session, self.business_id, knowledge_id
+            )
+            key = chunks[0][1].get("kb_key") if chunks else None
         count = await self.vector_store.delete_by_knowledge_id(
             self.session, self.business_id, knowledge_id
         )
-        await self.session.commit()
+        if count and key:
+            # fiche générée : pas recréée
+            await self.vector_store.add_tombstone(self.session, self.business_id, key)
+        await self._commit()
         return count > 0
+
+    async def tombstones(self) -> set[str]:
+        """Fiches générées supprimées par le gérant."""
+        if self.session.get_bind().dialect.name != "postgresql":
+            return set()
+        return await self.vector_store.tombstones(self.session, self.business_id)
 
     async def update_text_entry(
         self,
@@ -385,12 +435,13 @@ class KnowledgeBase:
             self.session, self.business_id, knowledge_id
         )
         if deleted == 0:
-            await self.session.rollback()
+            if not self._batch:
+                await self.session.rollback()
             return None
         count = 0
         if chunk_dicts:
             count = await self.vector_store.add_chunks(self.session, self.business_id, chunk_dicts)
-        await self.session.commit()
+        await self._commit()
         entry = KnowledgeEntry(
             id=knowledge_id,
             business_id=self.business_id,
