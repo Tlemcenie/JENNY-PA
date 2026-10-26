@@ -47,6 +47,14 @@ export function humanError(err: unknown, fallback = "Impossible de charger ces d
   return fallback;
 }
 
+/** detail texte de l'api, sinon null */
+export function apiDetail(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  const detail = (err.data as { detail?: unknown } | undefined)?.detail;
+  // 422 = liste, pas du texte
+  return typeof detail === "string" && detail.trim() ? detail.trim() : null;
+}
+
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("jenny_token");
