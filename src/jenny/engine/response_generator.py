@@ -136,12 +136,13 @@ _LETTER_OPENING_RE = re.compile(
     r"(?:bonjour\s+)?(?:madame|monsieur|mademoiselle))\s*,?\s*\n+",
     re.IGNORECASE,
 )
+# blancs possessifs : pas de ReDoS
 _LETTER_SIGNATURE_RE = re.compile(
-    r"\n+\s*(?:(?:bien\s+)?cordialement|sinc[èe]rement|bien\s+à\s+vous|"
-    r"chaleureusement)\s*,?\s*(?:\n+\s*jenny\b[^\n]*)?\s*$",
+    r"(?<!\s)[^\S\n]*\n\s*+(?:(?:bien\s+)?cordialement|sinc[èe]rement|bien\s+à\s+vous|"
+    r"chaleureusement)(?:\s*+,)?(?:[^\S\n]*\n\s*+jenny\b[^\n]*+)?\s*+$",
     re.IGNORECASE,
 )
-_LETTER_NAME_RE = re.compile(r"\n+\s*jenny\s*[!.]*\s*$", re.IGNORECASE)
+_LETTER_NAME_RE = re.compile(r"(?<!\s)[^\S\n]*\n\s*+jenny\s*+[!.]*+\s*+$", re.IGNORECASE)
 
 
 def strip_letter_format(text: str) -> str:
@@ -300,7 +301,7 @@ def strip_dialogue_scaffold(text: str) -> str:
 
 
 # clause « n'hésitez pas »
-_FILLER_PHRASE_RE = re.compile(r"\s*\bn['’]?h[ée]sitez\s+pas\b[^.!?]*[.!?]?", re.I)  # noqa: RUF001
+_FILLER_PHRASE_RE = re.compile(r"(?<!\s)\s*+\bn['’]?h[ée]sitez\s+pas\b[^.!?]*[.!?]?", re.I)  # noqa: RUF001
 
 
 # la clause porte-t-elle une vraie info ? (horaire, jour, choix, question)

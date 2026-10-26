@@ -28,7 +28,7 @@ from jenny.engine.intelligence import (
     refine_knowledge_gap,
 )
 from jenny.engine.state_manager import ConversationPhase, ConversationState, StateManager
-from jenny.engine.thresholds import LATCH_MAX_TURNS, LOW_CONFIDENCE_FLOOR
+from jenny.engine.thresholds import LATCH_MAX_TURNS, LOW_CONFIDENCE_FLOOR, RULES_MAX_CHARS
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -47,6 +47,11 @@ def _ml_call(fn: Callable[[str], object], text: str) -> object:
     """Inférence sous verrou."""
     with _ML_LOCK:
         return fn(text)
+
+
+def clip_rules_text(text: str | None) -> str:
+    """Texte borné pour les règles."""
+    return (text or "")[:RULES_MAX_CHARS]
 
 
 # seuil de confiance ML
@@ -134,6 +139,8 @@ _NEW_BOOKING_RE = re.compile(
     r"|\baussi\b|\b[ée]galement\b|\ben\s+plus\b",
     re.I,
 )
+# « avancer » : un report
+_AVANCE_RE = re.compile(r"\bavanc", re.I)
 # intentions d'au revoir
 _BYE_INTENTS = frozenset({"closing", "greeting", "small_talk"})
 # mots d'un créneau seul
@@ -152,7 +159,7 @@ _MGMT_CANCEL_RE = re.compile(
 )
 _MGMT_RESCHED_RE = re.compile(
     r"\b(d[ée]plac|d[ée]cal|repouss)|\breport\w*\s+(?:mon|le)\s+(?:rdv|rendez)|"
-    r"chang\w*\s+(?:l['’]?heure|de\s+jour|la\s+date)",  # noqa: RUF001
+    r"\bchang\w*\s+(?:l['’]?heure|de\s+jour|la\s+date)",  # noqa: RUF001
     re.I,
 )
 _MGMT_CONFIRM_RE = re.compile(
@@ -309,12 +316,16 @@ _LEAD_FILLER_RE = re.compile(
 )
 # « Marie merci » : merci en fin
 _TRAIL_THANKS_RE = re.compile(
-    r"\s+(?:merci(?:\s+(?:beaucoup|bien|bcp|infiniment|encore))?|"
+    r"(?<!\s)\s+(?:merci(?:\s+(?:beaucoup|bien|bcp|infiniment|encore))?|"
     r"bonne\s+(?:journ[ée]e|soir[ée]e))[\s!.]*$",
     re.I,
 )
 # découpe en morceaux
-_NAME_SPLIT_RE = re.compile(r"[,;.!\n]+|\s+(?:et|mais)\s+", re.I)
+# début de blanc seulement : linéaire
+_NAME_SPLIT_RE = re.compile(
+    r"[,;.!\n]+(?:\s+(?:et|mais)\s+)?|(?<!\s)\s+(?:et|mais)\s+",
+    re.I,
+)
 
 
 def _word_key(word: str) -> str:
@@ -429,7 +440,7 @@ def strip_farewell(message: str, *, keep_days: bool = False) -> str:
         _MGMT_RESCHED_RE.search(m)
         or _MGMT_CANCEL_RE.search(m)
         or _RESCHED_CUE_RE.search(m)
-        or re.search(r"\bavanc", m, re.I)
+        or _AVANCE_RE.search(m)
     )
     if not keep:
         m = _SEE_YOU_RE.sub(" ", m)
@@ -521,6 +532,14 @@ _ENTITY_SLOT_KEYS = frozenset(
     }
 )
 _EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$")
+
+# entités par regex
+# départ en début de mot : linéaire
+_EMAIL_FIND_RE = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+")
+_PHONE_FIND_RE = re.compile(r"(?:\+33|0)\s*[1-9](?:[\s.-]*\d{2}){4}")
+_ORDER_FIND_RE = re.compile(r"(?:commande|cmd|order)\s*+[#:]?\s*+([A-Z0-9-]{4,20})", re.I)
+_DATE_FIND_RE = re.compile(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}")
+_AMOUNT_FIND_RE = re.compile(r"(?<!\d)(\d+(?:[.,]\d{2})?)\s*€")
 
 
 def coerce_entity(
@@ -1395,26 +1414,25 @@ class ConversationEngine:
     def _regex_entity_extraction(self, text: str) -> dict[str, str]:
         """Extraction d'entités par regex (fallback)."""
         entities: dict[str, str] = {}
+        text = clip_rules_text(text)
 
-        email_match = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)
+        email_match = _EMAIL_FIND_RE.search(text)
         if email_match:
             entities["email"] = email_match.group()
 
-        phone_match = re.search(r"(?:\+33|0)\s*[1-9](?:[\s.-]*\d{2}){4}", text)
+        phone_match = _PHONE_FIND_RE.search(text)
         if phone_match:
             entities["phone"] = phone_match.group()
 
-        order_match = re.search(
-            r"(?:commande|cmd|order)\s*[#:]?\s*([A-Z0-9-]{4,20})", text, re.IGNORECASE
-        )
+        order_match = _ORDER_FIND_RE.search(text)
         if order_match:
             entities["order_number"] = order_match.group(1)
 
-        date_match = re.search(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", text)
+        date_match = _DATE_FIND_RE.search(text)
         if date_match:
             entities["date"] = date_match.group()
 
-        amount_match = re.search(r"(\d+(?:[.,]\d{2})?)\s*€", text)
+        amount_match = _AMOUNT_FIND_RE.search(text)
         if amount_match:
             entities["amount"] = amount_match.group(1)
 
