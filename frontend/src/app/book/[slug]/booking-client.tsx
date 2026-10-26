@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type ReactNode,
 } from "react";
 import Link from "next/link";
 import Image from "next/image";
@@ -23,6 +22,7 @@ import {
   Clock,
   Loader2,
   MapPin,
+  RefreshCw,
 } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import {
@@ -37,11 +37,20 @@ import {
   type PublicStaff,
 } from "@/lib/api-staff";
 import { cn } from "@/lib/utils";
+import SalonInfo from "./salon-info";
 
 // page publique de réservation
 
 const DURATION = 30; // durée sans prestation
 const DAYS_AHEAD = 14; // jours proposés
+// bornes de l'api
+const API_MIN = 15;
+const API_MAX = 720;
+
+// même contenu ?
+function sameInfo(a: PublicBookingInfoFull, b: PublicBookingInfoFull): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 // détail d'erreur api
 function apiDetail(err: unknown): string | null {
@@ -132,12 +141,10 @@ function startDay(): string {
 export default function BookingClient({
   slug,
   initialInfo = null,
-  children,
 }: {
   slug: string;
   // infos déjà lues côté serveur
   initialInfo?: PublicBookingInfoFull | null;
-  children?: ReactNode;
 }) {
   const [phase, setPhase] = useState<Phase>(initialInfo ? "ready" : "loading");
   const [info, setInfo] = useState<PublicBookingInfoFull | null>(initialInfo);
@@ -154,10 +161,13 @@ export default function BookingClient({
   const [slots, setSlots] = useState<PublicSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsError, setSlotsError] = useState<string | null>(null);
+  // info au-dessus des créneaux
+  const [slotNotice, setSlotNotice] = useState<string | null>(null);
   const slotsReq = useRef(0);
 
-  // créneau choisi
-  const [chosenSlot, setChosenSlot] = useState<PublicSlot | null>(null);
+  // créneau choisi, lié aux choix
+  const [chosen, setChosen] = useState<{ slot: PublicSlot; key: string } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   // formulaire
   const [fullName, setFullName] = useState("");
@@ -172,14 +182,25 @@ export default function BookingClient({
 
   const prestations = useMemo(() => info?.prestations ?? [], [info]);
   const team = useMemo(() => info?.staff ?? [], [info]);
+  // choix encore proposés
   const prestation = prestations.find((p) => p.id === prestationId) ?? null;
+  const presId = prestation?.id ?? null;
   // coiffeurs qui font la prestation
   const teamForPresta = useMemo(
-    () => team.filter((m) => staffCanDo(m, prestationId)),
-    [team, prestationId]
+    () => team.filter((m) => staffCanDo(m, presId)),
+    [team, presId]
   );
-  const chosenStaff = team.find((m) => m.id === staffId) ?? null;
+  const chosenStaff = teamForPresta.find((m) => m.id === staffId) ?? null;
+  const stId = chosenStaff?.id ?? null;
+  // retirés depuis le choix
+  const prestaGone = prestationId !== null && !prestation;
+  const staffGone = staffId !== null && !chosenStaff;
   const duration = prestation?.duration_minutes ?? DURATION;
+  // l'api fixe la vraie durée
+  const askMinutes = Math.min(Math.max(duration, API_MIN), API_MAX);
+  // créneau perdu si choix changé
+  const choiceKey = `${presId ?? ""}|${stId ?? ""}|${duration}`;
+  const chosenSlot = chosen?.key === choiceKey ? chosen.slot : null;
 
   // les 14 prochains jours
   const days = useMemo<DayOption[]>(() => {
@@ -197,39 +218,54 @@ export default function BookingClient({
     });
   }, []);
 
+  // relit le salon, sans cache
+  const refreshInfo = useCallback(async (): Promise<boolean> => {
+    try {
+      const data = await getPublicBookingInfo(slug);
+      // même contenu : rien ne bouge
+      setInfo((prev) => (prev && sameInfo(prev, data) ? prev : data));
+      return true;
+    } catch (err) {
+      // salon coupé entre-temps
+      if (err instanceof ApiError && err.status === 404) {
+        setPhase((p) => (p === "confirmed" ? p : "notfound"));
+      }
+      return false;
+    }
+  }, [slug]);
+
+  // 1er chargement côté client
+  const loadInfo = useCallback(async () => {
+    try {
+      const data = await getPublicBookingInfo(slug);
+      setInfo(data);
+      setLoadError(null);
+      setPhase("ready");
+      setSelectedIso((d) => d ?? startDay());
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setPhase("notfound");
+      } else {
+        setLoadError(
+          err instanceof ApiError
+            ? "Le service de réservation est momentanément indisponible. Réessayez dans un instant."
+            : "Impossible de joindre le serveur. Vérifiez votre connexion puis réessayez."
+        );
+        setPhase("error");
+      }
+    }
+  }, [slug]);
+
   // 1. infos business
   useEffect(() => {
-    let active = true;
-    // déjà là : juste le jour
     if (initialInfo) {
       setSelectedIso(startDay());
+      // cache serveur : on revalide
+      void refreshInfo();
       return;
     }
-    setPhase("loading");
-    getPublicBookingInfo(slug)
-      .then((data) => {
-        if (!active) return;
-        setInfo(data);
-        setPhase("ready");
-        setSelectedIso(startDay());
-      })
-      .catch((err) => {
-        if (!active) return;
-        if (err instanceof ApiError && err.status === 404) {
-          setPhase("notfound");
-        } else {
-          setLoadError(
-            err instanceof ApiError
-              ? "Le service de réservation est momentanément indisponible."
-              : "Impossible de joindre le serveur. Réessayez dans un instant."
-          );
-          setPhase("error");
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [slug, initialInfo]);
+    void loadInfo();
+  }, [initialInfo, loadInfo, refreshInfo]);
 
   // 3. créneaux par date, coiffeur, prestation
   const loadSlots = useCallback(
@@ -239,50 +275,70 @@ export default function BookingClient({
       setSlotsLoading(true);
       setSlotsError(null);
       try {
-        const res = await getPublicSlots(slug, dateIso, { duration, staffId, prestationId });
+        const res = await getPublicSlots(slug, dateIso, {
+          duration: askMinutes,
+          staffId: stId,
+          prestationId: presId,
+        });
         if (req !== slotsReq.current) return;
         setSlots(res.slots);
       } catch (err) {
         if (req !== slotsReq.current) return;
         setSlots([]);
+        const status = err instanceof ApiError ? err.status : 0;
         setSlotsError(
-          err instanceof ApiError && err.status === 404
-            ? "Page de réservation introuvable."
-            : err instanceof ApiError && err.status === 400
-              ? (apiDetail(err) ?? "Choix plus disponible, rechargez la page.")
+          status === 404
+            ? "Cette page de réservation n'est plus active."
+            : status === 400
+              ? (apiDetail(err) ?? "Ce choix n'est plus proposé. Actualisez la liste.")
               : "Impossible de charger les créneaux. Réessayez."
         );
+        // choix périmé : on relit
+        if (status === 400 || status === 404) void refreshInfo();
       } finally {
         if (req === slotsReq.current) setSlotsLoading(false);
       }
     },
-    [slug, duration, staffId, prestationId]
+    [slug, askMinutes, stId, presId, refreshInfo]
   );
 
   useEffect(() => {
     if (phase !== "ready" || !selectedIso) return;
     void loadSlots(selectedIso);
-  }, [phase, selectedIso, loadSlots]);
+    // info : salon relu, créneaux aussi
+  }, [phase, selectedIso, loadSlots, info]);
+
+  // « actualiser » : lecture fraîche
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    await refreshInfo();
+    setRefreshing(false);
+    if (selectedIso) void loadSlots(selectedIso);
+  };
 
   // reset au changement de date
   const handleSelectDate = (iso: string) => {
     if (iso === selectedIso) return;
     setSelectedIso(iso);
-    setChosenSlot(null);
+    setChosen(null);
+    setSlotNotice(null);
     setFormError(null);
   };
 
   // prestation : coiffeur gardé s'il sait
   const handleSelectPrestation = (id: string | null) => {
     setPrestationId(id);
-    setChosenSlot(null);
+    setChosen(null);
+    setSlotNotice(null);
     const keep = team.find((m) => m.id === staffId);
-    if (keep && !staffCanDo(keep, id)) setStaffId(null);
+    if (!keep || !staffCanDo(keep, id)) setStaffId(null);
   };
 
   const handleSelectStaff = (id: string | null) => {
     setStaffId(id);
-    setChosenSlot(null);
+    setChosen(null);
+    setSlotNotice(null);
   };
 
   // 4. soumission
@@ -307,23 +363,28 @@ export default function BookingClient({
         email: email.trim(),
         phone: phone.trim() || undefined,
         start_at: chosenSlot.start_at,
-        duration,
+        duration: askMinutes,
         notes: notes.trim() || undefined,
-        staff_id: staffId,
-        prestation_id: prestationId,
+        staff_id: stId,
+        prestation_id: presId,
       });
       setConfirmation(result);
       setPhase("confirmed");
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         // créneau déjà pris
-        setChosenSlot(null);
+        setChosen(null);
         setFormError(null);
-        setSlotsError("Ce créneau vient d'être réservé. Choisissez-en un autre.");
+        // gardé pendant le rechargement
+        setSlotNotice("Ce créneau vient d'être réservé. Choisissez-en un autre.");
         if (selectedIso) void loadSlots(selectedIso);
       } else if (err instanceof ApiError && err.status === 422) {
         // liste pydantic, pas du texte
         setFormError(invalidFieldMessage(err));
+      } else if (err instanceof ApiError && err.status === 400) {
+        // choix périmé : on relit
+        setFormError(apiDetail(err) ?? "Ce choix n'est plus possible. Choisissez un autre créneau.");
+        void refreshInfo();
       } else if (err instanceof ApiError) {
         setFormError(apiDetail(err) ?? "La réservation a échoué. Réessayez dans un instant.");
       } else {
@@ -368,7 +429,14 @@ export default function BookingClient({
             {phase === "notfound" && <NotFoundCard key="notfound" />}
 
             {phase === "error" && (
-              <ErrorCard key="error" message={loadError ?? "Une erreur est survenue."} />
+              <ErrorCard
+                key="error"
+                message={loadError ?? "Une erreur est survenue."}
+                onRetry={() => {
+                  setPhase("loading");
+                  void loadInfo();
+                }}
+              />
             )}
 
             {phase === "confirmed" && confirmation && (
@@ -420,9 +488,12 @@ export default function BookingClient({
                         />
                         <PrestationPicker
                           prestations={prestations}
-                          value={prestationId}
+                          value={presId}
                           onSelect={handleSelectPrestation}
                         />
+                        {prestaGone && (
+                          <ChoiceNotice text="La prestation choisie n'est plus proposée. Choisissez-en une autre." />
+                        )}
                       </>
                     )}
 
@@ -437,9 +508,12 @@ export default function BookingClient({
                         />
                         <StaffPicker
                           team={teamForPresta}
-                          value={staffId}
+                          value={stId}
                           onSelect={handleSelectStaff}
                         />
+                        {staffGone && (
+                          <ChoiceNotice text="Ce coiffeur n'est plus disponible pour ce choix. Choisissez « Peu importe » ou un autre coiffeur." />
+                        )}
                       </>
                     )}
 
@@ -462,13 +536,21 @@ export default function BookingClient({
                       total={steps.total}
                       text={selectedDayLabel ? `Créneaux · ${selectedDayLabel}` : "Créneaux"}
                     />
+                    {slotNotice && (
+                      <div className="mb-3">
+                        <ChoiceNotice text={slotNotice} />
+                      </div>
+                    )}
                     <SlotGrid
                       loading={slotsLoading || !selectedIso}
                       error={slotsError}
                       slots={slots}
+                      refreshing={refreshing}
+                      onRefresh={() => void handleRefresh()}
                       onPick={(slot) => {
-                        setChosenSlot(slot);
+                        setChosen({ slot, key: choiceKey });
                         setSlotsError(null);
+                        setSlotNotice(null);
                         setFormError(null);
                       }}
                     />
@@ -495,7 +577,7 @@ export default function BookingClient({
                     onChangePhone={setPhone}
                     onChangeNotes={setNotes}
                     onBack={() => {
-                      setChosenSlot(null);
+                      setChosen(null);
                       setFormError(null);
                     }}
                     onSubmit={handleSubmit}
@@ -505,8 +587,8 @@ export default function BookingClient({
             )}
           </AnimatePresence>
 
-          {/* infos rendues serveur */}
-          {children}
+          {/* infos pratiques, données fraîches */}
+          {info && phase !== "notfound" && <SalonInfo info={info} />}
 
           {/* pied de page */}
           <p className="mt-7 text-center font-mono text-[11px] tracking-[0.12em] text-[#F4F1ED]/50">
@@ -676,6 +758,17 @@ function StaffPicker({
   );
 }
 
+// choix retiré par le salon
+
+function ChoiceNotice({ text }: { text: string }) {
+  return (
+    <p role="status" className="mt-2 flex items-start gap-2 text-[12.5px] leading-relaxed text-jenny-coral">
+      <AlertCircle className="w-3.5 h-3.5 mt-[3px] shrink-0" />
+      <span>{text}</span>
+    </p>
+  );
+}
+
 // sélecteur de date
 
 function DatePicker({
@@ -759,11 +852,15 @@ function SlotGrid({
   loading,
   error,
   slots,
+  refreshing,
+  onRefresh,
   onPick,
 }: {
   loading: boolean;
   error: string | null;
   slots: PublicSlot[];
+  refreshing: boolean;
+  onRefresh: () => void;
   onPick: (slot: PublicSlot) => void;
 }) {
   if (loading) {
@@ -788,7 +885,20 @@ function SlotGrid({
         style={{ background: "rgba(255,127,106,0.10)", border: "1px solid rgba(255,127,106,0.22)" }}
       >
         <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-        <span>{error}</span>
+        <div className="min-w-0 flex-1">
+          <p>{error}</p>
+          {/* lecture fraîche du salon */}
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="mt-2 inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-[12.5px] font-semibold text-[#F4F1ED] transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-jenny-coral/40 disabled:opacity-60"
+            style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)" }}
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", refreshing && "animate-spin")} />
+            Actualiser
+          </button>
+        </div>
       </div>
     );
   }
@@ -1185,7 +1295,7 @@ function NotFoundCard() {
 
 // carte d'erreur
 
-function ErrorCard({ message }: { message: string }) {
+function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <motion.div
       key="error"
@@ -1212,6 +1322,14 @@ function ErrorCard({ message }: { message: string }) {
       <p className="text-[14.5px] leading-[1.55] text-[#F4F1ED]/60 max-w-[360px] mx-auto">
         {message}
       </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-6 inline-flex items-center gap-2 h-11 px-5 rounded-xl bg-jenny-coral text-white text-[14px] font-semibold hover:bg-jenny-coral-dark transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+      >
+        <RefreshCw className="w-4 h-4" />
+        Réessayer
+      </button>
     </motion.div>
   );
 }

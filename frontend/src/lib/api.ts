@@ -5,6 +5,8 @@ interface ApiOptions {
   body?: unknown;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  // cache http du navigateur
+  cache?: RequestCache;
 }
 
 class ApiError extends Error {
@@ -69,11 +71,12 @@ function clearToken(): void {
 }
 
 async function request<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
-  const { method = "GET", body, headers = {}, signal } = options;
+  const { method = "GET", body, headers = {}, signal, cache } = options;
   const token = getToken();
 
   const config: RequestInit = {
     method,
+    cache,
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
