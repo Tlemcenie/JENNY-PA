@@ -12,6 +12,7 @@ from jenny.actions.base import BaseAction
 from jenny.actions.registry import ActionRegistry
 from jenny.agents.action_agent import ActionAgent
 from jenny.agents.fallback_agent import FallbackAgent
+from jenny.agents.faq_agent import FAQ_MIN_SCORE
 from jenny.agents.router import AgentRouter
 from jenny.engine.conversation_engine import (
     ConversationEngine,
@@ -27,7 +28,6 @@ from jenny.engine.conversation_engine import (
     strip_farewell,
 )
 from jenny.engine.datetime_fr import today_in
-from jenny.engine.intelligence import GAP_SCORE_HARD_FLOOR
 from jenny.engine.state_manager import StateManager
 from jenny.engine.thresholds import LATCH_MAX_TURNS
 
@@ -785,7 +785,7 @@ class TestSeuils:
 
         eng, _ = _engine(retriever=_Retriever())
         await _Chat(eng).say("vous avez un parking ?")
-        assert seen == [GAP_SCORE_HARD_FLOOR]
+        assert seen == [FAQ_MIN_SCORE]
 
     @pytest.mark.asyncio
     async def test_humain_sous_le_seuil_routeur(self) -> None:

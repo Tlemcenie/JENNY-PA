@@ -8,6 +8,7 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from jenny.agents.faq_agent import FAQ_MAX_DOCS, FAQ_MIN_SCORE, select_documents
 from jenny.core.logging import get_logger
 from jenny.engine.datetime_fr import (
     SOFT,
@@ -19,7 +20,6 @@ from jenny.engine.datetime_fr import (
     today_in,
 )
 from jenny.engine.intelligence import (
-    GAP_SCORE_HARD_FLOOR,
     clean_question,
     decide_clarification,
     detect_language,
@@ -907,22 +907,25 @@ class ConversationEngine:
             and not (state.action_result or {}).get("success")
         ):
             try:
-                # même seuil que les lacunes
+                # même seuil que la FAQ
                 _hits = await self.retriever.search(
                     request.message_text,
                     business_id=state.business_id,
-                    top_k=3,
-                    score_threshold=GAP_SCORE_HARD_FLOOR,
+                    top_k=FAQ_MAX_DOCS,
+                    score_threshold=FAQ_MIN_SCORE,
                 )
-                if _hits:
-                    state.retrieved_documents = [
+                _docs = select_documents(
+                    [
                         {"content": h.content, "score": h.score, "metadata": h.metadata}
-                        for h in _hits
+                        for h in _hits or []
                     ]
+                )
+                if _docs:
+                    state.retrieved_documents = _docs
                     logger.info(
                         "engine.rag_grounded",
-                        results=len(_hits),
-                        top_score=round(_hits[0].score, 3),
+                        results=len(_docs),
+                        top_score=round(_docs[0]["score"], 3),
                     )
             except Exception as _e:  # pragma: no cover
                 logger.warning("engine.rag_ground_failed", error=str(_e))
@@ -1124,39 +1127,35 @@ class ConversationEngine:
 
     async def _classify_text(self, text: str) -> dict:
         """Classifie un texte en intention."""
-        if self.intent_predictor is not None:
+        # lstm ou tête mpnet : même api
+        predict_multi = getattr(self.intent_predictor, "predict_multi", None)
+        if callable(predict_multi):
             try:
-                from ml.models.intent.predict import IntentPredictor
+                # hors boucle d'événements
+                result = await asyncio.to_thread(_ml_call, predict_multi, text)
+                ml_intent = result["primary_intent"]
+                ml_conf = float(result["primary_confidence"])
 
-                if isinstance(self.intent_predictor, IntentPredictor):
-                    # hors boucle d'événements
-                    result = await asyncio.to_thread(
-                        _ml_call, self.intent_predictor.predict_multi, text
-                    )
-                    ml_intent = result["primary_intent"]
-                    ml_conf = result["primary_confidence"]
+                if ml_conf < ML_CONFIDENCE_FLOOR:
+                    rule_intent, rule_conf = self._rule_based_intent(text)
+                    if rule_intent != "general" and rule_conf > ml_conf:
+                        return {
+                            "intent": rule_intent,
+                            "confidence": rule_conf,
+                            "detected_intents": [{"intent": rule_intent, "confidence": rule_conf}],
+                            "is_multi_intent": False,
+                            "needs_clarification": False,
+                        }
 
-                    if ml_conf < ML_CONFIDENCE_FLOOR:
-                        rule_intent, rule_conf = self._rule_based_intent(text)
-                        if rule_intent != "general" and rule_conf > ml_conf:
-                            return {
-                                "intent": rule_intent,
-                                "confidence": rule_conf,
-                                "detected_intents": [
-                                    {"intent": rule_intent, "confidence": rule_conf}
-                                ],
-                                "is_multi_intent": False,
-                                "needs_clarification": False,
-                            }
-
-                    return {
-                        "intent": ml_intent,
-                        "confidence": ml_conf,
-                        "detected_intents": result["intents"],
-                        "is_multi_intent": result["is_multi_intent"],
-                        "needs_clarification": result["needs_clarification"],
-                    }
-            except (ImportError, Exception) as e:
+                return {
+                    "intent": ml_intent,
+                    "confidence": ml_conf,
+                    "detected_intents": result.get("intents")
+                    or [{"intent": ml_intent, "confidence": ml_conf}],
+                    "is_multi_intent": bool(result.get("is_multi_intent", False)),
+                    "needs_clarification": bool(result.get("needs_clarification", False)),
+                }
+            except Exception as e:
                 logger.warning("engine.intent.model_error", error=str(e))
 
         # fallback: règles mots-clés
@@ -1214,19 +1213,17 @@ class ConversationEngine:
     async def _extract_entities(self, text: str, state: ConversationState) -> dict[str, str]:
         """Extrait les entités du message."""
         regex_entities = self._regex_entity_extraction(text)
-        if self.ner_predictor is not None:
+        predict = getattr(self.ner_predictor, "predict", None)
+        if callable(predict):
             try:
-                from ml.models.ner.predict import NERPredictor
-
-                if isinstance(self.ner_predictor, NERPredictor):
-                    # hors boucle d'événements
-                    found = await asyncio.to_thread(_ml_call, self.ner_predictor.predict, text)
-                    entities = dict(found or {})
-                    # regex en complément
-                    for key, value in regex_entities.items():
-                        entities.setdefault(key, value)
-                    return entities
-            except (ImportError, Exception) as e:
+                # hors boucle d'événements
+                found = await asyncio.to_thread(_ml_call, predict, text)
+                entities = dict(found or {})
+                # regex en complément
+                for key, value in regex_entities.items():
+                    entities.setdefault(key, value)
+                return entities
+            except Exception as e:
                 logger.warning("engine.ner.model_error", error=str(e))
 
         return regex_entities
