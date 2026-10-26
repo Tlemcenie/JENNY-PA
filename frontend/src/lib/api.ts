@@ -1157,6 +1157,7 @@ function startRealtimeStream(): () => void {
           signal: controller.signal,
         });
         if (!res.ok || !res.body) throw new Error(`SSE ${res.status}`);
+        if (closed) break; // coupé entre-temps
 
         setRealtimeConnected(true);
         attempt = 0;
@@ -1183,7 +1184,7 @@ function startRealtimeStream(): () => void {
             } catch {
               continue; // trame partielle
             }
-            dispatchRealtime(parsed);
+            if (!closed) dispatchRealtime(parsed);
           }
         }
       } catch {
@@ -1214,6 +1215,7 @@ export function subscribeToConversationEvents(
   realtimeHub.listeners.add(listener);
 
   if (!realtimeHub.stop) {
+    realtimeHub.connected = false;
     realtimeHub.stop = startRealtimeStream();
   } else if (realtimeHub.connected && onConnectionChange) {
     // déjà connecté : on prévient
