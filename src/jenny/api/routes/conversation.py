@@ -7,19 +7,23 @@ et retourne la réponse générée.
 
 Le chat reste ouvert sans compte (widget public) mais un appel anonyme ne lit
 jamais de données : pas de fiche client, pas de reprise d'une conversation
-d'un client identifié, statut réduit. Protection du coût : limite de débit.
+d'un client identifié (sauf client né dans ce chat), statut réduit.
+Protection du coût : salon vérifié avant tout, puis limite de débit.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import time
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select, update
 
 from jenny.api.dependencies import (
     CurrentPrincipal,
@@ -29,7 +33,9 @@ from jenny.api.dependencies import (
     soft_principal,
 )
 from jenny.api.middleware.rate_limit import enforce_business_chat_limit
+from jenny.core.events import publish_conversation_event
 from jenny.core.logging import get_logger
+from jenny.domain.models.business import Business
 from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.message import Message
@@ -42,19 +48,111 @@ router = APIRouter(prefix="/conversation", tags=["Conversation"])
 
 
 _FORBIDDEN_CONV = "Conversation inaccessible"
+_UNKNOWN_CUSTOMER = "Client inconnu pour ce salon"
+# convs créées par le chat
+_CHAT_CHANNELS = frozenset({"api", "widget"})
+_ADOPT_MARGIN = timedelta(minutes=2)
+# routes du widget public
+_WIDGET_PREFIX = "/api/v1/public/"
+# rafraîchit, sans alerte
+_REFRESH_KIND = "update"
+
+# cache court des salons
+_SALON_TTL = 30.0
+_SALON_MAX = 2048
+_salon_cache: OrderedDict[UUID, tuple[float, bool]] = OrderedDict()
+
+
+def reset_salon_cache() -> None:
+    """Vide le cache salons."""
+    _salon_cache.clear()
+
+
+async def _salon_open(db, business_id: UUID) -> bool:
+    """Salon existant et actif ?"""
+    now = time.monotonic()
+    hit = _salon_cache.get(business_id)
+    if hit is not None and now - hit[0] < _SALON_TTL:
+        return hit[1]
+    try:
+        active = (
+            await db.execute(select(Business.is_active).where(Business.id == business_id))
+        ).scalar_one_or_none()
+    except Exception as exc:  # pragma: no cover - base indispo
+        await db.rollback()
+        logger.warning("conversation.salon_check_error", error=str(exc))
+        return True
+    ok = bool(active)
+    _salon_cache[business_id] = (now, ok)
+    _salon_cache.move_to_end(business_id)
+    while len(_salon_cache) > _SALON_MAX:
+        _salon_cache.popitem(last=False)
+    return ok
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
+
+
+async def _customer_business(db, customer_id: UUID | None) -> UUID | None:
+    """Salon du client, requête légère."""
+    if customer_id is None:
+        return None
+    return (
+        await db.execute(select(Customer.business_id).where(Customer.id == customer_id))
+    ).scalar_one_or_none()
+
+
+async def _born_here(db, conv: Conversation) -> bool:
+    """Client créé dans ce chat ?"""
+    if conv.channel not in _CHAT_CHANNELS or conv.customer_id is None:
+        return False
+    row = (
+        await db.execute(
+            select(Customer.business_id, Customer.created_at).where(
+                Customer.id == conv.customer_id
+            )
+        )
+    ).first()
+    if row is None or row.business_id != conv.business_id:
+        return False
+    born, opened = _aware(row.created_at), _aware(conv.created_at)
+    # client plus vieux : refus
+    if born is None or opened is None or born < opened - _ADOPT_MARGIN:
+        return False
+    other = (
+        await db.execute(
+            select(Conversation.id)
+            .where(Conversation.customer_id == conv.customer_id, Conversation.id != conv.id)
+            .limit(1)
+        )
+    ).first()
+    return other is None
 
 
 async def _guard_conversation(
     db, body: ConversationRequest, principal: CurrentPrincipal | None
 ) -> None:
     """Bloque la reprise d'une conv d'autrui."""
-    state = get_engine().state_manager.get(body.conversation_id)
+    state = await get_engine().state_manager.aget(body.conversation_id)
     if state is not None and state.business_id not in (None, body.business_id):
         raise HTTPException(403, _FORBIDDEN_CONV)
+    if principal is None and body.customer_id is not None:
+        # anonyme : jamais de fiche
+        raise HTTPException(403, _UNKNOWN_CUSTOMER)
 
     try:
         conv = await db.get(Conversation, body.conversation_id)
-        cust = await db.get(Customer, body.customer_id) if body.customer_id else None
+        cust_biz = await _customer_business(db, body.customer_id)
+        born_here = (
+            principal is None
+            and conv is not None
+            and conv.customer_id is not None
+            and conv.business_id == body.business_id
+            and await _born_here(db, conv)
+        )
     except Exception as exc:  # pragma: no cover - base indispo
         await db.rollback()
         logger.warning("conversation.guard_db_error", error=str(exc))
@@ -63,18 +161,31 @@ async def _guard_conversation(
         if conv.business_id != body.business_id:
             raise HTTPException(403, _FORBIDDEN_CONV)
         # anonyme : pas de client connu
-        if principal is None and conv.customer_id not in (None, body.customer_id):
+        if principal is None and conv.customer_id is not None and not born_here:
             raise HTTPException(403, _FORBIDDEN_CONV)
-    if body.customer_id is not None and (cust is None or cust.business_id != body.business_id):
-        raise HTTPException(403, "Client inconnu pour ce salon")
+    # état moteur sans trace en base
+    anon_state = principal is None and state is not None and state.customer_id is not None
+    if anon_state and (conv is None or conv.customer_id != state.customer_id):
+        raise HTTPException(403, _FORBIDDEN_CONV)
+    if body.customer_id is not None and cust_biz != body.business_id:
+        raise HTTPException(403, _UNKNOWN_CUSTOMER)
+
+
+def _from_widget(request: Request) -> bool:
+    """Appel du widget public ?"""
+    return request.url.path.startswith(_WIDGET_PREFIX)
 
 
 async def _check_chat_access(
     db, body: ConversationRequest, request: Request
 ) -> CurrentPrincipal | None:
     """Salon autorisé + conv sûre."""
-    principal = await soft_principal(request, db)
+    # widget : toujours anonyme
+    principal = None if _from_widget(request) else await soft_principal(request, db)
     resolve_business_id(principal, body.business_id, allow_anonymous=True)
+    # salon réel avant quota
+    if not await _salon_open(db, body.business_id):
+        raise HTTPException(404, "Salon introuvable")
     await _guard_conversation(db, body, principal)
     return principal
 
@@ -93,6 +204,20 @@ async def _prepare_public_chat(
     return body
 
 
+async def _adopted_customer(db, business_id: UUID, result: EngineResponse) -> UUID | None:
+    """Client créé ou repris par le moteur."""
+    ar = result.action_result if isinstance(result.action_result, dict) else {}
+    # même règle que le moteur
+    raw = ar.get("customer_id") if ar.get("named") else None
+    if not raw:
+        return None
+    try:
+        cid = UUID(str(raw))
+    except (TypeError, ValueError):
+        return None
+    return cid if await _customer_business(db, cid) == business_id else None
+
+
 async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -> str | None:
     """Persiste la conversation et les messages (client + Jenny) en base.
 
@@ -102,6 +227,14 @@ async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -
     Retourne l'id du message SORTANT (réponse de Jenny) pour permettre au client
     de rattacher un feedback 👍/👎 ; ``None`` si la persistance a échoué.
     """
+    message_id, _customer_id = await _persist_turn(db, body, result)
+    return message_id
+
+
+async def _persist_turn(
+    db, body: ConversationRequest, result: EngineResponse
+) -> tuple[str | None, UUID | None]:
+    """Écrit le tour, rattache le client."""
     outbound_id = uuid4()
     try:
         now = datetime.now(UTC)
@@ -111,12 +244,14 @@ async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -
         if conv is not None and conv.business_id != body.business_id:
             # jamais chez un autre salon
             logger.warning("conversation.persist_cross_business", conversation_id=str(conv.id))
-            return None
+            return None, None
+        adopted = await _adopted_customer(db, body.business_id, result)
         if conv is None:
+            customer_id = body.customer_id or adopted
             conv = Conversation(
                 id=body.conversation_id,
                 business_id=body.business_id,
-                customer_id=body.customer_id,
+                customer_id=customer_id,
                 channel=channel,
                 status="open",
                 current_intent=result.intent,
@@ -126,14 +261,32 @@ async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -
             db.add(conv)
             await db.flush()
         else:
+            customer_id = body.customer_id or conv.customer_id or adopted
             conv.current_intent = result.intent
             conv.last_message_at = now
+            if conv.customer_id is None and customer_id is not None:
+                # droit à l'oubli : tout rattacher
+                conv.customer_id = customer_id
+                await db.execute(
+                    update(Message)
+                    .where(
+                        Message.conversation_id == conv.id,
+                        Message.business_id == body.business_id,
+                        Message.customer_id.is_(None),
+                    )
+                    .values(customer_id=customer_id)
+                )
+                logger.info(
+                    "conversation.customer_attached",
+                    conversation_id=str(conv.id),
+                    customer_id=str(customer_id),
+                )
 
         db.add(
             Message(
                 conversation_id=conv.id,
                 business_id=body.business_id,
-                customer_id=body.customer_id,
+                customer_id=customer_id,
                 external_message_id=str(uuid4()),
                 channel=channel,
                 direction="inbound",
@@ -150,6 +303,7 @@ async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -
                 id=outbound_id,
                 conversation_id=conv.id,
                 business_id=body.business_id,
+                customer_id=customer_id,
                 external_message_id=str(uuid4()),
                 channel=channel,
                 direction="outbound",
@@ -163,11 +317,21 @@ async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -
         )
         conv.message_count = (conv.message_count or 0) + 2
         await db.commit()
-        return str(outbound_id)
+        return str(outbound_id), customer_id
     except Exception as e:
         await db.rollback()
         logger.error("conversation.persist_error", error=str(e))
-        return None
+        return None, None
+
+
+def _notify_refresh(body: ConversationRequest) -> None:
+    """Dashboard à jour, pas d'alerte."""
+    publish_conversation_event(
+        body.business_id,
+        conversation_id=body.conversation_id,
+        kind=_REFRESH_KIND,
+        channel=body.channel or "api",
+    )
 
 
 # ── Schémas de requête / réponse ──
@@ -230,6 +394,8 @@ async def chat(
     """
     body = await _prepare_public_chat(db, body, request)
     result, message_id = await _run_engine_chat(db, body, request)
+    if message_id is not None:
+        _notify_refresh(body)
     return _to_response(result, message_id)
 
 
@@ -253,15 +419,20 @@ async def _run_engine_chat(
     catalog = format_catalog(prestations)
 
     # horaires réels pour le prompt (best-effort, comme la persona)
-    from jenny.domain.models.business import Business
     from jenny.engine.business_hours import format_hours
 
     hours_text: str | None = None
+    tz: str | None = None
     try:
         _biz = await db.get(Business, body.business_id)
         hours_text = format_hours(_biz.business_hours if _biz else None)
+        # fuseau du salon
+        tz = _biz.timezone if _biz else None
     except Exception:  # pragma: no cover - DB best-effort
         hours_text = None
+    services = [p.name for p in prestations] or None
+    # rend la connexion avant le LLM
+    await db.commit()
 
     result: EngineResponse = await engine.process(
         EngineRequest(
@@ -275,16 +446,17 @@ async def _run_engine_chat(
             business_name=business_name,
             customer_facts=customer_facts,
             catalog=catalog or None,
-            catalog_services=[p.name for p in prestations] or None,
+            catalog_services=services,
             hours_text=hours_text,
+            timezone=tz,
         ),
         on_token=on_token,
     )
-    message_id = await _persist_chat(db, body, result)
+    message_id, customer_id = await _persist_turn(db, body, result)
     await persist_engine_signals(
         db,
         business_id=body.business_id,
-        customer_id=body.customer_id,
+        customer_id=customer_id or body.customer_id,
         conversation_id=body.conversation_id,
         channel=body.channel,
         result=result,
@@ -334,6 +506,8 @@ async def chat_stream(
     async def run() -> None:
         try:
             result, message_id = await _run_engine_chat(db, body, request, on_token=on_token)
+            if message_id is not None:
+                _notify_refresh(body)
             await queue.put({"__result__": result, "__message_id__": message_id})
         except Exception as exc:  # pragma: no cover - chemin d'erreur réseau
             logger.error("conversation.stream_error", error=str(exc))
@@ -391,7 +565,7 @@ async def conversation_status(conversation_id: UUID, principal: OptionalUser) ->
     (prestation/date/nom du client).
     """
     engine = get_engine()
-    state = engine.state_manager.get(conversation_id)
+    state = await engine.state_manager.aget(conversation_id)
     not_found = {"status": "not_found", "conversation_id": str(conversation_id)}
 
     if state is None:

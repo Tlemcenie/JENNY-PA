@@ -15,10 +15,20 @@ import jenny.domain.models  # noqa: F401 — enregistre tous les modèles dans B
 from jenny.api.main import create_app
 from jenny.db.base import Base
 from jenny.db.session import async_session_factory, engine
+from jenny.domain.models.business import Business
 from jenny.domain.models.user import User
 
 # schéma pour tous les tests
 pytestmark = pytest.mark.usefixtures("db_tables")
+
+
+async def _biz() -> str:
+    """Salon réel (sinon 404)."""
+    async with async_session_factory() as s, s.begin():
+        biz = Business(name="Salon", slug=f"s-{uuid4().hex[:8]}")
+        s.add(biz)
+        await s.flush()
+        return str(biz.id)
 
 # mot de passe valide
 _E2E_PASSWORD = "Strong#1234"
@@ -259,7 +269,7 @@ class TestChatPipeline:
             "/api/v1/conversation/chat",
             json={
                 "conversation_id": str(uuid4()),
-                "business_id": str(uuid4()),
+                "business_id": await _biz(),
                 "message": "Bonjour Jenny !",
             },
         )
@@ -272,7 +282,7 @@ class TestChatPipeline:
     @pytest.mark.asyncio
     async def test_multiturn_keeps_context(self, client: AsyncClient) -> None:
         conv_id = str(uuid4())
-        biz_id = str(uuid4())
+        biz_id = await _biz()
 
         r1 = await client.post(
             "/api/v1/conversation/chat",
@@ -308,7 +318,7 @@ class TestAppointmentPipeline:
     @pytest.mark.asyncio
     async def test_chat_books_an_appointment(self, client: AsyncClient) -> None:
         conv_id = str(uuid4())
-        biz_id = str(uuid4())
+        biz_id = await _biz()
 
         r = await client.post(
             "/api/v1/conversation/chat",
@@ -373,7 +383,7 @@ class TestQuotePipeline:
             "/api/v1/conversation/chat",
             json={
                 "conversation_id": str(uuid4()),
-                "business_id": str(uuid4()),
+                "business_id": await _biz(),
                 "message": "Bonjour, pouvez-vous me faire un devis pour un site vitrine ?",
                 "channel": "form",
             },
@@ -451,7 +461,7 @@ class TestServicesPipeline:
             "/api/v1/conversation/chat",
             json={
                 "conversation_id": str(uuid4()),
-                "business_id": str(uuid4()),
+                "business_id": await _biz(),
                 "message": "Quels services proposez-vous ?",
                 "channel": "form",
             },
@@ -494,7 +504,7 @@ class TestServicesPipeline:
             "/api/v1/conversation/chat",
             json={
                 "conversation_id": str(uuid4()),
-                "business_id": str(uuid4()),
+                "business_id": await _biz(),
                 "message": "Je veux parler à un vrai humain s'il vous plaît",
             },
         )
@@ -519,7 +529,7 @@ class TestFullJourney:
         assert token
 
         conv_id = str(uuid4())
-        biz_id = str(uuid4())
+        biz_id = await _biz()
 
         for message, must_have_response in [
             ("Bonjour !", True),

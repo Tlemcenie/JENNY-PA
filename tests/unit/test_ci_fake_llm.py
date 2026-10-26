@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+
+from jenny.db.session import async_session_factory
+from jenny.domain.models.business import Business
 
 pytestmark = pytest.mark.usefixtures("db_tables")
 
@@ -13,6 +16,10 @@ _DISCLOSURE = "assistante virtuelle"
 
 async def _chat(client, conv: str, biz: str, message: str) -> dict:
     """Un tour de chat."""
+    # salon réel, sinon 404
+    async with async_session_factory() as s, s.begin():
+        if await s.get(Business, UUID(biz)) is None:
+            s.add(Business(id=UUID(biz), name="Salon", slug=f"s-{uuid4().hex[:8]}"))
     r = await client.post(
         "/api/v1/conversation/chat",
         json={"conversation_id": conv, "business_id": biz, "message": message},
