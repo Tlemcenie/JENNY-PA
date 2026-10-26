@@ -6,7 +6,7 @@ import asyncio
 import re
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from jenny.agents.faq_agent import FAQ_MAX_DOCS, FAQ_MIN_SCORE, select_documents
 from jenny.core.logging import get_logger
@@ -28,7 +28,7 @@ from jenny.engine.intelligence import (
     refine_knowledge_gap,
 )
 from jenny.engine.state_manager import ConversationPhase, ConversationState, StateManager
-from jenny.engine.thresholds import LATCH_MAX_TURNS, LOW_CONFIDENCE_FLOOR
+from jenny.engine.thresholds import LATCH_MAX_TURNS, LOW_CONFIDENCE_FLOOR, RULES_MAX_CHARS
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -47,6 +47,11 @@ def _ml_call(fn: Callable[[str], object], text: str) -> object:
     """Inférence sous verrou."""
     with _ML_LOCK:
         return fn(text)
+
+
+def clip_rules_text(text: str | None) -> str:
+    """Texte borné pour les règles."""
+    return (text or "")[:RULES_MAX_CHARS]
 
 
 # seuil de confiance ML
@@ -91,11 +96,12 @@ _BYE_TAIL = (
     r"(?:et\s+)?bonne\s+(?:journ[ée]e|soir[ée]e|nuit|fin\s+de\s+journ[ée]e))"
 )
 # « merci, à jeudi 10h ! »
+# queue atomique : pas de ReDoS
 _FAREWELL_WHEN_RE = re.compile(
     rf"{_BYE_LEAD}[àa]\s+(?:demain|apr[èe]s[\s-]?demain|{_WD_FR}|"
     r"midi|tout\s+[àa]\s+l['’]heure)(?:\s+prochain)?(?:\s+en\s+(?:huit|quinze))?"  # noqa: RUF001
     rf"(?:[\s,]+(?:[àa]\s+)?(?:{_HOUR_FR}|midi))?"
-    rf"(?:[^\w?]+{_BYE_TAIL})*[^\w?]*$",
+    rf"(?>(?:[^\w?]++{_BYE_TAIL}(?!\w))*)[^\w?]*$",
     re.I,
 )
 # « bon week-end » : un souhait
@@ -133,6 +139,16 @@ _NEW_BOOKING_RE = re.compile(
     r"|\baussi\b|\b[ée]galement\b|\ben\s+plus\b",
     re.I,
 )
+# « avancer » : un report
+_AVANCE_RE = re.compile(r"\bavanc", re.I)
+# « je garde », « comme prévu »
+_KEEP_RE = re.compile(
+    r"\b(?:je|on)\s+(?:le\s+|la\s+|l['’]\s?)?(?:garde|reste|conserve|laisse|maintiens)\b"  # noqa: RUF001
+    r"|\bcomme\s+pr[ée]vu\b|\bchang\w*+\s+rien\b|\bpas\s+de\s+changement"
+    # « je ne veux plus décaler »
+    r"|\b(?:plus|pas)\s+(?:la\s+peine\s+de\s+|besoin\s+de\s+)?(?:d[ée]cal|d[ée]plac|report|chang)",
+    re.I,
+)
 # intentions d'au revoir
 _BYE_INTENTS = frozenset({"closing", "greeting", "small_talk"})
 # mots d'un créneau seul
@@ -149,9 +165,10 @@ _WHEN_WORDS = frozenset(_WHEN_TEXT.split())
 _MGMT_CANCEL_RE = re.compile(
     r"\b(annul|d[ée]command)|\bsupprim\w*\s+(?:mon|le)\s+(?:rdv|rendez)", re.I
 )
+# « rechanger », « échanger » aussi
 _MGMT_RESCHED_RE = re.compile(
     r"\b(d[ée]plac|d[ée]cal|repouss)|\breport\w*\s+(?:mon|le)\s+(?:rdv|rendez)|"
-    r"chang\w*\s+(?:l['’]?heure|de\s+jour|la\s+date)",  # noqa: RUF001
+    r"\b(?:re|[ée])?chang\w*+\s+(?:l['’]?heure|de\s+jour|la\s+date)",  # noqa: RUF001
     re.I,
 )
 _MGMT_CONFIRM_RE = re.compile(
@@ -308,12 +325,16 @@ _LEAD_FILLER_RE = re.compile(
 )
 # « Marie merci » : merci en fin
 _TRAIL_THANKS_RE = re.compile(
-    r"\s+(?:merci(?:\s+(?:beaucoup|bien|bcp|infiniment|encore))?|"
+    r"(?<!\s)\s+(?:merci(?:\s+(?:beaucoup|bien|bcp|infiniment|encore))?|"
     r"bonne\s+(?:journ[ée]e|soir[ée]e))[\s!.]*$",
     re.I,
 )
 # découpe en morceaux
-_NAME_SPLIT_RE = re.compile(r"[,;.!\n]+|\s+(?:et|mais)\s+", re.I)
+# début de blanc seulement : linéaire
+_NAME_SPLIT_RE = re.compile(
+    r"[,;.!\n]+(?:\s+(?:et|mais)\s+)?|(?<!\s)\s+(?:et|mais)\s+",
+    re.I,
+)
 
 
 def _word_key(word: str) -> str:
@@ -428,7 +449,7 @@ def strip_farewell(message: str, *, keep_days: bool = False) -> str:
         _MGMT_RESCHED_RE.search(m)
         or _MGMT_CANCEL_RE.search(m)
         or _RESCHED_CUE_RE.search(m)
-        or re.search(r"\bavanc", m, re.I)
+        or _AVANCE_RE.search(m)
     )
     if not keep:
         m = _SEE_YOU_RE.sub(" ", m)
@@ -444,6 +465,88 @@ def is_farewell(message: str, *, today: date | None = None, keep_days: bool = Fa
     if rest == (message or ""):
         return False
     return not (parse_fr_date(rest, today=today) or parse_fr_time(rest))
+
+
+def offered_slots(
+    text: str | None, *, today: date, day: str | None = None
+) -> set[tuple[str | None, str]]:
+    """Créneaux proposés : (jour, heure)."""
+    found: set[tuple[str | None, str]] = set()
+    # « jeudi 29/10 à 10h00, 11h00 »
+    for label in (text or "").split(","):
+        hour = parse_fr_time(label)
+        if hour is None:
+            continue
+        d = parse_fr_date(label, today=today)
+        found.add((d.isoformat() if d else day, hour.strftime("%H:%M")))
+    return found
+
+
+def picks_offered_slot(
+    message: str,
+    *,
+    today: date,
+    offer: dict[str, Any],
+    asked_day: str | None = None,
+    booked: tuple[str | None, str | None] = (None, None),
+) -> bool:
+    """Au revoir qui choisit un créneau proposé ?"""
+    m = message or ""
+    if declines_offer(m):
+        return False
+    kept = strip_farewell(m, keep_days=True)
+    hour = parse_fr_time(kept)
+    # jour seul : ambigu
+    if hour is None:
+        return False
+    day = parse_fr_date(kept, today=today)
+    d, h = (day.isoformat() if day else None), hour.strftime("%H:%M")
+    # son rdv actuel : il le garde
+    if h == booked[1] and d in (None, booked[0]):
+        return False
+    text = offer.get("alternatives_text") or offer.get("slots_text")
+    slots = offered_slots(text, today=today, day=asked_day)
+    if any(t == h and d in (None, sd) for sd, t in slots):
+        return True
+    # créneaux du jour demandé
+    same_day = all(sd == asked_day for sd, _ in slots)
+    return (
+        bool(offer.get("propose_slots"))
+        and asked_day is not None
+        and same_day
+        and (d in (None, asked_day))
+    )
+
+
+def current_slots(
+    offer: dict[str, Any], *, today: date, booked: tuple[str | None, str | None] = (None, None)
+) -> list[tuple[str | None, str | None]]:
+    """Créneaux possibles du rdv actuel."""
+    found = [booked] if any(booked) else []
+    # report raté : la base le dit
+    when = offer.get("when") if offer.get("operation") == "reschedule" else None
+    if when and not offer.get("success"):
+        day, hour = parse_fr_date(when, today=today), parse_fr_time(when)
+        if day and hour and (slot := (day.isoformat(), hour.strftime("%H:%M"))) not in found:
+            found.append(slot)
+    return found or [(None, None)]
+
+
+def keeps_current_slot(
+    message: str, *, today: date, booked: tuple[str | None, str | None] = (None, None)
+) -> bool:
+    """Refuse l'offre, garde son rdv ?"""
+    m = message or ""
+    day, hour = parse_fr_date(m, today=today), parse_fr_time(m)
+    d = day.isoformat() if day else None
+    h = hour.strftime("%H:%M") if hour else None
+    # autre créneau : vrai report
+    if (d and d != booked[0]) or (h and h != booked[1]):
+        return False
+    # son créneau, ou son jour seul
+    if d and (h or not _ALT_LEAD_RE.match(m)):
+        return True
+    return declines_offer(m) or bool(_KEEP_RE.search(m))
 
 
 def _filled(state: ConversationState, name: str) -> str | None:
@@ -520,6 +623,14 @@ _ENTITY_SLOT_KEYS = frozenset(
     }
 )
 _EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$")
+
+# entités par regex
+# départ en début de mot : linéaire
+_EMAIL_FIND_RE = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+")
+_PHONE_FIND_RE = re.compile(r"(?:\+33|0)\s*[1-9](?:[\s.-]*\d{2}){4}")
+_ORDER_FIND_RE = re.compile(r"(?:commande|cmd|order)\s*+[#:]?\s*+([A-Z0-9-]{4,20})", re.I)
+_DATE_FIND_RE = re.compile(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}")
+_AMOUNT_FIND_RE = re.compile(r"(?<!\d)(\d+(?:[.,]\d{2})?)\s*€")
 
 
 def coerce_entity(
@@ -675,6 +786,8 @@ class ConversationEngine:
             channel=request.channel,
         )
         state.add_user_message(request.message_text)
+        # règles : texte borné
+        _msg_txt = clip_rules_text(request.message_text)
         state.language = request.language
         if request.customer_id is not None:
             state.customer_id = request.customer_id
@@ -685,7 +798,7 @@ class ConversationEngine:
             state.business_name = request.business_name
 
         # langue du client
-        state.detected_language = request.language or detect_language(request.message_text)
+        state.detected_language = request.language or detect_language(_msg_txt)
         # faits connus sur le client
         if request.customer_facts:
             state.customer_facts = list(request.customer_facts)
@@ -717,21 +830,51 @@ class ConversationEngine:
         )
 
         # 2. intention
-        intent_result = await self._detect_intent(request.message_text, state)
+        intent_result = await self._detect_intent(_msg_txt, state)
 
         # override rdv haute précision
-        _msg_txt = request.message_text or ""
         _model_intent = intent_result["intent"]
         _blocks_appt_override = _model_intent in (
             "appointment",
             "manage_appointment",
             "escalation",
         ) or (_model_intent == "complaint" and _COMPLAINT_SIGNAL_RE.search(_msg_txt))
+        # rdv actuel : fil ou base
+        _booked_now = current_slots(
+            _prev_ar, today=today, booked=(state.booked_date, state.booked_time)
+        )
+        # au revoir après créneaux proposés
+        _keep_days = _offered
+        if _offered and is_farewell(_msg_txt, today=today):
+            # garde le jour si vrai choix
+            _keep_days = all(
+                picks_offered_slot(
+                    _msg_txt,
+                    today=today,
+                    offer=_prev_ar,
+                    asked_day=_filled(state, "date"),
+                    booked=b,
+                )
+                for b in _booked_now
+            )
         # « bon week-end » : pas un jour
-        _when_txt = strip_farewell(_msg_txt, keep_days=_offered)
-        _farewell = is_farewell(_msg_txt, today=today, keep_days=_offered)
+        _when_txt = strip_farewell(_msg_txt, keep_days=_keep_days)
+        _farewell = is_farewell(_msg_txt, today=today, keep_days=_keep_days)
+        # « non merci, je garde demain »
+        # rdv actuel : seulement en report
+        _cur = _booked_now if prev_pending == "manage_appointment" else [(None, None)]
+        _stays = (
+            _offered
+            and not _farewell
+            and any(keeps_current_slot(_when_txt, today=today, booked=b) for b in _cur)
+        )
+        if _offered and (_farewell or _stays):
+            # offre close : vieux créneau oublié
+            for name in ("operation", "date", "time"):
+                state.slots.pop(name, None)
         # jour ou heure dans le message
-        _slot_in_msg = bool(parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt))
+        _names_when = bool(parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt))
+        _slot_in_msg = _names_when and not _stays
         # rdv sans mot-clé
         _has_when = False
         if not _blocks_appt_override:
@@ -741,7 +884,7 @@ class ConversationEngine:
         )
         _strong_appt = bool(_STRONG_APPOINTMENT_RE.search(_msg_txt))
         _wants_appt = _strong_appt or (_has_when and _has_service)
-        if _wants_appt and not _blocks_appt_override and not _farewell:
+        if _wants_appt and not _blocks_appt_override and not (_farewell or _stays):
             logger.info(
                 "engine.intent.appointment_override",
                 was=intent_result["intent"],
@@ -755,7 +898,7 @@ class ConversationEngine:
             }
 
         # override devis
-        if _STRONG_QUOTE_RE.search(request.message_text or "") and intent_result["intent"] not in (
+        if _STRONG_QUOTE_RE.search(_msg_txt) and intent_result["intent"] not in (
             "appointment",
             "manage_appointment",
             "escalation",
@@ -770,9 +913,9 @@ class ConversationEngine:
             }
 
         # prix + prestation → devis
-        _price_signal = _PRICE_SIGNAL_RE.search(request.message_text or "")
+        _price_signal = _PRICE_SIGNAL_RE.search(_msg_txt)
         _cited_prestation = (
-            match_catalog_services(request.message_text or "", request.catalog_services)
+            match_catalog_services(_msg_txt, request.catalog_services)
             if request.catalog_services
             else None
         )
@@ -796,7 +939,7 @@ class ConversationEngine:
 
         # catalogue générique → info groundée (pas small_talk / planning)
         if (
-            _CATALOG_LIST_RE.search(request.message_text or "")
+            _CATALOG_LIST_RE.search(_msg_txt)
             and not _cited_prestation
             and not _has_when  # une vraie demande de créneau a une date
             and intent_result["intent"]
@@ -823,10 +966,14 @@ class ConversationEngine:
             and not _STRONG_APPOINTMENT_RE.search(_when_txt)
             and len(re.findall(r"\w+", _when_txt)) <= 4
         )
-        if _bye_only and intent_result["intent"] in (
-            "appointment",
-            "manage_appointment",
-            "planning",
+        # il garde son rdv : on clôt
+        _stay_close = _stays and (
+            intent_result["intent"] in ("appointment", "manage_appointment")
+            or (intent_result["intent"] == "planning" and "?" not in _msg_txt)
+        )
+        if _stay_close or (
+            _bye_only
+            and intent_result["intent"] in ("appointment", "manage_appointment", "planning")
         ):
             logger.info("engine.intent.farewell_to_closing", was=intent_result["intent"])
             intent_result = {
@@ -845,10 +992,12 @@ class ConversationEngine:
         # continuité de dialogue
         _resume_appointment_after_info = False
         if state.pending_intent and state.pending_intent != intent:
-            msg_l = request.message_text or ""
-            real_closing = (intent == "closing" and bool(_CLOSING_RE.search(msg_l))) or _farewell
+            msg_l = _msg_txt
+            real_closing = (
+                (intent == "closing" and bool(_CLOSING_RE.search(msg_l))) or _farewell or _stays
+            )
             # il choisit un créneau proposé
-            if _offered and _slot_in_msg:
+            if _keep_days and _slot_in_msg:
                 real_closing = False
             hard_interrupt = intent in _INTERRUPTING_INTENTS or real_closing
             # complète une prise de rdv ?
@@ -873,12 +1022,21 @@ class ConversationEngine:
                 intent = state.pending_intent
                 intent_confidence = max(intent_confidence, 0.6)
 
-        msg_text = request.message_text or ""
+        msg_text = _msg_txt
         # vrai changement de sujet ?
         new_topic = len(re.findall(r"\w+", msg_text)) > 3 and intent not in _FILLER_INTENTS
 
         # un créneau n'est pas un oui
-        joining_waitlist = state.awaiting_waitlist and not _slot_in_msg and accepts_offer(msg_text)
+        _wait_ok = not _slot_in_msg
+        if state.awaiting_waitlist and _slot_in_msg and parse_fr_time(_when_txt) is None:
+            # « oui, prévenez-moi pour samedi »
+            _day_txt = parse_fr_date(_when_txt, today=today)
+            _wait_ok = (
+                _day_txt is not None
+                and _day_txt.isoformat() == _filled(state, "date")
+                and bool(_OPT_IN_RE.search(msg_text) or is_confirmation(msg_text))
+            )
+        joining_waitlist = state.awaiting_waitlist and _wait_ok and accepts_offer(msg_text)
         if joining_waitlist:
             state.disarm_latch("awaiting_waitlist")
             intent = "join_waitlist"
@@ -905,9 +1063,12 @@ class ConversationEngine:
         confirm_too = bool(name_value) and mgmt_op == "confirm"
         if confirm_too:
             mgmt_op = None
+        # « je ne veux plus décaler »
+        if _stays and mgmt_op == "reschedule" and (_names_when or _KEEP_RE.search(msg_text)):
+            mgmt_op = None
 
         # report implicite sans mot-clé
-        if mgmt_op is None and not joining_waitlist and not name_value:
+        if mgmt_op is None and not joining_waitlist and not name_value and not _stays:
             _appt_slot = state.slots.get("appointment_id")
             if (
                 _appt_slot is not None
@@ -968,6 +1129,10 @@ class ConversationEngine:
         if mgmt_op:
             state.set_slot("operation", mgmt_op)
             state.pending_intent = None
+        elif intent == "manage_appointment" and not _filled(state, "operation"):
+            # sans opération : pas d'annulation
+            intent = "general"
+            state.set_intent(intent, intent_confidence)
 
         # 3. entités, liste blanche
         entities = await self._extract_entities(msg_text, state)
@@ -976,14 +1141,14 @@ class ConversationEngine:
             if (naming and entity_name == "name") or (phoning and entity_name == "phone"):
                 continue
             # « à ce soir » : pas un créneau
-            if _when_txt != _msg_txt and entity_name in ("date", "time"):
+            if (_when_txt != _msg_txt or _stays) and entity_name in ("date", "time"):
                 continue
             clean = coerce_entity(entity_name, entity_value, message=msg_text, today=today)
             if clean is not None:
                 state.set_slot(entity_name, clean, entity_type=entity_name.upper())
 
         # dates/heures en absolu
-        if intent in ("appointment", "manage_appointment"):
+        if intent in ("appointment", "manage_appointment") and not _stays:
             msg = msg_text.strip()
             # sans la formule d'au revoir
             _day = parse_fr_date(_when_txt, today=today)
@@ -1023,7 +1188,7 @@ class ConversationEngine:
             try:
                 # même seuil que la FAQ
                 _hits = await self.retriever.search(
-                    request.message_text,
+                    _msg_txt,
                     business_id=state.business_id,
                     top_k=FAQ_MAX_DOCS,
                     score_threshold=FAQ_MIN_SCORE,
@@ -1117,7 +1282,7 @@ class ConversationEngine:
             state.pending_intent = None
             # clarification générale
             decision = decide_clarification(
-                message_text=request.message_text,
+                message_text=_msg_txt,
                 intent=intent,
                 confidence=intent_confidence,
                 entities=entities,
@@ -1137,26 +1302,23 @@ class ConversationEngine:
             intent=intent,
             documents=state.retrieved_documents,
             action_result=state.action_result,
-            message=request.message_text,
+            message=_msg_txt,
         )
         # catalogue = pas une lacune
         if (
             gap
             and state.business_catalog
-            and (
-                intent in ("pricing", "quote")
-                or _CATALOG_TOPIC_RE.search(request.message_text or "")
-            )
+            and (intent in ("pricing", "quote") or _CATALOG_TOPIC_RE.search(_msg_txt))
         ):
             gap = False
         gap_question: str | None = None
         # pas de lacune si clarification
         if gap and not needs_clarification:
             state.knowledge_gap = True
-            gap_question = clean_question(request.message_text)
+            gap_question = clean_question(_msg_txt)
 
         # faits à mémoriser
-        extracted_facts = extract_customer_facts(request.message_text)
+        extracted_facts = extract_customer_facts(_msg_txt)
 
         # 5. réponse LLM
         state.phase = ConversationPhase.RESPONDING
@@ -1165,7 +1327,7 @@ class ConversationEngine:
         # affine la lacune après génération
         from jenny.engine.intelligence import _retrieval_has_answer
 
-        grounded = _retrieval_has_answer(state.retrieved_documents, request.message_text)
+        grounded = _retrieval_has_answer(state.retrieved_documents, _msg_txt)
         final_gap = refine_knowledge_gap(
             intent=intent,
             response_text=response_text,
@@ -1175,7 +1337,7 @@ class ConversationEngine:
             retrieval_grounded=grounded,
         )
         state.knowledge_gap = final_gap
-        gap_question = clean_question(request.message_text) if final_gap else None
+        gap_question = clean_question(_msg_txt) if final_gap else None
 
         # 6. maj de l'état
         state.suggested_response = response_text
@@ -1394,26 +1556,25 @@ class ConversationEngine:
     def _regex_entity_extraction(self, text: str) -> dict[str, str]:
         """Extraction d'entités par regex (fallback)."""
         entities: dict[str, str] = {}
+        text = clip_rules_text(text)
 
-        email_match = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", text)
+        email_match = _EMAIL_FIND_RE.search(text)
         if email_match:
             entities["email"] = email_match.group()
 
-        phone_match = re.search(r"(?:\+33|0)\s*[1-9](?:[\s.-]*\d{2}){4}", text)
+        phone_match = _PHONE_FIND_RE.search(text)
         if phone_match:
             entities["phone"] = phone_match.group()
 
-        order_match = re.search(
-            r"(?:commande|cmd|order)\s*[#:]?\s*([A-Z0-9-]{4,20})", text, re.IGNORECASE
-        )
+        order_match = _ORDER_FIND_RE.search(text)
         if order_match:
             entities["order_number"] = order_match.group(1)
 
-        date_match = re.search(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", text)
+        date_match = _DATE_FIND_RE.search(text)
         if date_match:
             entities["date"] = date_match.group()
 
-        amount_match = re.search(r"(\d+(?:[.,]\d{2})?)\s*€", text)
+        amount_match = _AMOUNT_FIND_RE.search(text)
         if amount_match:
             entities["amount"] = amount_match.group(1)
 

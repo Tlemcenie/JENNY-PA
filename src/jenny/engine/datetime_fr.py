@@ -8,6 +8,8 @@ import unicodedata
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from jenny.engine.thresholds import RULES_MAX_CHARS
+
 # fuseau par défaut
 DEFAULT_TZ = "Europe/Paris"
 
@@ -79,7 +81,8 @@ _NUM_ALT = r"\d{1,3}|" + "|".join(sorted(_NUM_WORDS, key=len, reverse=True))
 
 def _strip(text: str) -> str:
     """Minuscule, sans accents."""
-    t = unicodedata.normalize("NFKD", (text or "").lower())
+    # texte borné
+    t = unicodedata.normalize("NFKD", (text or "")[:RULES_MAX_CHARS].lower())
     t = "".join(c for c in t if not unicodedata.combining(c))
     t = t.replace("’", "'").replace("‘", "'").replace("`", "'")  # noqa: RUF001
     return re.sub(r"\s+", " ", t).strip()

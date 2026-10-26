@@ -6,6 +6,7 @@ import re
 from typing import TYPE_CHECKING
 
 from jenny.core.logging import get_logger
+from jenny.engine.thresholds import RULES_MAX_CHARS
 from jenny.llm.prompts import PromptBuilder
 
 if TYPE_CHECKING:
@@ -136,12 +137,13 @@ _LETTER_OPENING_RE = re.compile(
     r"(?:bonjour\s+)?(?:madame|monsieur|mademoiselle))\s*,?\s*\n+",
     re.IGNORECASE,
 )
+# blancs possessifs : pas de ReDoS
 _LETTER_SIGNATURE_RE = re.compile(
-    r"\n+\s*(?:(?:bien\s+)?cordialement|sinc[èe]rement|bien\s+à\s+vous|"
-    r"chaleureusement)\s*,?\s*(?:\n+\s*jenny\b[^\n]*)?\s*$",
+    r"(?<!\s)[^\S\n]*\n\s*+(?:(?:bien\s+)?cordialement|sinc[èe]rement|bien\s+à\s+vous|"
+    r"chaleureusement)(?:\s*+,)?(?:[^\S\n]*\n\s*+jenny\b[^\n]*+)?\s*+$",
     re.IGNORECASE,
 )
-_LETTER_NAME_RE = re.compile(r"\n+\s*jenny\s*[!.]*\s*$", re.IGNORECASE)
+_LETTER_NAME_RE = re.compile(r"(?<!\s)[^\S\n]*\n\s*+jenny\s*+[!.]*+\s*+$", re.IGNORECASE)
 
 
 def strip_letter_format(text: str) -> str:
@@ -174,14 +176,35 @@ def drop_leaked_instructions(text: str) -> str:
     return cleaned if len(cleaned) >= 15 else text
 
 
+# jeton nommé : « <|im_end », « <user »
+_ARTIFACT_TAG_RE = re.compile(r"<\|?(?:im_start|im_end|endoftext|assistant|user|system)\b")
+
+
+def _artifact_start(text: str) -> int | None:
+    """Début du 1er jeton fuité."""
+    m = _ARTIFACT_TAG_RE.search(text)
+    best = m.start() if m else None
+    # « <|…|> » sans retour arrière
+    i = text.find("<|")
+    while i != -1 and (best is None or i < best):
+        j = text.find(">", i + 2)
+        if j == -1:
+            break
+        if j > i + 2 and text[j - 1] == "|":
+            return i
+        # même « > » pour les suivants
+        i = text.find("<|", j + 1)
+    return best
+
+
 def strip_model_artifacts(text: str) -> str:
     """Vire les artefacts du modèle."""
     if not text:
         return text
     # 1) coupe au jeton
-    m = re.search(r"<\|[^>]*\|>|<\|?(?:im_start|im_end|endoftext|assistant|user|system)\b", text)
-    if m:
-        text = text[: m.start()]
+    cut = _artifact_start(text)
+    if cut is not None:
+        text = text[:cut]
     # 2) vire le CJK
     text = re.sub(r"[　-〿㐀-鿿＀-￯가-힯]+", "", text)
     return text.strip()
@@ -300,7 +323,7 @@ def strip_dialogue_scaffold(text: str) -> str:
 
 
 # clause « n'hésitez pas »
-_FILLER_PHRASE_RE = re.compile(r"\s*\bn['’]?h[ée]sitez\s+pas\b[^.!?]*[.!?]?", re.I)  # noqa: RUF001
+_FILLER_PHRASE_RE = re.compile(r"(?<!\s)\s*+\bn['’]?h[ée]sitez\s+pas\b[^.!?]*[.!?]?", re.I)  # noqa: RUF001
 
 
 # la clause porte-t-elle une vraie info ? (horaire, jour, choix, question)
@@ -535,7 +558,8 @@ class ResponseGenerator:
         )
         from jenny.engine.intelligence import _retrieval_has_answer
 
-        return _retrieval_has_answer(docs, last_user)
+        # même texte borné que le moteur
+        return _retrieval_has_answer(docs, last_user[:RULES_MAX_CHARS])
 
     def _template_fallback(self, state: ConversationState) -> str:
         """Réponses de secours sans LLM."""
