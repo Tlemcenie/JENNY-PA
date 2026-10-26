@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from jenny.engine.state_manager import ConversationState
 
 
-SYSTEM_PROMPT_BASE = """Tu es Jenny, une vraie personne de l'équipe de {business_type}. Tu écris aux clients par message (WhatsApp, Instagram, chat) — comme une collègue chaleureuse, posée et efficace.
+SYSTEM_PROMPT_BASE = """Tu es Jenny, l'assistante virtuelle de l'équipe de {business_type}. Tu écris aux clients par message (WhatsApp, Instagram, chat) — comme une collègue chaleureuse, posée et efficace.
 
 TON STYLE (le plus important) :
 - Écris comme tu PARLES à une amie cliente : chaleureuse, complice, spontanée. Des phrases COURTES.
@@ -51,7 +51,7 @@ Jenny : Pas de souci, on rattrape ça facilement avec un bon soin avant. On rega
 Client : merci beaucoup
 Jenny : Avec plaisir, à très vite ! 😊"""
 
-SLOT_FILLING_PROMPT = """Tu es Jenny, l'assistante de l'établissement, et tu fais partie de l'équipe.
+SLOT_FILLING_PROMPT = """Tu es Jenny, l'assistante virtuelle de l'établissement, et tu fais partie de l'équipe.
 Tu dois collecter les informations manquantes du client pour traiter sa demande.
 Informations manquantes : {missing_slots}.
 Pose la question de manière naturelle et polie, comme un membre de l'équipe.
@@ -156,6 +156,43 @@ def build_persona_instructions(
     return header + "\n" + "\n".join(lines)
 
 
+# slots internes, jamais au LLM
+_HIDDEN_SLOTS = frozenset({"appointment_id", "operation"})
+# noms lisibles des slots
+_SLOT_LABELS = {
+    "service": "prestation",
+    "date": "jour",
+    "time": "heure",
+    "duration": "durée",
+    "name": "nom",
+    "phone": "téléphone",
+    "email": "e-mail",
+    "order_number": "n° de commande",
+    "amount": "montant",
+}
+
+
+def slots_for_prompt(state: ConversationState) -> str:
+    """slots connus, en français clair."""
+    from jenny.engine.datetime_fr import format_fr_date, format_fr_time, today_in
+
+    today = today_in(getattr(state, "business_timezone", None))
+    parts: list[str] = []
+    for key, slot in state.slots.items():
+        if not slot.filled or slot.value is None or key in _HIDDEN_SLOTS:
+            continue
+        value = str(slot.value)
+        # iso vers « jeudi 29 octobre »
+        if key == "date":
+            value = format_fr_date(value, today=today) or value
+        elif key == "time":
+            value = format_fr_time(value) or value
+        elif key == "duration" and value.isdigit():
+            value = f"{value} min"
+        parts.append(f"{_SLOT_LABELS.get(key, key)} : {value}")
+    return " · ".join(parts)
+
+
 def build_context_instructions(state: ConversationState) -> str:
     """consignes dynamiques du moteur."""
     from jenny.engine.intelligence import language_name
@@ -219,8 +256,8 @@ class PromptBuilder:
             if intent_ctx:
                 base += f"\nContexte : {intent_ctx}"
 
-        # entités connues
-        filled_slots = {k: v.value for k, v in state.slots.items() if v.filled}
+        # entités connues, en clair
+        filled_slots = slots_for_prompt(state)
         if filled_slots:
             base += f"\nInformations déjà connues sur le client : {filled_slots}"
 
@@ -294,6 +331,13 @@ class PromptBuilder:
                         f"\nLe client vient de te donner son nom : « {nm} ». Remercie-le "
                         "chaleureusement et confirme que c'est bien noté, en une phrase."
                     )
+                    # « je confirme, c'est Marie »
+                    if public.get("confirmed"):
+                        cw = public.get("confirmed_when")
+                        base += (
+                            f"\nSon rendez-vous{f' ({cw})' if cw else ''} est aussi CONFIRMÉ : "
+                            "dis-le en quelques mots."
+                        )
                     if public.get("ask_phone"):
                         base += (
                             "\nPuis demande-lui gentiment un numéro de téléphone pour le "
@@ -411,10 +455,20 @@ class PromptBuilder:
                             "confirme-le brièvement."
                         )
                     elif public.get("success") and op == "reschedule":
+                        staff = public.get("staff_name")
+                        when = str(when or "")
+                        # coiffeur pas déjà dans « when »
+                        if staff and str(staff) not in when:
+                            when += f" avec {staff}"
                         base += (
                             f"\nLe rendez-vous est DÉPLACÉ au {when} : confirme au client en "
                             "reprenant EXACTEMENT ce nouveau créneau."
                         )
+                        if staff and public.get("staff_changed"):
+                            base += (
+                                f"\nC'est maintenant {staff} qui s'occupe du client : "
+                                "dis-le simplement."
+                            )
 
         # infos internes (jamais montrées)
         if state.retrieved_documents:
