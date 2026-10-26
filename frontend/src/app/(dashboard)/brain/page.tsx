@@ -333,7 +333,14 @@ export default function BrainPage() {
       lastSaved.current = snapshot; // déjà sauvé
       return;
     }
-    if (snapshot === lastSaved.current) return; // écho serveur, on ignore
+    if (snapshot === lastSaved.current) {
+      // revenu à l'état sauvé
+      if (dirty.current && !inFlight.current) {
+        dirty.current = false;
+        setSaveState((s) => (s === "pending" || s === "error" ? (savedAt ? "saved" : "idle") : s));
+      }
+      return; // écho serveur, on ignore
+    }
     if (saveTimer.current) clearTimeout(saveTimer.current);
     dirty.current = true;
     setSaveState("pending");
