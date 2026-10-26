@@ -1,7 +1,14 @@
-"""Chat public du widget, sans compte."""
+"""Chat public du widget, sans compte.
+
+Contrat avec le chat : la conversation vaut uuid5(salon, visitor_id), calculé
+ici. Le widget ne donne jamais de customer_id : le serveur lit en base le
+client rattaché (voir conversation.py). Un autre visiteur a un autre id, donc
+une autre conversation.
+"""
 
 from __future__ import annotations
 
+import inspect
 import ipaddress
 import re
 import time
@@ -18,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from sqlalchemy import select
 
 from jenny.api.dependencies import DbSession  # noqa: TC001
-from jenny.api.middleware.rate_limit import _client_ip, enforce_business_chat_limit
+from jenny.api.middleware.rate_limit import _client_ip, enforce_business_chat_limit, ip_key
 from jenny.api.routes.conversation import _run_engine_chat
 from jenny.core.config import get_settings
 from jenny.core.events import publish_conversation_event
@@ -94,6 +101,12 @@ class _Window:
             self._hits.move_to_end(key)
         dq.append(now)
 
+    def undo(self, key: str, now: float) -> None:
+        """Rend une requête comptée."""
+        dq = self._hits.get(key)
+        if dq and now in dq:
+            dq.remove(now)
+
     def clear(self) -> None:
         """Vide tout."""
         self._hits.clear()
@@ -109,9 +122,12 @@ _NEW_IP = _Window(5, 600)
 _SALON = _Window(SALON_BUDGET, 600, max_keys=1000)
 # part max d'une IP
 _SALON_IP = _Window(SALON_BUDGET // 10, 600, max_keys=5000)
+# IPv6 : part d'un /48
+_SALON_NET = _Window(SALON_BUDGET // 5, 600, max_keys=5000)
 # réserve si salon saturé
 _SPARE = _Window(SALON_BUDGET // 5, 600, max_keys=1000)
 _SPARE_IP = _Window(10, 600, max_keys=5000)
+_SPARE_NET = _Window(20, 600, max_keys=5000)
 _POLL_VISITOR = _Window(20, 60)
 _POLL_IP = _Window(120, 60)
 _CONFIG_IP = _Window(60, 60)
@@ -121,18 +137,21 @@ _LIMITS = (
     _NEW_IP,
     _SALON,
     _SALON_IP,
+    _SALON_NET,
     _SPARE,
     _SPARE_IP,
+    _SPARE_NET,
     _POLL_VISITOR,
     _POLL_IP,
     _CONFIG_IP,
 )
 # conversations en cours
 _BUSY: set[UUID] = set()
-# états moteur du widget
+# part du widget dans le cache moteur
 MAX_STATES = 2000
-STATE_IDLE = 2 * 3600.0
 _STATES: OrderedDict[UUID, float] = OrderedDict()
+# StateManager.forget du moteur
+EVICT_METHOD = "forget"
 
 _BUSY_TEXT = "Jenny reçoit beaucoup de messages, réessayez dans un instant."
 
@@ -159,6 +178,11 @@ def _wait(checks: list[_Check], now: float) -> int:
 def _add(checks: list[_Check], now: float) -> None:
     for w, k in checks:
         w.add(k, now)
+
+
+def _undo(checks: list[_Check], now: float) -> None:
+    for w, k in checks:
+        w.undo(k, now)
 
 
 def _take(checks: list[_Check]) -> int:
@@ -191,13 +215,26 @@ async def _shared_ok(business_id: UUID) -> bool:
     return True
 
 
+def _net(ip: str) -> str | None:
+    """IPv6 : le /48 autour."""
+    if "/" not in ip:
+        return None
+    try:
+        return str(ipaddress.ip_network(ip, strict=False).supernet(new_prefix=48))
+    except ValueError:
+        return None
+
+
 async def _admit(business_id: UUID, ip: str, visitor_key: str, new: bool) -> tuple[int, str | None]:
-    """Laisse passer ou non, avec le texte."""
+    """Laisse passer ou non, places prises avant l'await."""
     if not _limits_on():
         return 0, None
     salon = str(business_id)
+    net = _net(ip)
     now = time.monotonic()
     mine: list[_Check] = [(_IP, ip), (_VISITOR, visitor_key), (_SALON_IP, f"{salon}:{ip}")]
+    if net:
+        mine.append((_SALON_NET, f"{salon}:{net}"))
     wait = _wait(mine, now)
     if wait:
         return wait, None
@@ -207,11 +244,27 @@ async def _admit(business_id: UUID, ip: str, visitor_key: str, new: bool) -> tup
         if wait:
             return wait, f"Trop de nouvelles conversations, réessayez dans {wait} s."
     # budget normal du salon
-    if not _SALON.wait(salon, now) and await _shared_ok(business_id):
-        _add([*mine, (_SALON, salon)], now)
-        return 0, None
+    if not _SALON.wait(salon, now):
+        held = [*mine, (_SALON, salon)]
+        # réservé avant l'await
+        _add(held, now)
+        try:
+            ok = await _shared_ok(business_id)
+        except BaseException:
+            _undo(held, now)
+            raise
+        if ok:
+            return 0, None
+        _undo(held, now)
+        # l'état a pu bouger
+        now = time.monotonic()
+        wait = _wait(mine, now)
+        if wait:
+            return wait, None
     # saturé : réserve, une petite part par IP
     spare: list[_Check] = [(_SPARE, salon), (_SPARE_IP, f"{salon}:{ip}")]
+    if net:
+        spare.append((_SPARE_NET, f"{salon}:{net}"))
     wait = _wait(spare, now)
     # convs déjà lancées d'abord
     if not wait and new and _SPARE.used(salon, now) >= _SPARE.limit // 2:
@@ -282,17 +335,7 @@ def _check_slug(slug: str) -> None:
 
 def _ip(request: Request) -> str:
     """IP vue par notre proxy, IPv6 en /64."""
-    raw = _client_ip(request).strip()
-    try:
-        addr = ipaddress.ip_address(raw)
-    except ValueError:
-        return raw[:64]
-    if isinstance(addr, ipaddress.IPv6Address):
-        if addr.ipv4_mapped:
-            return str(addr.ipv4_mapped)
-        # une box = un /64
-        return str(ipaddress.ip_network(f"{addr}/64", strict=False))
-    return str(addr)
+    return ip_key(_client_ip(request))
 
 
 _AUTH_HEADERS = {b"authorization", b"x-api-key", b"cookie"}
@@ -308,19 +351,21 @@ def _anonymous(request: Request) -> Request:
 
 
 async def _track_state(conv_id: UUID) -> None:
-    """Borne les états moteur du widget."""
-    now = time.monotonic()
-    _STATES[conv_id] = now
+    """Borne la part du widget, mémoire seule."""
+    evict = getattr(get_engine().state_manager, EVICT_METHOD, None)
+    if not callable(evict):
+        # TTL du moteur, redis gardé
+        return
+    _STATES[conv_id] = time.monotonic()
     _STATES.move_to_end(conv_id)
-    while _STATES:
-        oldest, seen = next(iter(_STATES.items()))
-        if len(_STATES) <= MAX_STATES and now - seen < STATE_IDLE:
-            break
-        _STATES.popitem(last=False)
+    while len(_STATES) > MAX_STATES:
+        oldest, _seen = _STATES.popitem(last=False)
         if oldest in _BUSY:
             continue
         try:
-            await get_engine().state_manager.adelete(oldest)
+            done = evict(oldest)
+            if inspect.isawaitable(done):
+                await done
         except Exception as exc:  # pragma: no cover - best effort
             logger.warning("public_chat.state_evict_error", error=str(exc))
 
@@ -560,23 +605,11 @@ async def _conv_row(db: AsyncSession, conv_id: UUID) -> Row[Any] | None:
     """Conv déjà en base ? sinon None."""
     return (
         await db.execute(
-            select(
-                Conversation.business_id,
-                Conversation.assigned_to,
-                Conversation.customer_id,
-                Conversation.channel,
-            ).where(Conversation.id == conv_id)
+            select(Conversation.business_id, Conversation.assigned_to).where(
+                Conversation.id == conv_id
+            )
         )
     ).one_or_none()
-
-
-def _known_customer(row: Row[Any] | None, business_id: UUID) -> UUID | None:
-    """Client lié à cette conv widget."""
-    # seulement une conv du widget
-    if row is None or row.business_id != business_id or row.channel != CHANNEL:
-        return None
-    cid = row.customer_id
-    return cid if isinstance(cid, UUID) else None
 
 
 async def _save_inbound_only(db, conv_id: UUID, text: str) -> bool:
@@ -668,12 +701,8 @@ async def public_chat(
                 )
             return PublicChatResponse(response="", handoff=True, human=True)
 
-        engine_body = _EngineBody(
-            conversation_id=conv_id,
-            business_id=biz.id,
-            message=body.message,
-            customer_id=_known_customer(row, biz.id),
-        )
+        # client : lu en base par le chat
+        engine_body = _EngineBody(conversation_id=conv_id, business_id=biz.id, message=body.message)
         ran = True
         try:
             # toujours anonyme ici

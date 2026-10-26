@@ -9,6 +9,14 @@ Le chat reste ouvert sans compte (widget public) mais un appel anonyme ne lit
 jamais de données : pas de fiche client, pas de reprise d'une conversation
 d'un client identifié (sauf client né dans ce chat), statut réduit.
 Protection du coût : salon vérifié avant tout, puis limite de débit.
+
+Contrat anonyme (chat et widget) :
+- l'appelant ne donne jamais de customer_id (403 sinon) ;
+- le serveur lit en base le client rattaché à la conversation et le passe au
+  moteur, seulement s'il est né dans ce chat (pas de doublon après une perte
+  de l'état moteur) ;
+- une conversation du widget (id = uuid5(salon, visitor_id), calculé par le
+  serveur) ne se reprend que par le widget ; une autre conversation jamais.
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ import asyncio
 import json
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -51,6 +60,7 @@ _FORBIDDEN_CONV = "Conversation inaccessible"
 _UNKNOWN_CUSTOMER = "Client inconnu pour ce salon"
 # convs créées par le chat
 _CHAT_CHANNELS = frozenset({"api", "widget"})
+_WIDGET = "widget"
 _ADOPT_MARGIN = timedelta(minutes=2)
 # routes du widget public
 _WIDGET_PREFIX = "/api/v1/public/"
@@ -105,15 +115,13 @@ async def _customer_business(db, customer_id: UUID | None) -> UUID | None:
     ).scalar_one_or_none()
 
 
-async def _born_here(db, conv: Conversation) -> bool:
+async def _born_in(db, conv: Conversation, customer_id: UUID | None) -> bool:
     """Client créé dans ce chat ?"""
-    if conv.channel not in _CHAT_CHANNELS or conv.customer_id is None:
+    if conv.channel not in _CHAT_CHANNELS or customer_id is None:
         return False
     row = (
         await db.execute(
-            select(Customer.business_id, Customer.created_at).where(
-                Customer.id == conv.customer_id
-            )
+            select(Customer.business_id, Customer.created_at).where(Customer.id == customer_id)
         )
     ).first()
     if row is None or row.business_id != conv.business_id:
@@ -125,17 +133,49 @@ async def _born_here(db, conv: Conversation) -> bool:
     other = (
         await db.execute(
             select(Conversation.id)
-            .where(Conversation.customer_id == conv.customer_id, Conversation.id != conv.id)
+            .where(Conversation.customer_id == customer_id, Conversation.id != conv.id)
             .limit(1)
         )
     ).first()
     return other is None
 
 
+async def _born_here(db, conv: Conversation) -> bool:
+    """Client de la conv né ici ?"""
+    return await _born_in(db, conv, conv.customer_id)
+
+
+@dataclass(frozen=True, slots=True)
+class _Access:
+    """Droits du tour."""
+
+    principal: CurrentPrincipal | None
+    # client connu du serveur
+    customer_id: UUID | None = None
+
+
+async def _anon_customer(db, conv: Conversation | None, state, widget: bool) -> UUID | None:
+    """Client qu'un anonyme peut garder."""
+    if conv is not None:
+        # widget : seulement par lui
+        if (conv.channel == _WIDGET) != widget:
+            raise HTTPException(403, _FORBIDDEN_CONV)
+        # anonyme : pas de client connu
+        if conv.customer_id is not None and not await _born_here(db, conv):
+            raise HTTPException(403, _FORBIDDEN_CONV)
+    linked = conv.customer_id if conv is not None else None
+    held = state.customer_id if state is not None else None
+    # état moteur sans trace en base
+    stray = held is not None and held != linked
+    if stray and (conv is None or not await _born_in(db, conv, held)):
+        raise HTTPException(403, _FORBIDDEN_CONV)
+    return linked or held
+
+
 async def _guard_conversation(
-    db, body: ConversationRequest, principal: CurrentPrincipal | None
-) -> None:
-    """Bloque la reprise d'une conv d'autrui."""
+    db, body: ConversationRequest, principal: CurrentPrincipal | None, *, widget: bool = False
+) -> UUID | None:
+    """Bloque la reprise d'une conv d'autrui, renvoie le client gardé."""
     state = await get_engine().state_manager.aget(body.conversation_id)
     if state is not None and state.business_id not in (None, body.business_id):
         raise HTTPException(403, _FORBIDDEN_CONV)
@@ -145,30 +185,20 @@ async def _guard_conversation(
 
     try:
         conv = await db.get(Conversation, body.conversation_id)
+        if conv is not None and conv.business_id != body.business_id:
+            raise HTTPException(403, _FORBIDDEN_CONV)
+        if principal is None:
+            return await _anon_customer(db, conv, state, widget)
         cust_biz = await _customer_business(db, body.customer_id)
-        born_here = (
-            principal is None
-            and conv is not None
-            and conv.customer_id is not None
-            and conv.business_id == body.business_id
-            and await _born_here(db, conv)
-        )
+    except HTTPException:
+        raise
     except Exception as exc:  # pragma: no cover - base indispo
         await db.rollback()
         logger.warning("conversation.guard_db_error", error=str(exc))
-        return
-    if conv is not None:
-        if conv.business_id != body.business_id:
-            raise HTTPException(403, _FORBIDDEN_CONV)
-        # anonyme : pas de client connu
-        if principal is None and conv.customer_id is not None and not born_here:
-            raise HTTPException(403, _FORBIDDEN_CONV)
-    # état moteur sans trace en base
-    anon_state = principal is None and state is not None and state.customer_id is not None
-    if anon_state and (conv is None or conv.customer_id != state.customer_id):
-        raise HTTPException(403, _FORBIDDEN_CONV)
+        return None
     if body.customer_id is not None and cust_biz != body.business_id:
         raise HTTPException(403, _UNKNOWN_CUSTOMER)
+    return None
 
 
 def _from_widget(request: Request) -> bool:
@@ -176,18 +206,17 @@ def _from_widget(request: Request) -> bool:
     return request.url.path.startswith(_WIDGET_PREFIX)
 
 
-async def _check_chat_access(
-    db, body: ConversationRequest, request: Request
-) -> CurrentPrincipal | None:
+async def _check_chat_access(db, body: ConversationRequest, request: Request) -> _Access:
     """Salon autorisé + conv sûre."""
+    widget = _from_widget(request)
     # widget : toujours anonyme
-    principal = None if _from_widget(request) else await soft_principal(request, db)
+    principal = None if widget else await soft_principal(request, db)
     resolve_business_id(principal, body.business_id, allow_anonymous=True)
     # salon réel avant quota
     if not await _salon_open(db, body.business_id):
         raise HTTPException(404, "Salon introuvable")
-    await _guard_conversation(db, body, principal)
-    return principal
+    known = await _guard_conversation(db, body, principal, widget=widget)
+    return _Access(principal=principal, customer_id=known)
 
 
 async def _prepare_public_chat(
@@ -232,7 +261,7 @@ async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -
 
 
 async def _persist_turn(
-    db, body: ConversationRequest, result: EngineResponse
+    db, body: ConversationRequest, result: EngineResponse, known: UUID | None = None
 ) -> tuple[str | None, UUID | None]:
     """Écrit le tour, rattache le client."""
     outbound_id = uuid4()
@@ -247,7 +276,7 @@ async def _persist_turn(
             return None, None
         adopted = await _adopted_customer(db, body.business_id, result)
         if conv is None:
-            customer_id = body.customer_id or adopted
+            customer_id = body.customer_id or known or adopted
             conv = Conversation(
                 id=body.conversation_id,
                 business_id=body.business_id,
@@ -261,7 +290,7 @@ async def _persist_turn(
             db.add(conv)
             await db.flush()
         else:
-            customer_id = body.customer_id or conv.customer_id or adopted
+            customer_id = body.customer_id or conv.customer_id or known or adopted
             conv.current_intent = result.intent
             conv.last_message_at = now
             if conv.customer_id is None and customer_id is not None:
@@ -406,7 +435,9 @@ async def _run_engine_chat(
 
     ``on_token`` (optionnel) reçoit chaque token de la réponse au fil de l'eau.
     """
-    await _check_chat_access(db, body, request)
+    access = await _check_chat_access(db, body, request)
+    # anonyme : client lu en base
+    customer_id = body.customer_id or access.customer_id
     engine = get_engine()
 
     from jenny.services.learning_service import load_customer_context, persist_engine_signals
@@ -440,7 +471,7 @@ async def _run_engine_chat(
             business_id=body.business_id,
             message_text=body.message,
             channel=body.channel,
-            customer_id=body.customer_id,
+            customer_id=customer_id,
             language=body.language,
             persona=persona,
             business_name=business_name,
@@ -452,11 +483,11 @@ async def _run_engine_chat(
         ),
         on_token=on_token,
     )
-    message_id, customer_id = await _persist_turn(db, body, result)
+    message_id, attached = await _persist_turn(db, body, result, known=access.customer_id)
     await persist_engine_signals(
         db,
         business_id=body.business_id,
-        customer_id=customer_id or body.customer_id,
+        customer_id=attached or customer_id,
         conversation_id=body.conversation_id,
         channel=body.channel,
         result=result,

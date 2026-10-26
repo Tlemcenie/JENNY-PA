@@ -38,6 +38,7 @@ interface ChatMessage extends StoredMessage {
 interface WidgetError {
   text: string;
   rate: boolean;
+  gone?: boolean;
 }
 
 interface WidgetChatProps {
@@ -387,9 +388,9 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
       try {
         handleReply(await sendWidgetMessage(slug, visitorId, text));
       } catch (err) {
-        const { text: message, retryAfter } = widgetErrorText(err);
+        const { text: message, retryAfter, gone } = widgetErrorText(err);
         setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, failed: true } : m)));
-        setError({ text: message, rate: retryAfter > 0 });
+        setError({ text: message, rate: retryAfter > 0, gone });
         if (retryAfter > 0) setCooldown(Math.min(retryAfter, 120));
       } finally {
         setTyping(false);
@@ -558,6 +559,11 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
             <div className={styles.error} role="alert">
               <CircleAlert size={16} aria-hidden="true" />
               <span>{error.text}</span>
+              {error.gone && (
+                <button type="button" className={styles.errorAction} onClick={reset} disabled={typing}>
+                  Nouvelle conversation
+                </button>
+              )}
             </div>
           )}
 
