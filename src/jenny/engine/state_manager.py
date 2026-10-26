@@ -24,7 +24,7 @@ def _after(ts: str | None, cut: datetime) -> bool:
     """Message après la coupure ?"""
     try:
         return datetime.fromisoformat(ts or "") > cut
-    except ValueError:
+    except (ValueError, TypeError):
         return True
 
 

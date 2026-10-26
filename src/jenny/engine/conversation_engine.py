@@ -68,6 +68,13 @@ _CLOSING_RE = re.compile(
     re.I,
 )
 
+# « merci, à jeudi ! »
+_FAREWELL_WHEN_RE = re.compile(
+    r"\b[àa]\s+(?:demain|apr[èe]s[\s-]?demain|lundi|mardi|mercredi|jeudi|vendredi|samedi|"
+    r"dimanche|tout\s+[àa]\s+l['’]heure)(?:\s+(?:alors|donc|matin|soir))?\s*[!.]*\s*$",  # noqa: RUF001
+    re.I,
+)
+
 # gestion du rdv client
 _MGMT_CANCEL_RE = re.compile(
     r"\b(annul|d[ée]command)|\bsupprim\w*\s+(?:mon|le)\s+(?:rdv|rendez)", re.I
@@ -162,7 +169,7 @@ _NAME_INTRO_RE = re.compile(
     r"je\s+m['’]appelle|au\s+nom\s+de|je\s+suis|mon\s+nom\s+(?:c['’]est|est))\s+",  # noqa: RUF001
     re.I,
 )
-# mots qui ne sont pas des noms
+# pas des noms
 _NOT_NAME_TEXT = """
     moi lui elle nous vous eux toi ca cela ceci pour oui non ok okay oki ouais nan si yes no
     merci parfait super top genial nickel cool bien tres bon bonne daccord accord entendu note
@@ -183,7 +190,7 @@ _NOT_NAME_WORDS = frozenset(_NOT_NAME_TEXT.split())
 _NAME_PARTICLES = frozenset(
     {"de", "du", "des", "la", "le", "van", "von", "der", "den", "el", "al", "da", "di", "dos"}
 )
-# politesse en tête (« oui c'est Marie »)
+# « oui » devant le nom
 _LEAD_FILLER_RE = re.compile(
     r"^\s*(?:(?:oui|ouais|ok|okay|d['’]accord|parfait|super|top|merci|alors|euh|bah|bon|"  # noqa: RUF001
     r"voil[àa]|tr[èe]s\s+bien|c['’]est\s+(?:bon|parfait|not[ée]))\b[\s,!.]*)+",  # noqa: RUF001
@@ -637,7 +644,8 @@ class ConversationEngine:
                     request.catalog_services
                     and match_catalog_services(msg_text, request.catalog_services)
                 )
-                if _new_when and not _new_service and not looks_like_name(msg_text):
+                _bye = _FAREWELL_WHEN_RE.search(msg_text)
+                if _new_when and not _new_service and not _bye and not looks_like_name(msg_text):
                     logger.info("engine.reschedule.implicit", appt="known")
                     mgmt_op = "reschedule"
 
@@ -782,7 +790,7 @@ class ConversationEngine:
                 pass
         if _ar.get("ask_phone"):
             state.arm_latch("awaiting_phone")
-        # rdv fait : on repart à zéro
+        # rdv fait, on purge
         if _booked or (_ok and (_ar.get("operation") or _ar.get("waitlisted"))):
             state.reset_booking_slots()
 

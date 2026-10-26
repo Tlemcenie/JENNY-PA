@@ -201,6 +201,15 @@ class TestPurgeApresRdv:
         # purge aussi l'opération
         assert "operation" not in chat.state.slots
 
+    @pytest.mark.parametrize("bye", ["Merci, à demain !", "super, à jeudi alors", "à lundi"])
+    @pytest.mark.asyncio
+    async def test_au_revoir_ne_deplace_pas(self, bye: str) -> None:
+        eng, acts = _engine()
+        chat = _Chat(eng)
+        await chat.say("je réserve une coupe femme vendredi à 10h")
+        await chat.say(bye)
+        assert acts["manage"].calls == []
+
     @pytest.mark.asyncio
     async def test_report_garde_le_jour(self) -> None:
         eng, acts = _engine()
