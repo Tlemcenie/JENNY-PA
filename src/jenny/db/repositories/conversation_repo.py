@@ -10,6 +10,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from jenny.db.loading import NO_REL
 from jenny.db.repositories.base import BaseRepository
 from jenny.domain.models.conversation import Conversation
 
@@ -27,13 +28,21 @@ class ConversationRepository(BaseRepository[Conversation]):
         external_conversation_id: str,
     ) -> Conversation | None:
         """Trouve une conversation par son ID externe + canal."""
-        stmt = select(Conversation).where(
-            Conversation.business_id == business_id,
-            Conversation.channel == channel,
-            Conversation.external_conversation_id == external_conversation_id,
+        stmt = (
+            select(Conversation)
+            .where(
+                Conversation.business_id == business_id,
+                Conversation.channel == channel,
+                Conversation.external_conversation_id == external_conversation_id,
+            )
+            # doublon possible : le plus ancien
+            .order_by(Conversation.created_at.asc(), Conversation.id.asc())
+            .limit(1)
+            # sans les messages
+            .options(NO_REL)
         )
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     async def find_open_for_customer(
         self,
@@ -51,6 +60,8 @@ class ConversationRepository(BaseRepository[Conversation]):
                 Conversation.status.in_(["open", "pending"]),
             )
             .order_by(Conversation.last_message_at.desc())
+            .limit(1)
+            .options(NO_REL)
         )
         result = await self.session.execute(stmt)
         return result.scalars().first()
@@ -89,6 +100,7 @@ class ConversationRepository(BaseRepository[Conversation]):
             .order_by(Conversation.last_message_at.desc())
             .limit(limit)
             .offset(offset)
+            .options(NO_REL)
         )
         if status:
             stmt = stmt.where(Conversation.status == status)
