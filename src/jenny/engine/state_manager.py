@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 from dataclasses import dataclass, field
@@ -12,6 +13,19 @@ from uuid import UUID, uuid4
 from jenny.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# verrous oui/nom/téléphone
+LATCHES = ("awaiting_confirmation", "awaiting_waitlist", "awaiting_name", "awaiting_phone")
+# slots d'une réservation
+BOOKING_SLOTS = ("date", "time", "service", "duration", "operation")
+
+
+def _after(ts: str | None, cut: datetime) -> bool:
+    """Message après la coupure ?"""
+    try:
+        return datetime.fromisoformat(ts or "") > cut
+    except (ValueError, TypeError):
+        return True
 
 
 class ConversationPhase(StrEnum):
@@ -65,9 +79,16 @@ class ConversationState:
     awaiting_name: bool = False
     # prochain numéro = son téléphone
     awaiting_phone: bool = False
+    # tour d'armement des verrous
+    latch_turns: dict[str, int] = field(default_factory=dict)
 
     # slots
     slots: dict[str, ExtractedSlot] = field(default_factory=dict)
+    # dernière purge des slots
+    slots_reset_at: str | None = None
+    # créneau du rdv pris
+    booked_date: str | None = None
+    booked_time: str | None = None
 
     # phase
     phase: ConversationPhase = ConversationPhase.GREETING
@@ -90,6 +111,8 @@ class ConversationState:
     # persona du business (runtime)
     business_persona: dict | None = None
     business_name: str | None = None
+    business_hours_text: str | None = None  # horaires pour le prompt
+    business_timezone: str | None = None  # fuseau du salon
 
     # couche intelligence (runtime)
     detected_language: str | None = None  # code ISO du message
@@ -159,6 +182,51 @@ class ConversationState:
         """Manque des infos requises ?"""
         return len(self.get_missing_slots()) > 0
 
+    def drop_missing_placeholders(self) -> None:
+        """Oublie les slots requis vides."""
+        for name in [k for k, s in self.slots.items() if s.required and not s.filled]:
+            del self.slots[name]
+
+    def reset_booking_slots(self) -> None:
+        """Purge après une réservation."""
+        for name in BOOKING_SLOTS:
+            self.slots.pop(name, None)
+        self.drop_missing_placeholders()
+        self.slots_reset_at = datetime.now(UTC).isoformat()
+
+    def user_messages_since_reset(self, last: int = 6) -> list[str]:
+        """Messages client depuis la purge."""
+        msgs = [m for m in self.message_history[-last:] if m.get("role") == "user"]
+        if self.slots_reset_at:
+            cut = datetime.fromisoformat(self.slots_reset_at)
+            msgs = [m for m in msgs if _after(m.get("timestamp"), cut)]
+        return [m.get("content", "") for m in msgs]
+
+    # verrous à durée limitée
+
+    def arm_latch(self, name: str) -> None:
+        """Arme un verrou."""
+        setattr(self, name, True)
+        self.latch_turns[name] = self.turn_count
+
+    def disarm_latch(self, name: str) -> None:
+        """Désarme un verrou."""
+        setattr(self, name, False)
+        self.latch_turns.pop(name, None)
+
+    def expire_latches(self, max_turns: int) -> list[str]:
+        """Désarme les verrous trop vieux."""
+        expired = []
+        for name in LATCHES:
+            if not getattr(self, name):
+                self.latch_turns.pop(name, None)
+                continue
+            armed = self.latch_turns.setdefault(name, self.turn_count)
+            if self.turn_count - armed > max_turns:
+                self.disarm_latch(name)
+                expired.append(name)
+        return expired
+
     def get_context_summary(self) -> str:
         """Résumé du contexte."""
         parts = []
@@ -177,7 +245,7 @@ class ConversationState:
 
     def to_dict(self) -> dict:
         """Sérialise l'état en dict."""
-        data = {
+        return {
             "conversation_id": str(self.conversation_id),
             "business_id": str(self.business_id) if self.business_id else None,
             "customer_id": str(self.customer_id) if self.customer_id else None,
@@ -192,6 +260,7 @@ class ConversationState:
             "awaiting_waitlist": self.awaiting_waitlist,
             "awaiting_name": self.awaiting_name,
             "awaiting_phone": self.awaiting_phone,
+            "latch_turns": dict(self.latch_turns),
             "slots": {
                 k: {
                     "name": v.name,
@@ -203,6 +272,9 @@ class ConversationState:
                 }
                 for k, v in self.slots.items()
             },
+            "slots_reset_at": self.slots_reset_at,
+            "booked_date": self.booked_date,
+            "booked_time": self.booked_time,
             "phase": self.phase.value,
             "turn_count": self.turn_count,
             "retrieved_documents": self.retrieved_documents,
@@ -213,8 +285,16 @@ class ConversationState:
             "language": self.language,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            "business_persona": self.business_persona,
+            "business_name": self.business_name,
+            "business_hours_text": self.business_hours_text,
+            "business_timezone": self.business_timezone,
+            "detected_language": self.detected_language,
+            "customer_facts": list(self.customer_facts),
+            "clarification_instruction": self.clarification_instruction,
+            "knowledge_gap": self.knowledge_gap,
+            "business_catalog": self.business_catalog,
         }
-        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> ConversationState:
@@ -234,6 +314,10 @@ class ConversationState:
             awaiting_waitlist=data.get("awaiting_waitlist", False),
             awaiting_name=data.get("awaiting_name", False),
             awaiting_phone=data.get("awaiting_phone", False),
+            latch_turns={str(k): int(v) for k, v in (data.get("latch_turns") or {}).items()},
+            slots_reset_at=data.get("slots_reset_at"),
+            booked_date=data.get("booked_date"),
+            booked_time=data.get("booked_time"),
             phase=ConversationPhase(data.get("phase", "greeting")),
             turn_count=data.get("turn_count", 0),
             retrieved_documents=data.get("retrieved_documents", []),
@@ -248,11 +332,25 @@ class ConversationState:
             updated_at=datetime.fromisoformat(data["updated_at"])
             if data.get("updated_at")
             else datetime.now(UTC),
+            business_persona=data.get("business_persona"),
+            business_name=data.get("business_name"),
+            business_hours_text=data.get("business_hours_text"),
+            business_timezone=data.get("business_timezone"),
+            detected_language=data.get("detected_language"),
+            customer_facts=list(data.get("customer_facts") or []),
+            clarification_instruction=data.get("clarification_instruction"),
+            knowledge_gap=bool(data.get("knowledge_gap", False)),
+            business_catalog=data.get("business_catalog"),
         )
         # reconstruit les slots
         for k, v in data.get("slots", {}).items():
             state.slots[k] = ExtractedSlot(**v)
         return state
+
+
+def _dumps(state: ConversationState) -> str:
+    # default=str : uuid, dates
+    return json.dumps(state.to_dict(), ensure_ascii=False, default=str)
 
 
 class StateManager:
@@ -264,7 +362,10 @@ class StateManager:
 
     def __init__(self, redis_url: str | None = None) -> None:
         self._states: dict[str, ConversationState] = {}
-        self._redis = None
+        self._redis = None  # client sync
+        self._redis_url: str | None = None
+        self._aredis = None  # client async
+        self._aredis_loop: asyncio.AbstractEventLoop | None = None
 
         # tente Redis
         if redis_url:
@@ -289,16 +390,62 @@ class StateManager:
         try:
             import redis
 
-            self._redis = redis.from_url(
+            client = redis.from_url(
                 redis_url,
                 socket_connect_timeout=2,
                 decode_responses=True,
             )
             # test rapide
-            self._redis.ping()
+            client.ping()
+            self._redis = client
+            self._redis_url = redis_url
         except Exception as e:
             logger.warning("state_manager.redis_unavailable", error=str(e))
             self._redis = None
+            self._redis_url = None
+
+    def _async_client(self):
+        """Client async de la boucle."""
+        if self._redis_url is None:
+            return None
+        loop = asyncio.get_running_loop()
+        if self._aredis is None or self._aredis_loop is not loop:
+            import redis.asyncio as aredis
+
+            self._aredis = aredis.from_url(
+                self._redis_url,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+                decode_responses=True,
+            )
+            self._aredis_loop = loop
+        return self._aredis
+
+    def _key(self, key: str) -> str:
+        return f"{self.REDIS_PREFIX}{key}"
+
+    def _local_get_or_create(
+        self, key: str, conversation_id: UUID, business_id: UUID | None, channel: str
+    ) -> ConversationState:
+        if key in self._states:
+            return self._states[key]
+        state = ConversationState(
+            conversation_id=conversation_id,
+            business_id=business_id,
+            channel=channel,
+        )
+        self._states[key] = state
+        logger.info("state.created", conversation_id=key)
+        return state
+
+    def _cache_raw(self, key: str, raw: str | None) -> ConversationState | None:
+        if not raw:
+            return None
+        state = ConversationState.from_dict(json.loads(raw))
+        self._states[key] = state  # cache local
+        return state
+
+    # api sync (compat)
 
     def get_or_create(
         self,
@@ -312,28 +459,14 @@ class StateManager:
         # 1. essaie Redis
         if self._redis is not None:
             try:
-                raw = self._redis.get(f"{self.REDIS_PREFIX}{key}")
-                if raw:
-                    data = json.loads(raw)
-                    state = ConversationState.from_dict(data)
-                    self._states[key] = state  # cache local
+                state = self._cache_raw(key, self._redis.get(self._key(key)))
+                if state is not None:
                     return state
             except Exception as e:
                 logger.warning("state_manager.redis_get_error", error=str(e))
 
-        # 2. cache mémoire
-        if key in self._states:
-            return self._states[key]
-
-        # 3. nouvel état
-        state = ConversationState(
-            conversation_id=conversation_id,
-            business_id=business_id,
-            channel=channel,
-        )
-        self._states[key] = state
-        logger.info("state.created", conversation_id=key)
-        return state
+        # 2. cache mémoire, 3. nouvel état
+        return self._local_get_or_create(key, conversation_id, business_id, channel)
 
     def save(self, state: ConversationState) -> None:
         """Sauvegarde l'état."""
@@ -343,12 +476,7 @@ class StateManager:
         # persiste dans Redis
         if self._redis is not None:
             try:
-                data = json.dumps(state.to_dict(), ensure_ascii=False)
-                self._redis.setex(
-                    f"{self.REDIS_PREFIX}{key}",
-                    self.REDIS_TTL,
-                    data,
-                )
+                self._redis.setex(self._key(key), self.REDIS_TTL, _dumps(state))
             except Exception as e:
                 logger.warning("state_manager.redis_save_error", error=str(e))
 
@@ -359,7 +487,7 @@ class StateManager:
 
         if self._redis is not None:
             with contextlib.suppress(Exception):
-                self._redis.delete(f"{self.REDIS_PREFIX}{key}")
+                self._redis.delete(self._key(key))
 
     def get(self, conversation_id: UUID) -> ConversationState | None:
         """Récupère un état existant."""
@@ -371,17 +499,69 @@ class StateManager:
 
         # puis Redis
         if self._redis is not None:
-            try:
-                raw = self._redis.get(f"{self.REDIS_PREFIX}{key}")
-                if raw:
-                    data = json.loads(raw)
-                    state = ConversationState.from_dict(data)
-                    self._states[key] = state
-                    return state
-            except Exception:
-                pass
+            with contextlib.suppress(Exception):
+                return self._cache_raw(key, self._redis.get(self._key(key)))
 
         return None
+
+    # api async (boucle libre)
+
+    async def aget_or_create(
+        self,
+        conversation_id: UUID,
+        business_id: UUID | None = None,
+        channel: str = "",
+    ) -> ConversationState:
+        """Version async de get_or_create."""
+        key = str(conversation_id)
+        client = self._async_client()
+        if client is not None:
+            try:
+                state = self._cache_raw(key, await client.get(self._key(key)))
+                if state is not None:
+                    return state
+            except Exception as e:
+                logger.warning("state_manager.redis_get_error", error=str(e))
+        return self._local_get_or_create(key, conversation_id, business_id, channel)
+
+    async def asave(self, state: ConversationState) -> None:
+        """Version async de save."""
+        key = str(state.conversation_id)
+        self._states[key] = state
+        client = self._async_client()
+        if client is not None:
+            try:
+                await client.setex(self._key(key), self.REDIS_TTL, _dumps(state))
+            except Exception as e:
+                logger.warning("state_manager.redis_save_error", error=str(e))
+
+    async def aget(self, conversation_id: UUID) -> ConversationState | None:
+        """Version async de get."""
+        key = str(conversation_id)
+        if key in self._states:
+            return self._states[key]
+        client = self._async_client()
+        if client is not None:
+            with contextlib.suppress(Exception):
+                return self._cache_raw(key, await client.get(self._key(key)))
+        return None
+
+    async def adelete(self, conversation_id: UUID) -> None:
+        """Version async de delete."""
+        key = str(conversation_id)
+        self._states.pop(key, None)
+        client = self._async_client()
+        if client is not None:
+            with contextlib.suppress(Exception):
+                await client.delete(self._key(key))
+
+    async def aclose(self) -> None:
+        """Ferme le client async."""
+        if self._aredis is not None:
+            with contextlib.suppress(Exception):
+                await self._aredis.aclose()
+        self._aredis = None
+        self._aredis_loop = None
 
     @property
     def backend(self) -> str:
