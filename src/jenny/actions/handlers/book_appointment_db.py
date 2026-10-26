@@ -85,6 +85,7 @@ class BookAppointmentDBAction(BaseAction):
             is_day_closed,
             load_staff_pool,
             next_free_slots,
+            service_minutes,
         )
         from jenny.services.prestation_service import (
             _norm,
@@ -101,7 +102,8 @@ class BookAppointmentDBAction(BaseAction):
             matched = match_prestations(prestations, params["service"])
             if matched:
                 service_name = " + ".join(p.name for p in matched)
-                duration = sum(p.duration_minutes for p in matched)
+                # durée 0 : 30 min, comme en ligne
+                duration = sum(service_minutes(p.duration_minutes) for p in matched)
                 prices = [p.price_eur for p in matched if p.price_cents]
                 price_eur = sum(prices) if len(prices) == len(matched) else None
             else:

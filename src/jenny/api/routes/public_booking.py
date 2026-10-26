@@ -39,11 +39,13 @@ from jenny.domain.models.staff import Staff
 from jenny.notifications.outbound import notify_customer
 from jenny.services.audit_service import record_audit
 from jenny.services.availability import (
+    MAX_SERVICE_MINUTES,
     StaffPool,
     find_free_staff,
     free_slots_with_staff,
     is_day_closed,
     load_staff_pool,
+    service_minutes,
 )
 from jenny.services.prestation_service import load_active_prestations
 
@@ -66,9 +68,11 @@ _DEFAULT_HOURS: dict[str, list[str] | None] = {
 }
 
 _MIN_DURATION = 15
+# durée libre, sans prestation
 _MAX_DURATION = 240
 _MAX_DAYS_AHEAD = 120
-
+_TOO_LONG = "Cette prestation est trop longue pour la réservation en ligne, appelez le salon"
+_FREE_TOO_LONG = f"Sans prestation, {_MAX_DURATION} minutes au maximum"
 
 def _business_tz(b: Business) -> ZoneInfo:
     try:
@@ -140,10 +144,38 @@ async def _load_prestation(
 
 
 def _duration_of(p: Prestation | None, fallback: int) -> int:
-    """Durée du catalogue, bornée."""
+    """Vraie durée du catalogue, comme le chat."""
     if p is None:
         return fallback
-    return min(max(int(p.duration_minutes or fallback), _MIN_DURATION), _MAX_DURATION)
+    return service_minutes(p.duration_minutes, fallback)
+
+
+def _booking_minutes(p: Prestation | None, asked: int) -> int:
+    """Durée réservée, ou 400."""
+    if p is None:
+        if asked > _MAX_DURATION:
+            raise HTTPException(400, _FREE_TOO_LONG)
+        return asked
+    minutes = _duration_of(p, 30)
+    if minutes > MAX_SERVICE_MINUTES:
+        # jamais coupée : refusée
+        raise HTTPException(400, _TOO_LONG)
+    return minutes
+
+
+def _in_opening(b: Business, start: datetime, end: datetime) -> bool:
+    """Dans les horaires du jour ?"""
+    tz = _business_tz(b)
+    day = start.astimezone(tz).date()
+    window = (b.business_hours or _DEFAULT_HOURS).get(_DAY_KEYS[day.weekday()])
+    if not window or len(window) != 2:
+        return False
+    a, z = _parse_hhmm(window[0]), _parse_hhmm(window[1])
+    if a is None or z is None:
+        return False
+    opens = datetime(day.year, day.month, day.day, a[0], a[1], tzinfo=tz)
+    closes = datetime(day.year, day.month, day.day, z[0], z[1], tzinfo=tz)
+    return opens <= start and end <= closes
 
 
 # ── Infos publiques ──────────────────────────────────────────────────────────
@@ -239,7 +271,7 @@ async def booking_slots(
     slug: str,
     db: DbSession,
     date_str: Annotated[str, Query(alias="date", description="Jour AAAA-MM-JJ")],
-    duration: Annotated[int, Query(ge=_MIN_DURATION, le=_MAX_DURATION)] = 30,
+    duration: Annotated[int, Query(ge=_MIN_DURATION, le=MAX_SERVICE_MINUTES)] = 30,
     staff_id: Annotated[UUID | None, Query(description="Coiffeur choisi")] = None,
     prestation_id: Annotated[UUID | None, Query(description="Prestation choisie")] = None,
 ) -> BookingSlotsResponse:
@@ -251,7 +283,7 @@ async def booking_slots(
         raise HTTPException(400, "Date invalide (attendu AAAA-MM-JJ)") from None
     presta = await _load_prestation(db, b, prestation_id)
     # la prestation fixe la durée
-    duration = _duration_of(presta, duration)
+    duration = _booking_minutes(presta, duration)
 
     tz = _business_tz(b)
     today_local = datetime.now(tz).date()
@@ -339,7 +371,8 @@ class BookingRequest(BaseModel):
     email: EmailStr
     phone: str | None = Field(default=None, max_length=50)
     start_at: datetime
-    duration: int = Field(default=30, ge=_MIN_DURATION, le=_MAX_DURATION)
+    # prestation : durée du catalogue
+    duration: int = Field(default=30, ge=_MIN_DURATION, le=MAX_SERVICE_MINUTES)
     notes: str | None = Field(default=None, max_length=2000)
     # sans choix : premier coiffeur libre
     staff_id: UUID | None = None
@@ -371,15 +404,18 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
 
     start = body.start_at if body.start_at.tzinfo else body.start_at.replace(tzinfo=UTC)
     start = start.astimezone(UTC)
-    end = start + timedelta(minutes=_duration_of(presta, body.duration))
+    end = start + timedelta(minutes=_booking_minutes(presta, body.duration))
     if start <= datetime.now(UTC):
         raise HTTPException(400, "Ce créneau est déjà passé, choisissez-en un autre")
 
     tz = _business_tz(b)
     pool = await load_staff_pool(db, b.id)
     _check_staff_choice(pool, body.staff_id)
-    if pool.has_staff and await is_day_closed(db, b.id, start.astimezone(tz).date(), business=b):
+    if await is_day_closed(db, b.id, start.astimezone(tz).date(), business=b):
         raise HTTPException(400, "Le salon est fermé ce jour-là, choisissez un autre jour")
+    # solo : horaires du salon
+    if not pool.has_staff and not _in_opening(b, start, end):
+        raise HTTPException(400, "Ce créneau est hors des horaires du salon, choisissez-en un autre")
 
     async def _pick() -> Staff | None:
         """Par coiffeur s'il y en a, sinon tout le salon."""
