@@ -458,6 +458,54 @@ def is_farewell(message: str, *, today: date | None = None, keep_days: bool = Fa
     return not (parse_fr_date(rest, today=today) or parse_fr_time(rest))
 
 
+def offered_slots(
+    text: str | None, *, today: date, day: str | None = None
+) -> set[tuple[str | None, str]]:
+    """Créneaux proposés : (jour, heure)."""
+    found: set[tuple[str | None, str]] = set()
+    # « jeudi 29/10 à 10h00, 11h00 »
+    for label in (text or "").split(","):
+        hour = parse_fr_time(label)
+        if hour is None:
+            continue
+        d = parse_fr_date(label, today=today)
+        found.add((d.isoformat() if d else day, hour.strftime("%H:%M")))
+    return found
+
+
+def picks_offered_slot(
+    message: str,
+    *,
+    today: date,
+    offer: dict,
+    asked_day: str | None = None,
+    booked: tuple[str | None, str | None] = (None, None),
+) -> bool:
+    """Au revoir qui choisit un créneau proposé ?"""
+    m = message or ""
+    if declines_offer(m):
+        return False
+    kept = strip_farewell(m, keep_days=True)
+    hour = parse_fr_time(kept)
+    # jour seul : ambigu
+    if hour is None:
+        return False
+    day = parse_fr_date(kept, today=today)
+    d, h = (day.isoformat() if day else None), hour.strftime("%H:%M")
+    # son rdv actuel : il le garde
+    if h == booked[1] and d in (None, booked[0]):
+        return False
+    text = offer.get("alternatives_text") or offer.get("slots_text")
+    slots = offered_slots(text, today=today, day=asked_day)
+    if any(t == h and d in (None, sd) for sd, t in slots):
+        return True
+    # créneaux du jour demandé
+    same_day = all(sd == asked_day for sd, _ in slots)
+    return bool(offer.get("propose_slots")) and asked_day is not None and same_day and (
+        d in (None, asked_day)
+    )
+
+
 def _filled(state: ConversationState, name: str) -> str | None:
     """Valeur d'un slot rempli."""
     slot = state.slots.get(name)
@@ -748,9 +796,24 @@ class ConversationEngine:
             "manage_appointment",
             "escalation",
         ) or (_model_intent == "complaint" and _COMPLAINT_SIGNAL_RE.search(_msg_txt))
+        # au revoir après créneaux proposés
+        _keep_days = _offered
+        if _offered and is_farewell(_msg_txt, today=today):
+            # garde le jour si vrai choix
+            _keep_days = picks_offered_slot(
+                _msg_txt,
+                today=today,
+                offer=_prev_ar,
+                asked_day=_filled(state, "date"),
+                booked=(state.booked_date, state.booked_time),
+            )
         # « bon week-end » : pas un jour
-        _when_txt = strip_farewell(_msg_txt, keep_days=_offered)
-        _farewell = is_farewell(_msg_txt, today=today, keep_days=_offered)
+        _when_txt = strip_farewell(_msg_txt, keep_days=_keep_days)
+        _farewell = is_farewell(_msg_txt, today=today, keep_days=_keep_days)
+        if _offered and _farewell:
+            # offre close : vieux créneau oublié
+            for name in ("operation", "date", "time"):
+                state.slots.pop(name, None)
         # jour ou heure dans le message
         _slot_in_msg = bool(parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt))
         # rdv sans mot-clé
@@ -866,10 +929,10 @@ class ConversationEngine:
         # continuité de dialogue
         _resume_appointment_after_info = False
         if state.pending_intent and state.pending_intent != intent:
-            msg_l = request.message_text or ""
+            msg_l = _msg_txt
             real_closing = (intent == "closing" and bool(_CLOSING_RE.search(msg_l))) or _farewell
             # il choisit un créneau proposé
-            if _offered and _slot_in_msg:
+            if _keep_days and _slot_in_msg:
                 real_closing = False
             hard_interrupt = intent in _INTERRUPTING_INTENTS or real_closing
             # complète une prise de rdv ?
