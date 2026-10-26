@@ -28,7 +28,7 @@ from jenny.rag.embeddings import get_default_embedder
 from jenny.rag.ingestion import build_embed_text, reassemble
 from jenny.rag.knowledge_base import LAYOUT_KEYS as _LAYOUT_KEYS
 from jenny.rag.knowledge_base import KnowledgeBase
-from jenny.rag.vector_store import PgVectorStore, _vector_literal, lock_entry
+from jenny.rag.vector_store import NOT_TOMBSTONE_SQL, PgVectorStore, _vector_literal, lock_entry
 
 BATCH = 32
 # entrée modifiée : on réessaie
@@ -58,7 +58,10 @@ class Report:
 
 
 async def _rows(session, business_id: str | None):
-    where = "WHERE business_id = :bid" if business_id else ""
+    # traces jamais vectorisées
+    where = f"WHERE {NOT_TOMBSTONE_SQL}"
+    if business_id:
+        where += " AND business_id = :bid"
     params = {"bid": business_id} if business_id else {}
     return (
         await session.execute(

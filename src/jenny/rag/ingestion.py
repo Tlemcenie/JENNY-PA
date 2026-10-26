@@ -31,6 +31,8 @@ OVERLAP_SHARE = 0.15
 WHOLE_UNIT_FACTOR = 2.3
 # titre max dans l'embedding
 MAX_HEADER_CHARS = 120
+# repère du découpage actuel
+CHUNK_VERSION = 2
 
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*#*$")
 _SENTENCE_RE = re.compile(r"(?<=[.!?…])\s+")
@@ -248,7 +250,7 @@ class DocumentIngester:
         def emit(section: str, items: list[_Unit], overlap: str) -> None:
             body = body_of(items, overlap)
             content = f"{section}\n{body}" if section else body
-            meta = {**(metadata or {}), "chunk_index": len(chunks)}
+            meta = {**(metadata or {}), "chunk_index": len(chunks), "chunk_v": CHUNK_VERSION}
             if section:
                 meta["section"] = section
             if overlap:
@@ -431,7 +433,7 @@ def reassemble(chunks: list[tuple[str, dict]]) -> str:
         ov = int(meta.get("overlap_chars") or 0)
         if ov:
             body = body[ov:].lstrip()
-        elif not section and "sep" not in meta:
+        elif not section and "sep" not in meta and "chunk_v" not in meta:
             # vieux fragment sans repère
             body = _strip_legacy_overlap(body, prev_raw)
         prev_raw = raw

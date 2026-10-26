@@ -167,7 +167,7 @@ class _KB:
             metadata={**old.metadata, **(metadata or {})},
         )
 
-    async def delete_entry(self, knowledge_id):
+    async def delete_entry(self, knowledge_id, tombstone=True):
         self.calls.append("delete")
         return self.entries.pop(knowledge_id, None) is not None
 
@@ -188,7 +188,13 @@ async def test_sync_ajoute_puis_idempotent() -> None:
     assert first["added"] == len(entries)
     kb.calls.clear()
     again = await kc.sync_real_entries(kb, entries, families=FAMS)
-    assert again == {"added": 0, "updated": 0, "removed": 0, "kept_owner": 0}
+    assert again == {
+        "added": 0,
+        "updated": 0,
+        "removed": 0,
+        "kept_owner": 0,
+        "deleted_by_owner": 0,
+    }
     assert kb.calls == []
 
 

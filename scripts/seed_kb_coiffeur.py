@@ -8,9 +8,11 @@ Usage :
 
 Salon démo : toute la KB est remplacée par les fiches démo (dont des faits
 inventés : adresse, équipe...). Vrai salon (--salon-reel obligatoire) :
-seules les fiches tirées de sa base (horaires, prestations, acompte,
-rappels, équipe) ou ce que Jenny fait vraiment ; les fiches du gérant
-restent. Dans les deux cas la KB est d'abord exportée en JSON.
+seules les fiches tirées de sa base (horaires, acompte, rappels, équipe)
+ou ce que Jenny fait vraiment, synchronisées comme la route seed-coiffeur.
+Pas de fiche prix : le catalogue est lu en direct. Les fiches du gérant,
+même retouchées ou supprimées par lui, restent comme il les a laissées.
+Dans les deux cas la KB est d'abord exportée en JSON.
 """
 
 from __future__ import annotations
@@ -28,8 +30,6 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from jenny.rag.kb_coiffeur import (  # noqa: E402
     DEMO_SLUG,
-    LEGACY_HOURS_TEXT,
-    REAL_TAG,
     SEED_TAG,
     UNCOVERED_TOPICS,
     build_entries,
@@ -38,7 +38,9 @@ from jenny.rag.kb_coiffeur import (  # noqa: E402
     fmt_hour,
     fmt_price,
     load_salon,
+    real_families,
     slugify,
+    sync_real_entries,
 )
 
 __all__ = [
@@ -131,27 +133,6 @@ async def _chunks_for(kb, entries: list[dict], tag: str) -> list[dict]:
     return chunks
 
 
-async def _owner_titles(session, bid: str, tags: tuple[str, ...]) -> set[str]:
-    """Titres des fiches du gérant."""
-    from sqlalchemy import text
-
-    rows = (
-        await session.execute(
-            text(
-                "SELECT DISTINCT metadata_->>'title' AS title, metadata_->>'seed' AS seed, "
-                "content FROM document_embeddings WHERE business_id = :bid"
-            ),
-            {"bid": bid},
-        )
-    ).all()
-    # vieille fiche horaires : à nous
-    return {
-        slugify(r.title or "")
-        for r in rows
-        if r.seed not in tags and (r.content or "").strip() != LEGACY_HOURS_TEXT
-    }
-
-
 async def seed(
     session,
     slug: str,
@@ -174,41 +155,55 @@ async def seed(
         raise SystemExit(f"Business introuvable : {slug}")
     business, prestas, staff = await load_salon(session, bid)
     demo = slug == DEMO_SLUG
-    entries = build_entries(business, prestas, demo=demo, staff=staff)
+    # vrai salon : prix en direct
+    entries = build_entries(business, prestas, demo=demo, include_prices=demo, staff=staff)
     report = {"business": business["name"], "entries": entries, "demo": demo}
     if dry_run:
         return report
 
     kb = KnowledgeBase(business_id=bid, session=session)
-    tag = SEED_TAG if demo else REAL_TAG
-    # vectorise avant de verrouiller
     if not demo:
-        owner = await _owner_titles(session, str(bid), (SEED_TAG, REAL_TAG))
-        skipped = [e for e in entries if slugify(e["title"]) in owner]
-        entries = [e for e in entries if slugify(e["title"]) not in owner]
-        report["kept_owner"] = [e["key"] for e in skipped]
-    chunks = await _chunks_for(kb, entries, tag)
+        return await _seed_real(session, kb, business, entries, report, backup_dir, commit)
+    # vectorise avant de verrouiller
+    chunks = await _chunks_for(kb, entries, SEED_TAG)
     await session.rollback()
 
     # personne n'écrit pendant ce temps
     await lock_business_kb(session, bid)
     report["backup"] = str(await export_kb(session, business, backup_dir))
-    if demo:
-        # démo : tout remplacé
-        where, params = "business_id = :bid", {"bid": str(bid)}
-    else:
-        # vrai salon : nos fiches seules
-        where = (
-            "business_id = :bid AND (metadata_->>'seed' IN (:a, :b) OR btrim(content) = :legacy)"
-        )
-        params = {"bid": str(bid), "a": SEED_TAG, "b": REAL_TAG, "legacy": LEGACY_HOURS_TEXT}
+    # démo : tout remplacé
     deleted = (
-        await session.execute(text(f"DELETE FROM document_embeddings WHERE {where}"), params)
+        await session.execute(
+            text("DELETE FROM document_embeddings WHERE business_id = :bid"), {"bid": str(bid)}
+        )
     ).rowcount
     inserted = await kb.vector_store.add_chunks(session, bid, chunks)
     if commit:
         await session.commit()
     report.update(deleted=deleted, inserted=inserted)
+    return report
+
+
+async def _seed_real(session, kb, business: dict, entries, report, backup_dir, commit) -> dict:
+    """Vrai salon : même synchro que la route."""
+    from sqlalchemy import text
+
+    await session.rollback()
+    # verrou du salon, un commit
+    async with kb.batch(commit=commit):
+        report["backup"] = str(await export_kb(session, business, backup_dir))
+        # faits inventés de la démo
+        deleted = (
+            await session.execute(
+                text(
+                    "DELETE FROM document_embeddings "
+                    "WHERE business_id = :bid AND metadata_->>'seed' = :tag"
+                ),
+                {"bid": str(business["id"]), "tag": SEED_TAG},
+            )
+        ).rowcount
+        stats = await sync_real_entries(kb, entries, families=real_families(include_prices=True))
+    report.update(deleted=deleted, stats=stats)
     return report
 
 
@@ -220,7 +215,7 @@ async def restore(
 
     from jenny.rag.ingestion import build_embed_text, reassemble
     from jenny.rag.knowledge_base import LAYOUT_KEYS, KnowledgeBase
-    from jenny.rag.vector_store import lock_business_kb
+    from jenny.rag.vector_store import TOMBSTONE_KEY, lock_business_kb
 
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     bid = (
@@ -232,8 +227,14 @@ async def restore(
     kb = KnowledgeBase(business_id=bid, session=session)
     groups: dict[str, list[dict]] = {}
     loose: list[dict] = []
+    tombs: list[str] = []
     for r in data.get("rows") or []:
-        kid = (r.get("metadata") or {}).get("knowledge_id")
+        meta = r.get("metadata") or {}
+        if meta.get(TOMBSTONE_KEY):
+            # trace de suppression, sans vecteur
+            tombs.append(meta[TOMBSTONE_KEY])
+            continue
+        kid = meta.get("knowledge_id")
         (groups.setdefault(kid, []) if kid else loose).append(r)
     chunks: list[dict] = []
     for kid, rows in groups.items():
@@ -277,6 +278,8 @@ async def restore(
         )
     ).rowcount
     inserted = await kb.vector_store.add_chunks(session, bid, chunks)
+    for key in dict.fromkeys(tombs):
+        await kb.vector_store.add_tombstone(session, bid, key)
     if commit:
         await session.commit()
     return {"backup": str(before), "deleted": deleted, "inserted": inserted, "entries": len(groups)}
@@ -309,9 +312,16 @@ async def main(args) -> None:
         for e in entries:
             print(f"- [{e['key']}] {e['title']} :: {e['content'][:90]}")
         return
-    if rep.get("kept_owner"):
-        print("Fiches du gérant gardées :", ", ".join(rep["kept_owner"]))
     print(f"Sauvegarde : {rep['backup']}")
+    if "stats" in rep:
+        st = rep["stats"]
+        print(
+            f"Fiches : {st['added']} ajoutées, {st['updated']} mises à jour, "
+            f"{st['removed']} retirées ; gérant : {st['kept_owner']} gardées, "
+            f"{st['deleted_by_owner']} supprimées par lui (pas recréées)."
+        )
+        print(f"Fiches démo effacées : {rep['deleted']} fragments.")
+        return
     print(f"Supprimés : {rep['deleted']} fragments ; insérés : {rep['inserted']} fragments.")
 
 

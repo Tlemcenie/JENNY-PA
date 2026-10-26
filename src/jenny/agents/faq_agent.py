@@ -43,6 +43,23 @@ def select_documents(
     return kept[:max_docs]
 
 
+def to_documents(hits) -> list[dict]:
+    """Résultats retriever en dicts."""
+    return [{"content": h.content, "score": h.score, "metadata": h.metadata} for h in hits or []]
+
+
+async def grounding_documents(retriever, query: str, business_id) -> list[dict]:
+    """Grounding transverse du moteur."""
+    # même seuil que la FAQ
+    hits = await retriever.search(
+        query,
+        business_id=business_id,
+        top_k=FAQ_MAX_DOCS,
+        score_threshold=FAQ_MIN_SCORE,
+    )
+    return select_documents(to_documents(hits))
+
+
 class FAQAgent:
     """Agent de recherche documentaire (FAQ / RAG).
 
@@ -85,14 +102,7 @@ class FAQAgent:
                     top_k=self.top_k,
                     score_threshold=self.min_score,
                 )
-                found = [
-                    {
-                        "content": r.content,
-                        "score": r.score,
-                        "metadata": r.metadata,
-                    }
-                    for r in results
-                ]
+                found = to_documents(results)
                 documents = select_documents(found, min_score=self.min_score, max_docs=self.top_k)
                 logger.info(
                     "faq_agent.rag_search",

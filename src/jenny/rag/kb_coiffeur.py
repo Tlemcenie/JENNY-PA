@@ -8,8 +8,10 @@ Deux jeux :
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
+from contextlib import nullcontext
 from uuid import UUID
 
 DEMO_SLUG = "demo"
@@ -1044,38 +1046,86 @@ def _norm_title(title: str) -> str:
     return slugify(title or "")
 
 
+def _squash(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+def gen_hash(title: str, category: str, content: str) -> str:
+    """Empreinte d'une fiche générée."""
+    blob = "\x1f".join((_squash(title), category or "", _squash(content)))
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def is_edited(entry) -> bool:
+    """Fiche générée retouchée par le gérant ?"""
+    meta = getattr(entry, "metadata", None) or {}
+    stamp = meta.get("gen_hash")
+    if not stamp:
+        # vieille fiche : on ignore
+        return False
+    return stamp != gen_hash(entry.title, entry.category, entry.content)
+
+
 async def sync_real_entries(kb, entries: list[dict], *, families: tuple[str, ...]) -> dict:
     """Ajoute, met à jour ou retire nos fiches."""
-    stats = {"added": 0, "updated": 0, "removed": 0, "kept_owner": 0}
+    batch = getattr(kb, "batch", None)
+    # verrou salon, un seul commit
+    async with batch() if batch is not None else nullcontext():
+        return await _sync(kb, entries, families)
+
+
+async def _drop(kb, knowledge_id: str) -> None:
+    """Retire une fiche à nous."""
+    await kb.delete_entry(knowledge_id, tombstone=False)
+
+
+async def _sync(kb, entries: list[dict], families: tuple[str, ...]) -> dict:
+    stats = {"added": 0, "updated": 0, "removed": 0, "kept_owner": 0, "deleted_by_owner": 0}
     ours: dict[str, object] = {}
+    dupes: list = []
     legacy: list = []
+    edited: set[str] = set()
     owner_titles: set[str] = set()
     for e in await kb.list_entries():
         meta = getattr(e, "metadata", None) or {}
         key = meta.get("kb_key")
         if meta.get("seed") == REAL_TAG and key:
-            ours[key] = e
+            if is_edited(e):
+                # retouchée : au gérant
+                edited.add(key)
+                owner_titles.add(_norm_title(e.title))
+            elif key in ours:
+                # doublon (seeds en parallèle)
+                dupes.append(e)
+            else:
+                ours[key] = e
         elif (e.content or "").strip() == LEGACY_HOURS_TEXT:
             # ancienne fiche codée en dur
             legacy.append(e)
         else:
             owner_titles.add(_norm_title(e.title))
-    if legacy and "horaires-semaine" not in ours:
+    for key in edited & ours.keys():
+        # la version du gérant gagne
+        dupes.append(ours.pop(key))
+    tombs_fn = getattr(kb, "tombstones", None)
+    deleted = await tombs_fn() if tombs_fn is not None else set()
+    if legacy and "horaires-semaine" not in ours and "horaires-semaine" not in edited:
         ours["horaires-semaine"] = legacy.pop(0)
-    for old in legacy:
-        # horaires inventés en trop
-        await kb.delete_entry(old.id)
+    for old in [*legacy, *dupes]:
+        # horaires inventés, doublons
+        await _drop(kb, old.id)
         stats["removed"] += 1
     wanted = {e["key"] for e in entries}
     for e in entries:
-        meta = {"kb_key": e["key"], "seed": REAL_TAG}
+        stamp = gen_hash(e["title"], e["category"], e["content"])
+        meta = {"kb_key": e["key"], "seed": REAL_TAG, "gen_hash": stamp}
         old = ours.get(e["key"])
         if old is not None:
             same = (
-                old.content == e["content"]
+                _squash(old.content) == _squash(e["content"])
                 and old.title == e["title"]
                 and old.category == e["category"]
-                and (getattr(old, "metadata", None) or {}).get("seed") == REAL_TAG
+                and (getattr(old, "metadata", None) or {}).get("gen_hash") == stamp
             )
             if not same:
                 await kb.update_text_entry(
@@ -1083,9 +1133,13 @@ async def sync_real_entries(kb, entries: list[dict], *, families: tuple[str, ...
                 )
                 stats["updated"] += 1
             continue
-        if _norm_title(e["title"]) in owner_titles:
+        if e["key"] in edited or _norm_title(e["title"]) in owner_titles:
             # fiche du gérant : on garde
             stats["kept_owner"] += 1
+            continue
+        if e["key"] in deleted:
+            # supprimée exprès : pas recréée
+            stats["deleted_by_owner"] += 1
             continue
         await kb.add_text(
             content=e["content"], title=e["title"], category=e["category"], metadata=meta
@@ -1094,31 +1148,52 @@ async def sync_real_entries(kb, entries: list[dict], *, families: tuple[str, ...
     for key, old in ours.items():
         if key not in wanted and _managed(key, families):
             # fait qui n'existe plus
-            await kb.delete_entry(old.id)
+            await _drop(kb, old.id)
             stats["removed"] += 1
     return stats
+
+
+async def _seeded(kb) -> bool:
+    """Salon déjà seedé (fiches réelles) ?"""
+    return any(
+        (getattr(e, "metadata", None) or {}).get("seed") == REAL_TAG
+        or (e.content or "").strip() == LEGACY_HOURS_TEXT
+        for e in await kb.list_entries()
+    )
+
+
+def _kb_for(session, business_id, kb):
+    if kb is not None:
+        return kb
+    from jenny.rag.knowledge_base import KnowledgeBase
+
+    return KnowledgeBase(business_id=business_id, session=session)
 
 
 async def refresh_hours(session, business_id, kb=None) -> dict | None:
     """Fiches horaires après un changement."""
     if session.get_bind().dialect.name != "postgresql":
         return None
-    if kb is None:
-        from jenny.rag.knowledge_base import KnowledgeBase
-
-        kb = KnowledgeBase(business_id=business_id, session=session)
+    kb = _kb_for(session, business_id, kb)
     business, _prestas, _staff = await load_salon(session, business_id)
-    existing = await kb.list_entries()
     # salon jamais seedé : rien
-    seeded = any(
-        (getattr(e, "metadata", None) or {}).get("seed") == REAL_TAG
-        or (e.content or "").strip() == LEGACY_HOURS_TEXT
-        for e in existing
-    )
-    if not seeded:
+    if not await _seeded(kb):
         return None
     entries = hours_entries(business.get("business_hours"))
     return await sync_real_entries(kb, entries, families=("horaires-",))
+
+
+async def refresh_real_entries(session, business_id, kb=None) -> dict | None:
+    """Toutes nos fiches après un changement."""
+    if session.get_bind().dialect.name != "postgresql":
+        return None
+    kb = _kb_for(session, business_id, kb)
+    business, prestas, staff = await load_salon(session, business_id)
+    if not await _seeded(kb):
+        return None
+    # prix : catalogue en direct
+    entries = build_entries(business, prestas, demo=False, include_prices=False, staff=staff)
+    return await sync_real_entries(kb, entries, families=real_families(include_prices=True))
 
 
 async def load_salon(session, business_id) -> tuple[dict, list[dict], list[str]]:

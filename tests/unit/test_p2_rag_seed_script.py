@@ -83,16 +83,27 @@ class _Db:
         if "pg_advisory" in sql:
             self.log.append("lock")
             return SimpleNamespace()
-        if sql.startswith("SELECT DISTINCT"):
-            rows = [
-                SimpleNamespace(
-                    title=json.loads(r["metadata_"])["title"],
-                    seed=json.loads(r["metadata_"]).get("seed"),
-                    content=r["content"],
+        if sql.startswith("SELECT DISTINCT metadata_->>'kb_tombstone'"):
+            return SimpleNamespace(fetchall=lambda: [])
+        if "AS knowledge_id" in sql:
+            # list_entries : une ligne par fiche
+            rows = []
+            for r in self.rows:
+                meta = json.loads(r["metadata_"])
+                rows.append(
+                    SimpleNamespace(
+                        knowledge_id=meta["knowledge_id"],
+                        title=meta.get("title"),
+                        category=meta.get("category"),
+                        source="text",
+                        contents=[r["content"]],
+                        metas=[r["metadata_"]],
+                        idx=[0],
+                        chunks_count=1,
+                        created_at=r["created_at"],
+                    )
                 )
-                for r in self.rows
-            ]
-            return SimpleNamespace(all=lambda: rows)
+            return SimpleNamespace(fetchall=lambda: rows)
         if sql.startswith("SELECT id, content"):
             self.log.append("export")
             return SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: self.rows))
@@ -100,6 +111,9 @@ class _Db:
             # sauvegarde déjà écrite ?
             self.log.append(f"delete:{len(list(self.backup_dir.glob('*.json')))}")
             self.last_delete = (sql, params)
+            tag = params.get("tag")
+            if tag:
+                self.rows = [r for r in self.rows if json.loads(r["metadata_"]).get("seed") != tag]
             return SimpleNamespace(rowcount=1)
         if sql.startswith("INSERT"):
             self.inserted.append(params)
@@ -145,14 +159,17 @@ async def test_vrai_salon_sauvegarde_avant_effacement(tmp_path: Path, patched) -
     assert db.log[db.log.index("export") - 1] == "lock"
     backup = json.loads(Path(rep["backup"]).read_text())
     assert {r["content"] for r in backup["rows"]} == {owner["content"], old_seed["content"]}
-    # seules nos fiches effacées
+    # seules les fiches démo effacées
     sql, params = db.last_delete
-    assert "metadata_->>'seed' IN" in sql and params["a"] == kc.SEED_TAG
+    assert "metadata_->>'seed' =" in sql and params["tag"] == kc.SEED_TAG
     # fiche du gérant gardée, pas doublée
-    assert "horaires-samedi" in rep["kept_owner"]
+    assert rep["stats"]["kept_owner"] == 1
     metas = [json.loads(p["metadata"]) for p in db.inserted]
     assert all(m["seed"] == kc.REAL_TAG for m in metas)
-    assert "horaires-samedi" not in {m["kb_key"] for m in metas}
+    keys = {m["kb_key"] for m in metas}
+    assert "horaires-samedi" not in keys
+    # prix : catalogue en direct
+    assert not any(k.startswith(("presta-", "tarifs-")) for k in keys)
     blob = " ".join(p["content"] for p in db.inserted)
     assert "Tanneurs" not in blob and "Léa" not in blob
     assert "le mardi de 9h à 19h" in blob

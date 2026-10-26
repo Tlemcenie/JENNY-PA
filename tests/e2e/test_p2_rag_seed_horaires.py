@@ -72,7 +72,11 @@ async def test_route_fiche_horaires_depuis_business_hours(monkeypatch: pytest.Mo
     hours = next(a for a in added if a["title"] == "Horaires d'ouverture")
     assert "le lundi et mercredi de 8h30 à 18h" in hours["content"]
     assert "mardi au samedi" not in hours["content"]
-    assert hours["metadata"] == {"kb_key": "horaires-semaine", "seed": kc.REAL_TAG}
+    assert hours["metadata"] == {
+        "kb_key": "horaires-semaine",
+        "seed": kc.REAL_TAG,
+        "gen_hash": kc.gen_hash(hours["title"], "horaires", hours["content"]),
+    }
     # prix : catalogue en direct
     assert not any(a["metadata"]["kb_key"].startswith("presta-") for a in added)
 
