@@ -965,7 +965,16 @@ class ConversationEngine:
         new_topic = len(re.findall(r"\w+", msg_text)) > 3 and intent not in _FILLER_INTENTS
 
         # un créneau n'est pas un oui
-        joining_waitlist = state.awaiting_waitlist and not _slot_in_msg and accepts_offer(msg_text)
+        _wait_ok = not _slot_in_msg
+        if state.awaiting_waitlist and _slot_in_msg and parse_fr_time(_when_txt) is None:
+            # « oui, prévenez-moi pour samedi »
+            _day_txt = parse_fr_date(_when_txt, today=today)
+            _wait_ok = (
+                _day_txt is not None
+                and _day_txt.isoformat() == _filled(state, "date")
+                and bool(_OPT_IN_RE.search(msg_text) or is_confirmation(msg_text))
+            )
+        joining_waitlist = state.awaiting_waitlist and _wait_ok and accepts_offer(msg_text)
         if joining_waitlist:
             state.disarm_latch("awaiting_waitlist")
             intent = "join_waitlist"
