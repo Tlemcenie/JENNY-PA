@@ -1,7 +1,12 @@
-"""auth Google + email + JWT."""
+"""auth Google + email + JWT.
+
+bcrypt (mots de passe, codes) tourne dans un thread : la boucle asyncio n'est
+jamais bloquée. Brute-force freiné par IP (middleware) et par email (ici).
+"""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
@@ -24,9 +29,15 @@ from jenny.api.auth.email_verification import (
 )
 from jenny.api.auth.jwt_utils import create_access_token, decode_token
 from jenny.api.auth.password_utils import hash_password, verify_password
-from jenny.api.dependencies import CurrentUser, DbSession  # noqa: TC001
+from jenny.api.dependencies import (
+    CurrentUser,
+    DbSession,
+    member_business_ids,
+)
+from jenny.api.middleware.rate_limit import limiter_active
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
+from jenny.core.rate_limit import check_rate_limit
 from jenny.domain.models.business import Business
 from jenny.domain.models.business_member import BusinessMember
 from jenny.domain.models.user import User
@@ -44,14 +55,43 @@ def _slugify(value: str) -> str:
     return slug or "business"
 
 
+_TOO_MANY_TRIES = "Trop de tentatives. Réessayez dans quelques minutes."
+# hash factice (timing égal)
+_DUMMY_HASH: str | None = None
+
+
+async def _hash(secret: str) -> str:
+    """bcrypt dans un thread."""
+    return await asyncio.to_thread(hash_password, secret)
+
+
+async def _check(secret: str, hashed: str | None) -> bool:
+    """vérif bcrypt dans un thread."""
+    global _DUMMY_HASH
+    if not hashed:
+        # compte absent : même coût
+        if _DUMMY_HASH is None:
+            _DUMMY_HASH = await _hash("jenny-dummy-password")
+        await asyncio.to_thread(verify_password, secret, _DUMMY_HASH)
+        return False
+    return await asyncio.to_thread(verify_password, secret, hashed)
+
+
+async def _too_many(action: str, email: str, limit: int, window: int = 900) -> bool:
+    """trop d'essais pour cet email ?"""
+    if not limiter_active():
+        return False
+    allowed, _ = await check_rate_limit(
+        email.strip().lower(), limit=limit, window_seconds=window, bucket=f"auth_{action}"
+    )
+    return not allowed
+
+
 async def _ensure_business_for_user(db, user: User, display_name: str | None) -> UUID:
     """crée un business si besoin."""
-    r = await db.execute(
-        select(BusinessMember.business_id).where(BusinessMember.user_id == user.id).limit(1)
-    )
-    existing = r.scalar_one_or_none()
-    if existing is not None:
-        return existing
+    existing = await member_business_ids(db, user.id)
+    if existing:
+        return existing[0]
 
     base = _slugify(display_name or (user.email.split("@")[0] if user.email else "business"))
     slug = f"{base}-{uuid4().hex[:6]}"
@@ -70,10 +110,8 @@ async def _ensure_business_for_user(db, user: User, display_name: str | None) ->
 
 async def _issue_token_for_user(db, user: User) -> str:
     """émet un JWT."""
-    r = await db.execute(
-        select(BusinessMember.business_id).where(BusinessMember.user_id == user.id)
-    )
-    business_ids = [row[0] for row in r.all()]
+    # ordre stable : owner d'abord
+    business_ids = await member_business_ids(db, user.id)
     if not business_ids:
         business_ids = [await _ensure_business_for_user(db, user, user.full_name)]
         await db.commit()
@@ -155,9 +193,9 @@ async def register(body: RegisterRequest, db: DbSession) -> JSONResponse:
     user = User(
         email=body.email,
         full_name=body.full_name,
-        password_hash=hash_password(body.password),
+        password_hash=await _hash(body.password),
         email_verified=False,
-        email_verification_code_hash=hash_code(code),
+        email_verification_code_hash=await asyncio.to_thread(hash_code, code),
         email_verification_expires_at=code_expiry(now),
         email_verification_attempts=0,
         email_verification_sent_at=now,
@@ -179,11 +217,12 @@ async def register(body: RegisterRequest, db: DbSession) -> JSONResponse:
 
 @router.post("/login")
 async def login(body: LoginRequest, db: DbSession) -> JSONResponse:
+    if await _too_many("login", body.email, limit=10):
+        raise HTTPException(429, _TOO_MANY_TRIES)
     r = await db.execute(select(User).where(User.email == body.email))
     user = r.scalar_one_or_none()
-    if user is None or not user.password_hash:
-        raise HTTPException(401, "Email ou mot de passe incorrect")
-    if not verify_password(body.password, user.password_hash):
+    ok = await _check(body.password, user.password_hash if user else None)
+    if user is None or not ok:
         raise HTTPException(401, "Email ou mot de passe incorrect")
     if not user.email_verified:
         raise HTTPException(403, "email_not_verified")
@@ -220,7 +259,9 @@ async def verify_email(body: VerifyEmailRequest, db: DbSession) -> JSONResponse:
     if user.email_verification_attempts >= MAX_VERIFY_ATTEMPTS:
         raise HTTPException(429, "Trop de tentatives. Demandez un nouveau code.")
 
-    if not verify_code(body.code.strip(), user.email_verification_code_hash):
+    if not await asyncio.to_thread(
+        verify_code, body.code.strip(), user.email_verification_code_hash
+    ):
         user.email_verification_attempts += 1
         # persiste le compteur avant
         await db.commit()
@@ -255,7 +296,7 @@ async def resend_code(body: ResendCodeRequest, db: DbSession) -> JSONResponse:
             raise HTTPException(429, "Veuillez patienter avant de redemander un code.")
 
     code = generate_code()
-    user.email_verification_code_hash = hash_code(code)
+    user.email_verification_code_hash = await asyncio.to_thread(hash_code, code)
     user.email_verification_expires_at = code_expiry(now)
     user.email_verification_attempts = 0
     user.email_verification_sent_at = now
@@ -286,6 +327,9 @@ class ResetPasswordRequest(BaseModel):
 @router.post("/forgot-password")
 async def forgot_password(body: ForgotPasswordRequest, db: DbSession) -> JSONResponse:
     """envoie un code de reset."""
+    # anti spam d'emails
+    if await _too_many("forgot", body.email, limit=3):
+        return JSONResponse({"status": "sent"})
     r = await db.execute(select(User).where(User.email == body.email))
     user = r.scalar_one_or_none()
     if user is None or not user.password_hash:
@@ -293,7 +337,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: DbSession) -> JSONRes
 
     now = datetime.now(UTC)
     code = generate_code()
-    user.password_reset_code_hash = hash_code(code)
+    user.password_reset_code_hash = await asyncio.to_thread(hash_code, code)
     user.password_reset_expires_at = code_expiry(now)
     await db.commit()
 
@@ -309,19 +353,24 @@ async def forgot_password(body: ForgotPasswordRequest, db: DbSession) -> JSONRes
 @router.post("/reset-password")
 async def reset_password(body: ResetPasswordRequest, db: DbSession) -> JSONResponse:
     """reset via code email."""
+    # code à 6 chiffres : peu d'essais
+    if await _too_many("reset", body.email, limit=5):
+        raise HTTPException(429, _TOO_MANY_TRIES)
     r = await db.execute(select(User).where(User.email == body.email))
     user = r.scalar_one_or_none()
     if user is None or not user.password_reset_code_hash:
         raise HTTPException(400, "Code invalide ou expiré")
     if is_expired(user.password_reset_expires_at):
         raise HTTPException(400, "Code expiré, redemandez-en un")
-    if not verify_code(body.code.strip(), user.password_reset_code_hash):
+    if not await asyncio.to_thread(
+        verify_code, body.code.strip(), user.password_reset_code_hash
+    ):
         raise HTTPException(400, "Code invalide")
     pw_err = _check_password_strength(body.new_password)
     if pw_err:
         raise HTTPException(400, pw_err)
 
-    user.password_hash = hash_password(body.new_password)
+    user.password_hash = await _hash(body.new_password)
     user.password_reset_code_hash = None
     user.password_reset_expires_at = None
     user.email_verified = True  # adresse prouvée par email
@@ -338,20 +387,23 @@ class UpdateMeRequest(BaseModel):
     new_password: str | None = Field(None, min_length=8, max_length=128)
 
 
-async def _me_payload(db, user: User) -> dict:
+async def _me_payload(db, user: User, preferred: UUID | None = None) -> dict:
     """payload du profil."""
-    r_m = await db.execute(
-        select(BusinessMember).where(BusinessMember.user_id == user.id).limit(1)
-    )
-    member = r_m.scalar_one_or_none()
-    if member is None:
+    ids = await member_business_ids(db, user.id)
+    if not ids:
         # user sans business : on crée
         business_id = await _ensure_business_for_user(db, user, user.full_name)
         await db.commit()
         role = "owner"
     else:
-        business_id = member.business_id
-        role = member.role
+        # même salon que le token
+        business_id = preferred if preferred in ids else ids[0]
+        r_m = await db.execute(
+            select(BusinessMember.role).where(
+                BusinessMember.user_id == user.id, BusinessMember.business_id == business_id
+            )
+        )
+        role = r_m.scalar_one_or_none() or "member"
 
     business_name = ""
     if business_id is not None:
@@ -393,7 +445,14 @@ async def auth_me(
     if user is None:
         raise HTTPException(401, "Utilisateur introuvable")
 
-    return await _me_payload(db, user)
+    preferred: UUID | None = None
+    for raw_bid in payload.get("business_ids") or []:
+        try:
+            preferred = UUID(str(raw_bid))
+            break
+        except (ValueError, TypeError):
+            continue
+    return await _me_payload(db, user, preferred)
 
 
 @router.patch("/me")
@@ -412,18 +471,18 @@ async def update_me(body: UpdateMeRequest, db: DbSession, principal: CurrentUser
             raise HTTPException(
                 400, "Aucun mot de passe défini sur ce compte (connexion Google)"
             )
-        if not body.current_password or not verify_password(
+        if not body.current_password or not await _check(
             body.current_password, user.password_hash
         ):
             raise HTTPException(400, "Mot de passe actuel incorrect")
         pw_err = _check_password_strength(body.new_password)
         if pw_err:
             raise HTTPException(422, pw_err)
-        user.password_hash = hash_password(body.new_password)
+        user.password_hash = await _hash(body.new_password)
 
     await db.commit()
     logger.info("auth.me_updated", user_id=str(user.id))
-    return await _me_payload(db, user)
+    return await _me_payload(db, user, principal.business_id)
 
 
 @router.get("/google/login")
@@ -486,6 +545,9 @@ async def google_callback(
     name = profile.get("name")
     if not sub or not email:
         raise HTTPException(400, "Profil Google incomplet")
+    # sinon vol de compte par email
+    if str(profile.get("email_verified")).lower() != "true":
+        raise HTTPException(400, "Email Google non vérifié")
 
     r = await db.execute(select(User).where(User.google_sub == sub))
     user = r.scalar_one_or_none()
@@ -509,9 +571,8 @@ async def google_callback(
     elif name:
         user.full_name = name
 
-    r3 = await db.execute(select(BusinessMember.business_id).where(BusinessMember.user_id == user.id))
-    business_ids = [row[0] for row in r3.all()]
     await db.commit()
 
-    token = create_access_token(user.id, user.email, business_ids)
+    # crée le salon si nouveau
+    token = await _issue_token_for_user(db, user)
     return JSONResponse({"access_token": token, "token_type": "bearer"})
