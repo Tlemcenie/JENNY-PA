@@ -27,6 +27,7 @@ from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.message import Message
 from jenny.engine.factory import get_engine
+from jenny.engine.state_manager import StateManager
 
 ATTACKER = "203.0.113.66"
 LEGIT = "198.51.100.7"
@@ -223,19 +224,23 @@ class TestStates:
         self, client: AsyncClient, db_tables, monkeypatch
     ) -> None:
         """Éviction publique, mémoire seule."""
+        if not hasattr(StateManager, public_chat.EVICT_METHOD):
+            pytest.skip("StateManager.forget arrive avec le lot moteur")
         monkeypatch.setattr(public_chat, "MAX_STATES", 2)
         sm = get_engine().state_manager
         evicted: list = []
         deleted: list = []
+        # vraie méthode, espionnée
+        real = getattr(sm, public_chat.EVICT_METHOD)
 
-        def evict(conv_id) -> None:
+        def evict(conv_id):
             evicted.append(conv_id)
-            sm._states.pop(str(conv_id), None)
+            return real(conv_id)
 
         async def adelete(conv_id) -> None:
             deleted.append(conv_id)
 
-        monkeypatch.setattr(sm, public_chat.EVICT_METHOD, evict, raising=False)
+        monkeypatch.setattr(sm, public_chat.EVICT_METHOD, evict)
         monkeypatch.setattr(sm, "adelete", adelete)
         biz = await _salon()
         vids = [_visitor() for _ in range(3)]

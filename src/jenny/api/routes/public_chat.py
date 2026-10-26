@@ -150,8 +150,8 @@ _BUSY: set[UUID] = set()
 # part du widget dans le cache moteur
 MAX_STATES = 2000
 _STATES: OrderedDict[UUID, float] = OrderedDict()
-# méthode publique du moteur
-EVICT_METHOD = "evict_local"
+# StateManager.forget du moteur
+EVICT_METHOD = "forget"
 
 _BUSY_TEXT = "Jenny reçoit beaucoup de messages, réessayez dans un instant."
 
