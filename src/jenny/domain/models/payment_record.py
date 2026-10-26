@@ -23,7 +23,7 @@ class PaymentRecord(Base, TimestampMixin):
         nullable=False,
         index=True,
     )
-    provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, comment="stripe, paypal")
     external_id: Mapped[str] = mapped_column(String(255), nullable=False)
     amount_minor: Mapped[int | None] = mapped_column(BigInteger(), default=None)
     currency: Mapped[str] = mapped_column(String(3), default="EUR", nullable=False)

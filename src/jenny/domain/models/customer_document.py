@@ -52,7 +52,9 @@ class CustomerDocument(Base, TimestampMixin):
     file_name: Mapped[str] = mapped_column(String(500), nullable=False)
     mime_type: Mapped[str | None] = mapped_column(String(255), default=None)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, default=None)
-    storage_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    storage_uri: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="S3, chemin local, ou URL signée"
+    )
     content_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
     metadata_: Mapped[dict | None] = mapped_column("metadata_", JSON, default=None)
 
