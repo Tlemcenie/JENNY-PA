@@ -59,7 +59,14 @@ export const metadata: Metadata = {
     description: "L'assistante IA qui répond à vos clients sur tous vos canaux, 24/7.",
     images: ["/jenny.png"],
   },
-  icons: { apple: "/jenny.png" },
+  // sinon next oublie icon.png
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "48x48" },
+      { url: "/icon.png", type: "image/png", sizes: "256x256" },
+    ],
+    apple: "/jenny.png",
+  },
   appleWebApp: { capable: true, title: "Jenny", statusBarStyle: "default" },
 };
 

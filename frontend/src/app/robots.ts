@@ -2,12 +2,14 @@ import type { MetadataRoute } from "next";
 import { getSiteUrl } from "@/lib/site-url";
 
 // espace connecté : pas d'index
+// le layout (dashboard) met aussi noindex
 const PRIVATE = [
   "/admin",
   "/analytics",
   "/assistant",
   "/brain",
   "/calendar",
+  "/campaigns",
   "/channels",
   "/chat",
   "/conversations",
@@ -23,7 +25,10 @@ const PRIVATE = [
   "/prestations",
   "/profile",
   "/stats",
+  "/team",
   "/verify",
+  // widget : iframe, pas une page
+  "/widget/",
 ];
 
 export default async function robots(): Promise<MetadataRoute.Robots> {
