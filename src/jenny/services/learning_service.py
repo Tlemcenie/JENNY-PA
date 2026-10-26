@@ -258,14 +258,15 @@ async def persist_engine_signals(
     try:
         touched = False
         if customer_id is not None and result.extracted_facts:
-            added = await _record_facts(
+            await _record_facts(
                 db,
                 business_id=business_id,
                 customer_id=customer_id,
                 conversation_id=conversation_id,
                 facts=result.extracted_facts,
             )
-            touched = touched or added > 0
+            # fait revu = last_seen à garder
+            touched = True
         if result.knowledge_gap and result.gap_question:
             # Crée une nouvelle lacune OU incrémente une existante : dans les deux
             # cas il y a une écriture à committer.
