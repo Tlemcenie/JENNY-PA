@@ -94,9 +94,15 @@ async def _seed_customer_rdv(bid: str, *, hours_ahead: int | None = None) -> str
 
 async def _chat(client: AsyncClient, bid: str, cid: str | None, message: str) -> dict:
     body = {"conversation_id": str(uuid4()), "business_id": bid, "message": message}
+    headers: dict = {}
     if cid:
         body["customer_id"] = cid
-    r = await client.post("/api/v1/conversation/chat", json=body)
+        # fiche client : compte du salon requis
+        from jenny.api.auth.jwt_utils import create_access_token
+
+        tok = create_access_token(uuid4(), "staff@x.com", [UUID(bid)])
+        headers = {"Authorization": f"Bearer {tok}"}
+    r = await client.post("/api/v1/conversation/chat", json=body, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()
 

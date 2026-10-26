@@ -7,11 +7,10 @@ Les endpoints d'ingestion sont dans ingest.py.
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from jenny.api.dependencies import DbSession
-from jenny.core.config import get_settings
+from jenny.api.dependencies import DbSession, TenantUser, resolve_business_id
 from jenny.core.logging import get_logger
 from jenny.db.repositories.message_repo import MessageRepository
 from jenny.domain.schemas.message import MessageResponse
@@ -28,19 +27,9 @@ class MessageListResponse(BaseModel):
     next_cursor: str | None = None
 
 
-def _enforce_tenant(request: Request, business_id: UUID) -> None:
-    """Si auth requise, le business_id de la requête doit correspondre au contexte."""
-    settings = get_settings()
-    if not settings.require_auth:
-        return
-    ctx_bid = getattr(request.state, "business_id", None)
-    if ctx_bid is not None and ctx_bid != business_id:
-        raise HTTPException(status_code=403, detail="Accès refusé pour ce business")
-
-
 @router.get("/", response_model=MessageListResponse)
 async def list_messages(
-    request: Request,
+    principal: TenantUser,
     db: DbSession,
     business_id: UUID,
     channel: str | None = None,
@@ -51,7 +40,7 @@ async def list_messages(
     to_date: datetime | None = None,
 ) -> MessageListResponse:
     """Liste les messages avec filtres et pagination par curseur."""
-    _enforce_tenant(request, business_id)
+    business_id = resolve_business_id(principal, business_id)
     repo = MessageRepository(db)
     rows, next_c = await repo.list_by_business_cursor(
         business_id,
@@ -84,7 +73,7 @@ async def list_messages(
 
 @router.get("/{message_id}", response_model=MessageResponse)
 async def get_message(
-    request: Request,
+    principal: TenantUser,
     db: DbSession,
     message_id: UUID,
     business_id: UUID = Query(  # noqa: B008 — idiome FastAPI (dépendance en valeur par défaut)
@@ -92,7 +81,7 @@ async def get_message(
     ),
 ) -> MessageResponse:
     """Récupère un message par son ID (scopé au business)."""
-    _enforce_tenant(request, business_id)
+    business_id = resolve_business_id(principal, business_id)
     repo = MessageRepository(db)
     message = await repo.get_by_id_for_business(message_id, business_id)
     if not message:

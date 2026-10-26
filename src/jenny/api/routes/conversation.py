@@ -4,6 +4,10 @@ Endpoint principal qui reçoit un message client,
 le fait passer par tout le pipeline Jenny
 (intention → entités → agent → réponse),
 et retourne la réponse générée.
+
+Le chat reste ouvert sans compte (widget public) mais un appel anonyme ne lit
+jamais de données : pas de fiche client, pas de reprise d'une conversation
+d'un client identifié, statut réduit. Protection du coût : limite de débit.
 """
 
 from __future__ import annotations
@@ -17,13 +21,17 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from jenny.api.dependencies import (  # noqa: TC001 — résolu au runtime par FastAPI
+from jenny.api.dependencies import (
+    CurrentPrincipal,
     DbSession,
     OptionalUser,
+    resolve_business_id,
+    soft_principal,
 )
-from jenny.core.config import get_settings
+from jenny.api.middleware.rate_limit import enforce_business_chat_limit
 from jenny.core.logging import get_logger
 from jenny.domain.models.conversation import Conversation
+from jenny.domain.models.customer import Customer
 from jenny.domain.models.message import Message
 from jenny.engine.conversation_engine import EngineRequest, EngineResponse
 from jenny.engine.factory import get_engine
@@ -33,14 +41,56 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/conversation", tags=["Conversation"])
 
 
-def _enforce_tenant(request: Request, business_id: UUID) -> None:
-    """Si l'auth est requise, le business ciblé doit correspondre au contexte JWT."""
-    settings = get_settings()
-    if not settings.require_auth:
+_FORBIDDEN_CONV = "Conversation inaccessible"
+
+
+async def _guard_conversation(
+    db, body: ConversationRequest, principal: CurrentPrincipal | None
+) -> None:
+    """Bloque la reprise d'une conv d'autrui."""
+    state = get_engine().state_manager.get(body.conversation_id)
+    if state is not None and state.business_id not in (None, body.business_id):
+        raise HTTPException(403, _FORBIDDEN_CONV)
+
+    try:
+        conv = await db.get(Conversation, body.conversation_id)
+        cust = await db.get(Customer, body.customer_id) if body.customer_id else None
+    except Exception as exc:  # pragma: no cover - base indispo
+        await db.rollback()
+        logger.warning("conversation.guard_db_error", error=str(exc))
         return
-    ctx_bid = getattr(request.state, "business_id", None)
-    if ctx_bid is not None and str(ctx_bid) != str(business_id):
-        raise HTTPException(status_code=403, detail="Accès refusé pour ce business")
+    if conv is not None:
+        if conv.business_id != body.business_id:
+            raise HTTPException(403, _FORBIDDEN_CONV)
+        # anonyme : pas la conv d'un client connu
+        if principal is None and conv.customer_id not in (None, body.customer_id):
+            raise HTTPException(403, _FORBIDDEN_CONV)
+    if body.customer_id is not None and (cust is None or cust.business_id != body.business_id):
+        raise HTTPException(403, "Client inconnu pour ce salon")
+
+
+async def _check_chat_access(
+    db, body: ConversationRequest, request: Request
+) -> CurrentPrincipal | None:
+    """Salon autorisé + conv sûre."""
+    principal = await soft_principal(request, db)
+    resolve_business_id(principal, body.business_id, allow_anonymous=True)
+    await _guard_conversation(db, body, principal)
+    return principal
+
+
+async def _prepare_public_chat(
+    db, body: ConversationRequest, request: Request
+) -> ConversationRequest:
+    """Règles du chat public."""
+    principal = await soft_principal(request, db)
+    if principal is None and body.customer_id is not None:
+        # anonyme : pas de fiche client
+        body = body.model_copy(update={"customer_id": None})
+    await _check_chat_access(db, body, request)
+    # quota salon après les droits
+    await enforce_business_chat_limit(body.business_id)
+    return body
 
 
 async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -> str | None:
@@ -58,6 +108,10 @@ async def _persist_chat(db, body: ConversationRequest, result: EngineResponse) -
         channel = body.channel or "api"
 
         conv = await db.get(Conversation, body.conversation_id)
+        if conv is not None and conv.business_id != body.business_id:
+            # jamais chez un autre salon
+            logger.warning("conversation.persist_cross_business", conversation_id=str(conv.id))
+            return None
         if conv is None:
             conv = Conversation(
                 id=body.conversation_id,
@@ -174,6 +228,7 @@ async def chat(
 
     La conversation et les messages (client + Jenny) sont persistés en base.
     """
+    body = await _prepare_public_chat(db, body, request)
     result, message_id = await _run_engine_chat(db, body, request)
     return _to_response(result, message_id)
 
@@ -185,7 +240,7 @@ async def _run_engine_chat(
 
     ``on_token`` (optionnel) reçoit chaque token de la réponse au fil de l'eau.
     """
-    _enforce_tenant(request, body.business_id)
+    await _check_chat_access(db, body, request)
     engine = get_engine()
 
     from jenny.services.learning_service import load_customer_context, persist_engine_signals
@@ -269,6 +324,8 @@ async def chat_stream(
     envoyée à la fin via le champ ``text`` — le client remplace alors l'affichage
     brut par cette version sûre. En cas de pépin de flux, repli automatique.
     """
+    # contrôles avant le flux
+    body = await _prepare_public_chat(db, body, request)
     queue: asyncio.Queue = asyncio.Queue()
 
     async def on_token(tok: str) -> None:
@@ -328,22 +385,28 @@ async def conversation_status(conversation_id: UUID, principal: OptionalUser) ->
     """Récupère l'état actuel d'une conversation (scopé au business courant).
 
     Retourne les informations de contexte : intention, slots remplis, phase,
-    nombre de tours. Isolation multi-tenant : quand un tenant est identifié (JWT /
-    clé API — toujours le cas en prod, ``require_auth``), on ne révèle l'état qu'à
-    SON propriétaire ; un autre tenant obtient « not_found » (les slots peuvent
-    contenir prestation/date/nom du client). Sans token (dev sans auth), on ne
-    bloque pas — l'exigence d'auth vient du middleware en prod.
+    nombre de tours. Isolation multi-tenant : l'état complet n'est révélé qu'au
+    salon propriétaire ; un autre salon (ou un compte sans salon) obtient
+    « not_found ». Sans token, réponse réduite (phase, tours) : jamais de slots
+    (prestation/date/nom du client).
     """
     engine = get_engine()
     state = engine.state_manager.get(conversation_id)
+    not_found = {"status": "not_found", "conversation_id": str(conversation_id)}
 
     if state is None:
-        return {"status": "not_found", "conversation_id": str(conversation_id)}
+        return not_found
 
-    if principal is not None and principal.business_id is not None and (
-        state.business_id != principal.business_id
-    ):
-        return {"status": "not_found", "conversation_id": str(conversation_id)}
+    if principal is None:
+        # anonyme : rien de sensible
+        return {
+            "conversation_id": str(state.conversation_id),
+            "phase": state.phase.value,
+            "turn_count": state.turn_count,
+        }
+
+    if principal.business_id is None or state.business_id != principal.business_id:
+        return not_found
 
     return {
         "conversation_id": str(state.conversation_id),
