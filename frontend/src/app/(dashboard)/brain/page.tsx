@@ -85,7 +85,7 @@ function saveLabel(state: SaveState, savedAt: Date | null): string {
   if (state === "saved" && savedAt) {
     return `Enregistré à ${savedAt.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`;
   }
-  return "Sauvegarde automatique";
+  return "Sauvegarde auto";
 }
 
 // pastille d'état visible
@@ -103,7 +103,7 @@ function SaveStatus({
       role="status"
       aria-live="polite"
       className={cn(
-        "inline-flex items-center gap-1.5 h-8 px-3 rounded-full border text-[12px] font-medium shadow-sm transition-colors",
+        "shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-8 px-3 rounded-full border text-[12px] font-medium shadow-sm transition-colors",
         state === "error"
           ? "bg-jenny-error/10 border-jenny-error/30 text-jenny-error"
           : state === "saved"
@@ -1268,7 +1268,7 @@ export default function BrainPage() {
                       {m.v}%
                     </span>
                   </div>
-                  <div className="h-[3px] rounded-sm" style={{ background: "var(--color-jenny-bg-tint)" }}>
+                  <div className="h-[3px] rounded-sm" style={{ background: "var(--color-jenny-divider)" }}>
                     <div
                       className={cn("h-full rounded-sm", m.v >= 95 ? "bg-jenny-success" : "bg-jenny-coral")}
                       style={{ width: `${m.v}%` }}
@@ -1293,8 +1293,8 @@ export default function BrainPage() {
             to right,
             var(--color-jenny-coral) 0%,
             var(--color-jenny-coral) var(--pct),
-            var(--color-jenny-bg-tint) var(--pct),
-            var(--color-jenny-bg-tint) 100%
+            var(--color-jenny-divider) var(--pct),
+            var(--color-jenny-divider) 100%
           );
           outline: none;
           cursor: pointer;

@@ -709,7 +709,7 @@ export default function KnowledgePage() {
                         fontFamily: "var(--font-sans)",
                         cursor: "pointer",
                         border: "1px solid transparent",
-                        background: formMode === mode ? "var(--coral)" : "var(--bg-tint)",
+                        background: formMode === mode ? "var(--coral)" : "color-mix(in srgb, var(--text) 7%, var(--surface))",
                         color: formMode === mode ? "#fff" : "var(--text-2)",
                       }}
                     >
@@ -820,7 +820,7 @@ export default function KnowledgePage() {
                 )}
 
                 <div className="flex gap-3 justify-end pt-2">
-                  <Button variant="secondary" type="button" onClick={resetForm}>
+                  <Button variant="ghost" type="button" onClick={resetForm} className="border border-jenny-divider">
                     Annuler
                   </Button>
                   <Button type="submit" isLoading={isSaving}>
