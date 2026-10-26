@@ -61,10 +61,7 @@ export const metadata: Metadata = {
   },
   // sinon next oublie icon.png
   icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "48x48" },
-      { url: "/icon.png", type: "image/png", sizes: "256x256" },
-    ],
+    icon: [{ url: "/icon.png", type: "image/png", sizes: "256x256" }],
     apple: "/jenny.png",
   },
   appleWebApp: { capable: true, title: "Jenny", statusBarStyle: "default" },
