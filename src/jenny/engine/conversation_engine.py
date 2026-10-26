@@ -257,9 +257,15 @@ _NOT_NAME_TEXT = """
     avec un une les en au aux fin debut journee soiree nuit heure heures apresmidi plutot
     finalement possible dispo disponible libre place jenny gentil gentille sympa adorable
     degrade pointes carre chignon tresse tresses boucles racines keratine defrisage
-    decoloration mise pli plis volume
+    decoloration mise pli plis volume mille mercis bisous bisou bises bise importe nimporte
+    pareil aucune aucun idee arrive tant pis laissez laisse tomber excellent formidable
+    impeccable parfaitement magnifique merveilleux trop bravo chouette extra courage
+    enchante enchantee hate cimer thx thanks sinon indifferent egal preference sans grave
+    souci soucis probleme vraiment certainement evidemment meme grand gros enorme immense
 """
 _NOT_NAME_WORDS = frozenset(_NOT_NAME_TEXT.split())
+# « Jenny Martin » : là, un vrai nom
+_SOFT_NOT_NAME = frozenset({"jenny"})
 # de, la, van...
 _NAME_PARTICLES = frozenset(
     {"de", "du", "des", "la", "le", "van", "von", "der", "den", "el", "al", "da", "di", "dos"}
@@ -274,6 +280,12 @@ _THANKS_RE = re.compile(r"\bmerci\b", re.I)
 _LEAD_FILLER_RE = re.compile(
     r"^\s*(?:(?:oui|ouais|ok|okay|d['’]accord|parfait|super|top|merci|alors|euh|bah|bon|"  # noqa: RUF001
     r"voil[àa]|tr[èe]s\s+bien|c['’]est\s+(?:bon|parfait|not[ée]))\b[\s,!.]*)+",  # noqa: RUF001
+    re.I,
+)
+# « Marie merci » : merci en fin
+_TRAIL_THANKS_RE = re.compile(
+    r"\s+(?:merci(?:\s+(?:beaucoup|bien|bcp|infiniment|encore))?|"
+    r"bonne\s+(?:journ[ée]e|soir[ée]e))[\s!.]*$",
     re.I,
 )
 # découpe en morceaux
@@ -303,8 +315,16 @@ def looks_like_name(text: str) -> bool:
     core = [w for w in words if _word_key(w) not in skip]
     if not 1 <= len(core) <= 3 or len(words) > 5 or not _NAME_RE.match(t):
         return False
+    # « Jenny » seul : c'est le bot
+    soft_ok = len(core) >= 2
+
+    def _blocked(word: str) -> bool:
+        # « j'arrive » : on teste « arrive »
+        keys = {_word_key(word), _word_key(re.split(r"['’]", word)[-1])}  # noqa: RUF001
+        return any(k in _NOT_NAME_WORDS and not (soft_ok and k in _SOFT_NOT_NAME) for k in keys)
+
     # politesse, jour, prestation
-    return not any(_word_key(w) in _NOT_NAME_WORDS for w in words)
+    return not any(_blocked(w) for w in words)
 
 
 def _split_lead(part: str) -> tuple[str, str]:
@@ -326,10 +346,12 @@ def extract_customer_name(
     parts.sort(key=lambda p: 0 if _NAME_INTRO_RE.match(_split_lead(p)[1]) else 1)
     for part in parts:
         lead, cand = _split_lead(part)
+        cand = _TRAIL_THANKS_RE.sub("", cand).strip()
         if not cand or (services and match_catalog_services(cand, services)):
             continue
-        # « merci X » remercie X
-        if _THANKS_RE.search(lead) and not _NAME_INTRO_RE.match(cand):
+        # « merci Léa » remercie Léa
+        core = [w for w in cand.split() if _word_key(w) not in _NAME_PARTICLES | _CIVILITIES]
+        if _THANKS_RE.search(lead) and not _NAME_INTRO_RE.match(cand) and len(core) < 2:
             continue
         if parse_fr_date(cand) or parse_fr_time(cand):
             continue
