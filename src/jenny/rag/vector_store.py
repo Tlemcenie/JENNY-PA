@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# candidats par voie (repli)
+# candidats par voie (minimum)
 POOL_SIZE = 30
 # ordre final : "mix", "rrf" ou "score"
 FUSION = "mix"
@@ -41,14 +41,15 @@ class VectorSearchError(RuntimeError):
 
 
 def default_pool() -> int:
-    """Candidats par voie (réglage)."""
+    """Candidats par voie, jamais sous 30."""
     from jenny.core.config import get_settings
 
     try:
         n = int(get_settings().rag_rerank_candidates)
     except (TypeError, ValueError):
         n = 0
-    return n if n > 0 else POOL_SIZE
+    # le réglage peut seulement monter
+    return max(n, POOL_SIZE)
 
 
 @dataclass

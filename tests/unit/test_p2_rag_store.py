@@ -66,10 +66,10 @@ async def _search(session, **kw):
 
 @pytest.mark.asyncio
 async def test_pool_vient_du_reglage(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "rag_rerank_candidates", 17)
+    monkeypatch.setattr(get_settings(), "rag_rerank_candidates", 47)
     s = _Session()
     await _search(s, top_k=3)
-    assert s.search_params()["pool"] == 17
+    assert s.search_params()["pool"] == 47
 
 
 @pytest.mark.asyncio
@@ -79,8 +79,8 @@ async def test_pool_explicite_et_top_k(monkeypatch: pytest.MonkeyPatch) -> None:
     await _search(s, top_k=3, pool_size=40)
     assert s.search_params()["pool"] == 40
     s = _Session()
-    await _search(s, top_k=25)
-    assert s.search_params()["pool"] == 25
+    await _search(s, top_k=35)
+    assert s.search_params()["pool"] == 35
 
 
 @pytest.mark.parametrize("bad", [0, -3])
