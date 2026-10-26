@@ -382,7 +382,7 @@ _NEG_TIME_RE = re.compile(
     r"\bpas\s+(?:a\s+)?(?:\d{1,2}\s*(?:h|heures?|:)(?:\s*\d{2})?|midi|minuit)(?![a-z\d])"
 )
 _HM_RE = re.compile(r"(?<![\d:,.])(\d{1,2})\s*(?:h|heures?|:)(?![a-z])\s*(\d{2})?(?!\d)")
-_MIDI_RE = re.compile(r"(?<!apres-)(?<!apres )\b(midi|minuit)\b")
+_MIDI_RE = re.compile(r"(?<!apres-)(?<!apres )(?<!avant )\b(midi|minuit)\b")
 _MIDI_MIN_RE = re.compile(r"^\s*(\d{2})\b(?!\s*(?:€|eur|%|min|h\b|heures?))")
 _BARE_RE = re.compile(
     # « est à 15 » = un prix

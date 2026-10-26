@@ -51,6 +51,8 @@ ML_CONFIDENCE_FLOOR = 0.5
 
 # intentions de politesse
 GREETING_INTENTS = frozenset({"greeting", "small_talk"})
+# messages d'attente (« je regarde »)
+_FILLER_INTENTS = frozenset({"greeting", "small_talk", "general"})
 
 # une info à la fois
 # interrompt ou complète l'action
@@ -598,6 +600,8 @@ class ConversationEngine:
                 intent_confidence = max(intent_confidence, 0.6)
 
         msg_text = request.message_text or ""
+        # vrai changement de sujet ?
+        new_topic = len(re.findall(r"\w+", msg_text)) > 3 and intent not in _FILLER_INTENTS
 
         # liste d'attente
         joining_waitlist = state.awaiting_waitlist and accepts_offer(msg_text)
@@ -606,8 +610,8 @@ class ConversationEngine:
             intent = "join_waitlist"
             intent_confidence = 0.95
             state.pending_intent = None
-        elif state.awaiting_waitlist and _DECLINE_RE.search(msg_text):
-            # refus : on oublie
+        elif state.awaiting_waitlist and (_DECLINE_RE.search(msg_text) or new_topic):
+            # refus ou autre sujet
             state.disarm_latch("awaiting_waitlist")
 
         # nom attendu ?
@@ -636,6 +640,10 @@ class ConversationEngine:
                 if _new_when and not _new_service and not looks_like_name(msg_text):
                     logger.info("engine.reschedule.implicit", appt="known")
                     mgmt_op = "reschedule"
+
+        # oui attendu, autre sujet
+        if state.awaiting_confirmation and not mgmt_op and new_topic:
+            state.disarm_latch("awaiting_confirmation")
 
         # capture du nom
         naming = name_value is not None and not mgmt_op

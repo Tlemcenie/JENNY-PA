@@ -417,3 +417,7 @@ class TestPriorites:
     def test_negations_courantes(self) -> None:
         assert d("ce n'est pas possible demain, vendredi ?") == date(2026, 10, 30)
         assert d("je ne serai pas là demain") is None
+
+
+def test_avant_midi_pas_midi() -> None:
+    assert parse_fr_time("le matin avant midi") is None

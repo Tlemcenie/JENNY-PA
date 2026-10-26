@@ -283,6 +283,27 @@ class TestVerrous:
         assert chat.state.awaiting_waitlist is False
         assert acts["waitlist"].calls == []
 
+    @pytest.mark.asyncio
+    async def test_autre_sujet_oublie_les_oui_non(self) -> None:
+        # un « ok » plus tard n'inscrit pas
+        eng, acts = _engine(book_result={"success": False, "no_slots": True})
+        chat = _Chat(eng)
+        await chat.say("je réserve une coupe femme demain à 10h")
+        await chat.say("c'est combien un balayage ?")
+        assert chat.state.awaiting_waitlist is False
+        await chat.say("ok merci")
+        assert acts["waitlist"].calls == []
+
+    @pytest.mark.asyncio
+    async def test_autre_sujet_oublie_la_confirmation(self) -> None:
+        eng, acts = _engine()
+        chat = _Chat(eng)
+        await chat.say("je réserve une coupe femme demain à 10h")
+        await chat.say("c'est combien un balayage ?")
+        assert chat.state.awaiting_confirmation is False
+        await chat.say("oui")
+        assert acts["manage"].calls == []
+
 
 # ── B7/B8 : politesse ≠ confirmation ──
 
