@@ -153,6 +153,7 @@ def limiter(monkeypatch):
         env="dev",
         rate_limit_max_requests=50,
         rate_limit_auth_max_requests=2,
+        rate_limit_login_max_requests=2,
         rate_limit_chat_max_requests=3,
         rate_limit_chat_business_max_requests=2,
         rate_limit_proxy_hops=1,
