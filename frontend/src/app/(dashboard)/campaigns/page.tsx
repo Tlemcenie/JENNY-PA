@@ -80,6 +80,17 @@ function shortDate(iso: string): string {
   );
 }
 
+// « demain à 10h30 » -> par jour
+function groupByDay(gaps: { label: string }[]): [string, string[]][] {
+  const out = new Map<string, string[]>();
+  for (const g of gaps) {
+    const [day, hour] = g.label.split(" à ");
+    if (!out.has(day)) out.set(day, []);
+    out.get(day)!.push(hour ?? g.label);
+  }
+  return [...out.entries()];
+}
+
 function euros(v: number): string {
   return new Intl.NumberFormat("fr-FR", {
     style: "currency",
@@ -180,20 +191,29 @@ function GapsCard({
                 ? "Aucun créneau libre : l'agenda est plein."
                 : `${plural(data.gaps.length, "créneau libre", "créneaux libres")} (30 min)`}
             </p>
-            <div className="flex flex-wrap gap-1.5">
-              {data.gaps.slice(0, 14).map((g) => (
-                <span
-                  key={g.start}
-                  className="font-mono text-[11px] px-2 py-1 rounded-lg bg-jenny-bg-tint text-jenny-text"
-                >
-                  {g.label}
-                </span>
+            <div className="space-y-2">
+              {groupByDay(data.gaps).map(([day, hours]) => (
+                <div key={day} className="flex items-start gap-2">
+                  <span className="w-20 shrink-0 text-[11px] font-semibold text-jenny-text capitalize pt-1">
+                    {day}
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {hours.slice(0, 12).map((h) => (
+                      <span
+                        key={h}
+                        className="font-mono text-[11px] px-1.5 py-0.5 rounded-md bg-jenny-bg-tint text-jenny-text"
+                      >
+                        {h}
+                      </span>
+                    ))}
+                    {hours.length > 12 && (
+                      <span className="text-[11px] px-1 py-0.5 text-jenny-text-secondary">
+                        +{hours.length - 12}
+                      </span>
+                    )}
+                  </div>
+                </div>
               ))}
-              {data.gaps.length > 14 && (
-                <span className="text-[11px] px-2 py-1 text-jenny-text-secondary">
-                  +{data.gaps.length - 14}
-                </span>
-              )}
             </div>
             <p className="text-[11px] text-jenny-text-secondary mt-3">
               7 derniers jours : {plural(data.sent_7d, "offre envoyée", "offres envoyées")} ·{" "}
@@ -215,13 +235,14 @@ function GapsCard({
                   key={`${p.name}-${p.slot_start}`}
                   className="flex items-center justify-between gap-3 text-[13px] rounded-xl border border-jenny-divider px-3 py-2"
                 >
-                  <span className="min-w-0 truncate">
-                    <span className="font-medium text-jenny-text">{p.name}</span>
-                    {p.service && (
-                      <span className="text-jenny-text-secondary"> · {p.service}</span>
-                    )}
+                  <span className="min-w-0">
+                    <span className="font-medium text-jenny-text truncate block">{p.name}</span>
+                    <span className="text-[11px] text-jenny-text-secondary truncate block">
+                      {p.service ?? "prestation habituelle"} · {p.duration_minutes} min
+                    </span>
                   </span>
-                  <span className="flex items-center gap-2 shrink-0">
+                  <span className="flex flex-col items-end gap-1 shrink-0">
+                    <span className="font-mono text-[11px] text-jenny-text">{p.label}</span>
                     <span
                       className={cn(
                         "text-[10px] font-semibold rounded-full px-2 py-0.5",
@@ -231,9 +252,6 @@ function GapsCard({
                       )}
                     >
                       {p.source === "waitlist" ? "liste d'attente" : "relance due"}
-                    </span>
-                    <span className="font-mono text-[11px] text-jenny-text-secondary">
-                      {p.label}
                     </span>
                   </span>
                 </li>
@@ -650,6 +668,12 @@ export default function CampaignsPage() {
                           </span>
                           <span>Signature et « STOP » ajoutés automatiquement</span>
                         </div>
+                        {rendered?.unicode && (
+                          <p className="text-[11px] text-jenny-warning">
+                            Caractères spéciaux (ç, ê, emoji…) : le SMS est découpé plus tôt et
+                            coûte plus cher.
+                          </p>
+                        )}
                         {rendered && (
                           <div className="rounded-2xl bg-jenny-bg-tint p-3">
                             <p className="text-[11px] font-medium text-jenny-text-secondary mb-1.5">

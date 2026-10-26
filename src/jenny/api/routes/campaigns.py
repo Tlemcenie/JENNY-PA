@@ -80,6 +80,7 @@ class RenderOut(BaseModel):
     text: str
     length: int
     sms_parts: int
+    unicode: bool
 
 
 class CampaignIn(BaseModel):
@@ -223,7 +224,9 @@ async def render(body: RenderIn, db: DbSession, principal: CurrentUser) -> Rende
     text = svc.render_message(
         body.message, name=svc.first_name(body.name or "Marie"), salon=biz.name or "Votre salon"
     )
-    return RenderOut(text=text, length=len(text), sms_parts=svc.sms_parts(text))
+    return RenderOut(
+        text=text, length=len(text), sms_parts=svc.sms_parts(text), unicode=not svc.is_gsm(text)
+    )
 
 
 # ── campagnes ──

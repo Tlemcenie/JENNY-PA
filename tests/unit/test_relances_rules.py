@@ -7,8 +7,14 @@ from types import SimpleNamespace
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from jenny.services.campaigns import first_name, render_message, sms_parts
-from jenny.services.gap_filler import Candidate, plan_offers, when_label, window_ok
+from jenny.services.campaigns import SEGMENTS, first_name, footer, is_gsm, render_message, sms_parts
+from jenny.services.gap_filler import (
+    Candidate,
+    offer_text,
+    plan_offers,
+    when_label,
+    window_ok,
+)
 from jenny.services.offer_cap import can_offer, is_stop_reply
 
 NOW = datetime(2026, 10, 26, 9, 0, tzinfo=UTC)
@@ -80,6 +86,15 @@ class TestMessage:
         assert first_name("lea@mail.fr") == ""
         assert first_name(None) == ""
 
+    def test_textes_en_alphabet_sms(self) -> None:
+        # un seul « ç » double le prix du SMS
+        assert is_gsm(footer("Salon Zoe"))
+        for seg in SEGMENTS.values():
+            assert is_gsm(render_message(seg.suggestion, name="Marie", salon="Salon")), seg.key
+        c = Candidate(source="rebook", duration=30, service="Coupe", name="Marie")
+        txt = offer_text(c, salon="Salon", when="demain à 10h00", link="http://x/book/s")
+        assert is_gsm(txt) and "assistante virtuelle" in txt
+
     def test_sms_parts(self) -> None:
         assert sms_parts("a" * 160) == 1
         assert sms_parts("a" * 161) == 2
@@ -128,9 +143,7 @@ class TestPlan:
     def test_une_place_par_client_sans_chevauchement(self) -> None:
         a, b = self._cand(), self._cand(duration=60)
         gaps = {30: self._slots(4), 60: self._slots(2, 60)}
-        plan = plan_offers(
-            [a, b], gaps, held=[], offered=set(), tz=PARIS, today=date(2026, 10, 26)
-        )
+        plan = plan_offers([a, b], gaps, held=[], offered=set(), tz=PARIS, today=date(2026, 10, 26))
         assert [p.candidate for p in plan] == [a, b]
         # b ne chevauche pas a
         assert plan[1].slot_start >= plan[0].slot_end

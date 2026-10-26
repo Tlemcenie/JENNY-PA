@@ -32,6 +32,8 @@ export interface RenderedMessage {
   text: string;
   length: number;
   sms_parts: number;
+  // hors alphabet SMS
+  unicode: boolean;
 }
 
 export interface Campaign {
