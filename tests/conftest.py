@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
+import math
 import os
 import shutil
 import signal
@@ -155,6 +157,7 @@ from sqlalchemy.ext.compiler import compiles  # noqa: E402
 from jenny.api.main import create_app  # noqa: E402
 from jenny.core.config import Settings  # noqa: E402
 from jenny.llm.providers import BaseLLMProvider, LLMResponse  # noqa: E402
+from jenny.rag.embeddings import BaseEmbedder  # noqa: E402
 
 
 # ARRAY postgres en JSON
@@ -246,6 +249,26 @@ def _skip_meta_signature(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("JENNY_SKIP_META_SIGNATURE", "true")
 
 
+class BlockedCalls:
+    """Vue sur les appels bloqués."""
+
+    def __init__(self) -> None:
+        self.start = len(BLOCKED_LLM_CALLS)
+
+    @property
+    def urls(self) -> list[str]:
+        return BLOCKED_LLM_CALLS[self.start :]
+
+
+@pytest.fixture
+def blocked_llm_calls() -> Iterator[BlockedCalls]:
+    """Appels LLM bloqués pendant le test."""
+    view = BlockedCalls()
+    yield view
+    # voulus : hors résumé
+    del BLOCKED_LLM_CALLS[view.start :]
+
+
 @pytest.fixture(autouse=True)
 def _reset_llm_choice() -> Iterator[None]:
     """Choix LLM remis à zéro."""
@@ -269,6 +292,7 @@ class FakeArqPool:
 
     def __init__(self) -> None:
         self.jobs: list[tuple[str, tuple, dict]] = []
+        self.real_get_arq_pool = None
 
     async def enqueue_job(self, function: str, *args, **kwargs):  # type: ignore[no-untyped-def]
         self.jobs.append((function, args, kwargs))
@@ -287,6 +311,8 @@ def arq_pool(monkeypatch: MonkeyPatch) -> FakeArqPool:
     from jenny.workers import queue
 
     pool = FakeArqPool()
+    # vrai pool gardé sous la main
+    pool.real_get_arq_pool = queue.get_arq_pool
 
     async def _get_pool() -> FakeArqPool:
         return pool
@@ -296,19 +322,38 @@ def arq_pool(monkeypatch: MonkeyPatch) -> FakeArqPool:
     return pool
 
 
+class HashEmbedder(BaseEmbedder):
+    """Embedder léger et déterministe."""
+
+    dimension = 768  # comme mpnet
+
+    async def embed_text(self, text: str) -> list[float]:
+        vec = [0.0] * self.dimension
+        for word in text.lower().split():
+            digest = hashlib.blake2b(word.encode(), digest_size=8).digest()
+            vec[int.from_bytes(digest, "big") % self.dimension] += 1.0
+        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        return [v / norm for v in vec]
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return [await self.embed_text(t) for t in texts]
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _shared_embedder() -> Iterator[None]:
-    """Modèle RAG chargé une fois."""
+    """Embedder RAG unique par session."""
     from jenny.rag import embeddings
 
     original = embeddings.get_default_embedder
-    cache: dict[tuple[str, str, str], embeddings.BaseEmbedder] = {}
+    # vrai modèle sur demande
+    real = os.environ.get("JENNY_TEST_REAL_EMBEDDER") == "1"
+    cache: dict[tuple[str, str, str], BaseEmbedder] = {}
 
-    def _cached() -> embeddings.BaseEmbedder:
+    def _cached() -> BaseEmbedder:
         s = _config.get_settings()
         key = (s.embeddings_backend, s.embeddings_model, s.llama_base_url)
         if key not in cache:
-            cache[key] = original()
+            cache[key] = original() if real else HashEmbedder()
         return cache[key]
 
     mp = MonkeyPatch()
@@ -319,9 +364,8 @@ def _shared_embedder() -> Iterator[None]:
     mp.undo()
 
 
-@pytest.fixture
-async def db_tables() -> AsyncIterator[None]:
-    """Schéma neuf pour le test."""
+async def reset_schema(*, create: bool = True) -> None:
+    """Vide puis recrée le schéma."""
     import jenny.domain.models  # noqa: F401
     from jenny.db.base import Base
     from jenny.db.session import engine
@@ -329,10 +373,16 @@ async def db_tables() -> AsyncIterator[None]:
     async with engine.begin() as conn:
         # reste éventuel : on repart
         await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+        if create:
+            await conn.run_sync(Base.metadata.create_all)
+
+
+@pytest.fixture
+async def db_tables() -> AsyncIterator[None]:
+    """Schéma neuf pour le test."""
+    await reset_schema()
     yield
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+    await reset_schema(create=False)
 
 
 class FakeLLMProvider(BaseLLMProvider):
