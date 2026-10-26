@@ -19,9 +19,7 @@ _REDIS_URL = os.environ.get("JENNY_TEST_REDIS_URL", "")
 
 def _bind(monkeypatch, manager: StateManager) -> StateManager:
     """Moteur du widget = ce manager."""
-    monkeypatch.setattr(
-        public_chat, "get_engine", lambda: SimpleNamespace(state_manager=manager)
-    )
+    monkeypatch.setattr(public_chat, "get_engine", lambda: SimpleNamespace(state_manager=manager))
     return manager
 
 
