@@ -6,6 +6,14 @@ const nextConfig: NextConfig = {
   output: "standalone",
   async headers() {
     return [
+      // anti-iframe sauf le widget
+      {
+        source: "/((?!widget/).*)",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+        ],
+      },
       // widget : iframe ok partout
       {
         source: "/widget/:path*",
