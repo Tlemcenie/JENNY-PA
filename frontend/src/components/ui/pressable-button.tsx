@@ -41,7 +41,7 @@ const PressableButton = forwardRef<HTMLButtonElement, PressableButtonProps>(
       primary:
         "bg-jenny-coral text-white hover:bg-jenny-coral-dark shadow-sm shadow-jenny-coral/20 hover:shadow-md hover:shadow-jenny-coral/25",
       secondary:
-        "bg-white text-jenny-text border border-jenny-divider hover:bg-jenny-bg hover:border-jenny-text-secondary/25",
+        "bg-jenny-surface text-jenny-text border border-jenny-divider hover:bg-jenny-bg hover:border-jenny-text-secondary/25",
       ghost:
         "text-jenny-text-secondary hover:text-jenny-text hover:bg-jenny-divider/40",
       danger: "bg-jenny-error text-white hover:bg-red-600",
