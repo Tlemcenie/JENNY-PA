@@ -10,6 +10,9 @@ from typing import TYPE_CHECKING
 
 from jenny.core.logging import get_logger
 from jenny.engine.datetime_fr import (
+    SOFT,
+    VAGUE,
+    fr_date_kind,
     parse_fr_date,
     parse_fr_duration,
     parse_fr_time,
@@ -68,12 +71,51 @@ _CLOSING_RE = re.compile(
     re.I,
 )
 
-# « merci, à jeudi ! »
+# « merci, à jeudi 10h ! »
 _FAREWELL_WHEN_RE = re.compile(
     r"\b[àa]\s+(?:demain|apr[èe]s[\s-]?demain|lundi|mardi|mercredi|jeudi|vendredi|samedi|"
-    r"dimanche|tout\s+[àa]\s+l['’]heure)(?:\s+(?:alors|donc|matin|soir))?\s*[!.]*\s*$",  # noqa: RUF001
+    r"dimanche|midi|tout\s+[àa]\s+l['’]heure)(?:\s+prochain)?"  # noqa: RUF001
+    r"(?:[\s,]+(?:[àa]\s+)?(?:\d{1,2}\s*h(?:\s*\d{2})?|midi))?"
+    r"(?:[\s,]+(?:alors|donc|matin|soir|midi))*\s*[!.]*\s*$",
     re.I,
 )
+# « bon week-end », « à ce soir »
+_FAREWELL_RE = re.compile(
+    r"\bbon(?:ne)?\s+(?:week[\s-]?end|soir[ée]e|nuit|semaine|dimanche|samedi|vacances|"
+    r"apr[èe]s[\s-]?midi|aprem|fin\s+de\s+(?:journ[ée]e|semaine|soir[ée]e))\b"
+    r"|\b[àa]\s+(?:ce\s+(?:soir|midi|matin)|cet\s+apr[èe]s[\s-]?midi|tout\s+[àa]\s+l['’]heure|"  # noqa: RUF001
+    r"la\s+semaine\s+prochaine|la\s+prochaine|plus\s+tard|tr[èe]s\s+vite)\b",
+    re.I,
+)
+# vrai signal de report
+_RESCHED_CUE_RE = re.compile(
+    r"\b(?:plut[ôo]t|finalement|en\s+fait|[àa]\s+la\s+place|au\s+lieu|pr[ée]f[èée]r\w*|mieux|"
+    r"possible|dispo\w*|libre|de\s+la\s+place|arrang\w*|conv(?:ien|enir)\w*|"
+    r"(?:[çc]a|cela)\s+(?:vous\s+|me\s+|m['’]\s?)?(?:va|irait|ira|marche|marcherait)|"  # noqa: RUF001
+    r"(?:pouvez|pourriez|peux|pourrais|peut|pourrait)[\s-]+(?:vous\s+|on\s+)?"
+    r"(?:me\s+|nous\s+|le\s+|la\s+|l['’]\s?)?(?:mettre|prendre|caser|passer|venir|avancer)|"  # noqa: RUF001
+    r"autre\s+(?:jour|heure|cr[ée]neau|moment|date))\b",
+    re.I,
+)
+# « et samedi ? »
+_ALT_LEAD_RE = re.compile(r"^\s*(?:et|ou|sinon)\b", re.I)
+# un 2e rdv, pas un report
+_NEW_BOOKING_RE = re.compile(
+    r"\b(?:un|une)\s+(?:autre|deuxi[èe]me|seconde?|nouveau|nouvel|nouvelle)\b"
+    r"|\baussi\b|\b[ée]galement\b|\ben\s+plus\b",
+    re.I,
+)
+# intentions d'au revoir
+_BYE_INTENTS = frozenset({"closing", "greeting", "small_talk"})
+# mots d'un créneau seul
+_WHEN_TEXT = """
+    a au aux le la les l du de d des en ce cet cette vers pile pour alors donc ben bon
+    h heure heures er premier prochain prochaine suivant suivante matin soir midi minuit
+    apres aprem demain aujourd hui plutot plus tot tard meme et demie demi quart moins
+    huit quinze svp stp plait s il vous lundi mardi mercredi jeudi vendredi samedi dimanche
+    janvier fevrier mars avril mai juin juillet aout septembre octobre novembre decembre
+"""
+_WHEN_WORDS = frozenset(_WHEN_TEXT.split())
 
 # gestion du rdv client
 _MGMT_CANCEL_RE = re.compile(
@@ -272,6 +314,56 @@ def detect_appointment_mgmt(message: str, awaiting_confirmation: bool) -> str | 
     if awaiting_confirmation and is_confirmation(m):
         return "confirm"
     return None
+
+
+def _filled(state: ConversationState, name: str) -> str | None:
+    """Valeur d'un slot rempli."""
+    slot = state.slots.get(name)
+    return slot.value if slot is not None and slot.filled else None
+
+
+def _when_only(message: str) -> bool:
+    """Juste un créneau ?"""
+    return all(w in _WHEN_WORDS for w in re.findall(r"[a-z]+", _norm_txt(message)))
+
+
+def is_implicit_reschedule(
+    message: str,
+    *,
+    today: date,
+    intent: str | None = None,
+    services: list[str] | None = None,
+    booked: tuple[str | None, str | None] = (None, None),
+) -> bool:
+    """Nouveau créneau = déplacer le rdv ?"""
+    m = message or ""
+    kind = fr_date_kind(m, today=today)
+    hour = parse_fr_time(m)
+    # jour flou ou bavardage
+    if kind == VAGUE or (kind in (None, SOFT) and hour is None):
+        return False
+    if services and match_catalog_services(m, services):
+        return False  # nouvelle prestation
+    if _FAREWELL_WHEN_RE.search(m) or _NEW_BOOKING_RE.search(m) or looks_like_name(m):
+        return False
+    # même créneau qu'avant
+    day = parse_fr_date(m, today=today)
+    given = [
+        (new, old)
+        for new, old in zip(
+            (day.isoformat() if day else None, hour.strftime("%H:%M") if hour else None),
+            booked,
+            strict=True,
+        )
+        if new
+    ]
+    if given and all(new == old for new, old in given):
+        return False
+    cue = bool(_RESCHED_CUE_RE.search(m))
+    # au revoir : il faut un vrai signal
+    if _CLOSING_RE.search(m) or _FAREWELL_RE.search(m) or intent in _BYE_INTENTS:
+        return cue
+    return cue or bool(_ALT_LEAD_RE.match(m)) or _when_only(m)
 
 
 # clés NER gardées en slot
@@ -638,16 +730,19 @@ class ConversationEngine:
         # report implicite sans mot-clé
         if mgmt_op is None and not joining_waitlist and not name_value:
             _appt_slot = state.slots.get("appointment_id")
-            if _appt_slot is not None and _appt_slot.filled:
-                _new_when = bool(parse_fr_date(msg_text, today=today) or parse_fr_time(msg_text))
-                _new_service = bool(
-                    request.catalog_services
-                    and match_catalog_services(msg_text, request.catalog_services)
+            if (
+                _appt_slot is not None
+                and _appt_slot.filled
+                and is_implicit_reschedule(
+                    msg_text,
+                    today=today,
+                    intent=intent,
+                    services=request.catalog_services,
+                    booked=(state.booked_date, state.booked_time),
                 )
-                _bye = _FAREWELL_WHEN_RE.search(msg_text)
-                if _new_when and not _new_service and not _bye and not looks_like_name(msg_text):
-                    logger.info("engine.reschedule.implicit", appt="known")
-                    mgmt_op = "reschedule"
+            ):
+                logger.info("engine.reschedule.implicit", appt="known")
+                mgmt_op = "reschedule"
 
         # oui attendu, autre sujet
         if state.awaiting_confirmation and not mgmt_op and new_topic:
@@ -790,6 +885,14 @@ class ConversationEngine:
                 pass
         if _ar.get("ask_phone"):
             state.arm_latch("awaiting_phone")
+        # créneau du rdv actuel
+        _op = _ar.get("operation")
+        if _booked or (_ok and _op == "reschedule"):
+            _keep = _op == "reschedule"
+            state.booked_date = _filled(state, "date") or (state.booked_date if _keep else None)
+            state.booked_time = _filled(state, "time") or (state.booked_time if _keep else None)
+        elif _ok and _op == "cancel":
+            state.booked_date = state.booked_time = None
         # rdv fait, on purge
         if _booked or (_ok and (_ar.get("operation") or _ar.get("waitlisted"))):
             state.reset_booking_slots()

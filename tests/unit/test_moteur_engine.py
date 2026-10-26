@@ -21,6 +21,7 @@ from jenny.engine.conversation_engine import (
     detect_appointment_mgmt,
     extract_customer_name,
     is_confirmation,
+    is_implicit_reschedule,
     looks_like_name,
 )
 from jenny.engine.datetime_fr import today_in
@@ -221,6 +222,111 @@ class TestPurgeApresRdv:
         assert sent["time"] == "16:00"
         # pas de vieux jour
         assert "date" not in sent
+
+
+# ── report implicite : pas sur un au revoir ──
+
+
+class TestReportImplicite:
+    @pytest.mark.parametrize(
+        "msg",
+        [
+            "Merci, bon week-end !",
+            "Bon week-end à vous !",
+            "À ce soir !",
+            "Merci, à la semaine prochaine !",
+            "je vous envoie la photo ce soir",
+            "J'ai appelé ce matin",
+            "Je vous rappelle tout à l'heure",
+            "Je vous rappelle demain",
+            "Vous êtes ouverts le week-end ?",
+            "Vous fermez à quelle heure samedi ?",
+            "à midi !",
+            "Merci, à vendredi 10h !",
+            "à vendredi 10h alors !",
+            "On se voit vendredi alors",
+            "la semaine prochaine à 15h",
+            "dans un mois plutôt",
+            "je voudrais un autre rdv jeudi",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_bavardage_ne_deplace_pas(self, msg: str) -> None:
+        eng, acts = _engine()
+        chat = _Chat(eng)
+        await chat.say("je réserve une coupe femme vendredi à 10h")
+        r = await chat.say(msg)
+        assert acts["manage"].calls == []
+        assert r.intent != "manage_appointment"
+
+    @pytest.mark.parametrize(
+        ("msg", "date_set", "time_set"),
+        [
+            ("plutôt jeudi", True, False),
+            ("et samedi ?", True, False),
+            ("jeudi 15h", True, True),
+            ("jeudi c'est possible ?", True, False),
+            ("vous pouvez me mettre à 16h ?", False, True),
+            ("Merci, plutôt jeudi alors", True, False),
+            ("ce soir à 18h", True, True),
+            ("je peux venir jeudi", True, False),
+            ("16h", False, True),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_vrai_report(self, msg: str, date_set: bool, time_set: bool) -> None:
+        eng, acts = _engine()
+        chat = _Chat(eng)
+        await chat.say("je réserve une coupe femme vendredi à 10h")
+        r = await chat.say(msg)
+        assert r.intent == "manage_appointment"
+        sent = acts["manage"].calls[-1]
+        assert sent["operation"] == "reschedule"
+        assert ("date" in sent) is date_set
+        assert ("time" in sent) is time_set
+
+    @pytest.mark.parametrize("msg", ["vendredi 10h", "Vendredi alors !", "vendredi", "10h"])
+    @pytest.mark.asyncio
+    async def test_meme_creneau_ne_bouge_pas(self, msg: str) -> None:
+        eng, acts = _engine()
+        chat = _Chat(eng)
+        await chat.say("je réserve une coupe femme vendredi à 10h")
+        await chat.say(msg)
+        assert acts["manage"].calls == []
+
+    @pytest.mark.asyncio
+    async def test_creneau_suit_le_report(self) -> None:
+        eng, acts = _engine()
+        chat = _Chat(eng)
+        await chat.say("je réserve une coupe femme vendredi à 10h")
+        await chat.say("plutôt jeudi")
+        assert len(acts["manage"].calls) == 1
+        st = chat.state
+        # jour neuf, heure gardée
+        assert st.booked_date == acts["manage"].calls[0]["date"]
+        assert st.booked_time == "10:00"
+        await chat.say("jeudi alors !")
+        assert len(acts["manage"].calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_annulation_oublie_le_creneau(self) -> None:
+        eng, _ = _engine()
+        chat = _Chat(eng)
+        await chat.say("je réserve une coupe femme vendredi à 10h")
+        assert chat.state.booked_time == "10:00"
+        await chat.say("finalement j'annule")
+        assert chat.state.booked_date is None and chat.state.booked_time is None
+
+    def test_fonction_directe(self) -> None:
+        kw = {"today": LUNDI, "services": CATALOG}
+        assert is_implicit_reschedule("plutôt jeudi", **kw)
+        assert not is_implicit_reschedule("Merci, bon week-end !", **kw)
+        assert not is_implicit_reschedule("jeudi 15h, merci", **kw)
+        assert not is_implicit_reschedule("jeudi", intent="closing", **kw)
+        assert not is_implicit_reschedule("jeudi", booked=("2026-10-29", None), **kw)
+        assert is_implicit_reschedule("jeudi", booked=("2026-10-30", "10:00"), **kw)
+        # nouvelle prestation
+        assert not is_implicit_reschedule("un balayage jeudi", **kw)
 
 
 # ── B6 : verrous ──

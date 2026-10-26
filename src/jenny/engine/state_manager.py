@@ -86,6 +86,9 @@ class ConversationState:
     slots: dict[str, ExtractedSlot] = field(default_factory=dict)
     # dernière purge des slots
     slots_reset_at: str | None = None
+    # créneau du rdv pris
+    booked_date: str | None = None
+    booked_time: str | None = None
 
     # phase
     phase: ConversationPhase = ConversationPhase.GREETING
@@ -270,6 +273,8 @@ class ConversationState:
                 for k, v in self.slots.items()
             },
             "slots_reset_at": self.slots_reset_at,
+            "booked_date": self.booked_date,
+            "booked_time": self.booked_time,
             "phase": self.phase.value,
             "turn_count": self.turn_count,
             "retrieved_documents": self.retrieved_documents,
@@ -311,6 +316,8 @@ class ConversationState:
             awaiting_phone=data.get("awaiting_phone", False),
             latch_turns={str(k): int(v) for k, v in (data.get("latch_turns") or {}).items()},
             slots_reset_at=data.get("slots_reset_at"),
+            booked_date=data.get("booked_date"),
+            booked_time=data.get("booked_time"),
             phase=ConversationPhase(data.get("phase", "greeting")),
             turn_count=data.get("turn_count", 0),
             retrieved_documents=data.get("retrieved_documents", []),

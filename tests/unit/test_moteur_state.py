@@ -47,6 +47,7 @@ def _full_state() -> ConversationState:
     st.arm_latch("awaiting_name")
     st.reset_booking_slots()
     st.set_slot("appointment_id", "abc")
+    st.booked_date, st.booked_time = "2026-10-29", "14:00"
     return st
 
 
@@ -68,6 +69,7 @@ class TestSerialisation:
         assert back.slots_reset_at == st.slots_reset_at
         assert back.slots["appointment_id"].value == "abc"
         assert back.customer_id == st.customer_id
+        assert (back.booked_date, back.booked_time) == ("2026-10-29", "14:00")
 
     def test_vieux_dict_sans_champs(self) -> None:
         old = {"conversation_id": str(uuid4()), "slots": {}}
@@ -75,6 +77,7 @@ class TestSerialisation:
         assert st.business_hours_text is None
         assert st.latch_turns == {}
         assert st.customer_facts == []
+        assert st.booked_date is None and st.booked_time is None
 
 
 class TestVerrous:
