@@ -27,7 +27,11 @@ from jenny.engine.response_generator import ResponseGenerator
 from jenny.engine.state_manager import StateManager
 from jenny.integrations.google_calendar import GoogleCalendarService
 from jenny.llm.providers import BaseLLMProvider, get_default_llm_provider
-from jenny.rag.embeddings import SentenceTransformerEmbedder, get_default_embedder
+from jenny.rag.embeddings import (
+    SentenceTransformerEmbedder,
+    adopt_st_model,
+    get_default_embedder,
+)
 from jenny.rag.retriever import VectorRetriever
 from jenny.rag.vector_store import PgVectorStore
 
@@ -107,7 +111,8 @@ def share_encoder(retriever: VectorRetriever, intent_predictor: object | None) -
     # même modèle, pas encore chargé
     if embedder.model_name.split("/")[-1] != ENCODER_NAME or embedder._model is not None:
         return False
-    embedder._model = encoder
+    if not adopt_st_model(embedder.model_name, encoder):
+        return False
     logger.info("engine.ml.encoder_shared", model=ENCODER_NAME)
     return True
 

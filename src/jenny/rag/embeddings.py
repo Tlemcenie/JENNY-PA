@@ -84,6 +84,15 @@ def _load_st_model(model_name: str):
         return model
 
 
+def adopt_st_model(model_name: str, model: object) -> bool:
+    """Partage un modèle déjà chargé."""
+    with _ST_LOCK:
+        if model_name in _ST_MODELS:
+            return False
+        _ST_MODELS[model_name] = model
+        return True
+
+
 class SentenceTransformerEmbedder(BaseEmbedder):
     """Embeddings locaux via Sentence Transformers."""
 

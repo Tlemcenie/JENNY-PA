@@ -33,7 +33,7 @@ def _prod(**kw) -> Settings:
 
 def test_prod_refuses_default_jwt_and_missing_master_key():
     with pytest.raises(InsecureConfigError) as exc:
-        check_prod_secrets(_prod())
+        check_prod_secrets(_prod(jwt_secret=DEFAULT_JWT_SECRET, master_key=""))
     msg = str(exc.value)
     assert "JENNY_JWT_SECRET" in msg and "JENNY_MASTER_KEY" in msg
 

@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from jenny.core.config import Settings, get_settings
 from jenny.engine import factory
+from jenny.rag import embeddings
 from jenny.rag.embeddings import SentenceTransformerEmbedder
 from jenny.rag.retriever import VectorRetriever
 from ml.models.intent.predict import IntentPredictor
@@ -91,7 +92,9 @@ class TestChargement:
 class TestPartageEncodeur:
     """un seul mpnet en mémoire."""
 
-    def test_partage(self) -> None:
+    def test_partage(self, monkeypatch) -> None:
+        # registre vide, pas de fuite
+        monkeypatch.setattr(embeddings, "_ST_MODELS", {})
         emb = SentenceTransformerEmbedder(model_name=ENCODER_NAME)
         retriever = VectorRetriever(embedder=emb)
         enc = object()
