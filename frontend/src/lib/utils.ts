@@ -143,6 +143,7 @@ export function intentLabel(intent: string): string {
     general: "Général",
     small_talk: "Bavardage",
     payment_question: "Moyens de paiement",
+    opt_out: "Désinscription (STOP)",
   };
   return labels[intent] || capitalize(intent);
 }
