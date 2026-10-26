@@ -131,14 +131,13 @@ jobs:
           alembic downgrade -1
           alembic upgrade head
 
-      # initial_schema : DROP businesses avant document_embeddings
-      - name: Alembic downgrade base (informatif)
-        continue-on-error: true
+      # toute la chaîne se défait
+      - name: Alembic downgrade base
         env:
           JENNY_DATABASE_URL: ${{ env.PG_URL }}
         run: alembic downgrade base
 
-      # head quoi qu'il arrive
+      # puis se refait
       - name: Alembic remet head
         env:
           JENNY_DATABASE_URL: ${{ env.PG_URL }}
@@ -146,10 +145,8 @@ jobs:
           alembic upgrade head
           alembic current
 
-      # dérive connue (21 ops) : informatif
-      # le blocage est dans tests/e2e/test_p3_ci_schema_drift.py
-      - name: Alembic check (informatif)
-        continue-on-error: true
+      # zéro dérive modèles / base
+      - name: Alembic check
         env:
           JENNY_DATABASE_URL: ${{ env.PG_URL }}
         run: alembic check

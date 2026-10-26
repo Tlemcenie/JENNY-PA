@@ -1,7 +1,7 @@
 """Dérive ORM / migrations sur le vrai Postgres migré (CI).
 
-``alembic check`` reste informatif tant que KNOWN_DRIFT n'est pas vide :
-ce test, lui, bloque toute NOUVELLE dérive (modèle changé sans révision).
+Zéro dérive exigée, commentaires compris : même règle que
+``alembic check`` (bloquant en CI). Modèle changé sans révision = rouge.
 """
 
 from __future__ import annotations
@@ -17,36 +17,11 @@ pytestmark = [
     pytest.mark.skipif(not PG_URL, reason="JENNY_TEST_POSTGRES_URL absent"),
 ]
 
-# dérive connue, base vierge migrée (passe 3)
-KNOWN_DRIFT = frozenset(
-    {
-        # NOT NULL au modèle, pas en base
-        "modify_nullable:business_closures.created_at",
-        "modify_nullable:business_closures.updated_at",
-        "modify_nullable:businesses.is_active",
-        "modify_nullable:conversations.is_escalated",
-        "modify_nullable:conversations.message_count",
-        "modify_nullable:customer_facts.created_at",
-        "modify_nullable:customer_facts.updated_at",
-        "modify_nullable:knowledge_gaps.created_at",
-        "modify_nullable:knowledge_gaps.updated_at",
-        "modify_nullable:messages.attachment_count",
-        "modify_nullable:messages.has_attachments",
-        "modify_nullable:messages.urgency_flag",
-        "modify_nullable:pending_questions.created_at",
-        "modify_nullable:pending_questions.updated_at",
-        "modify_nullable:prestations.created_at",
-        "modify_nullable:prestations.updated_at",
-        "modify_nullable:reviews.created_at",
-        "modify_nullable:reviews.updated_at",
-        "modify_nullable:waitlist_entries.created_at",
-        "modify_nullable:waitlist_entries.updated_at",
-        # doublon de la contrainte unique
-        "remove_index:ix_webhook_deliveries_dedup_key",
-    }
-)
-# commentaires : sans effet runtime
-IGNORED_KINDS = {"modify_comment"}
+# dérive connue : vide depuis jen_drift_m6n7
+# (cliquet : toute entrée doit disparaître)
+KNOWN_DRIFT: frozenset[str] = frozenset()
+# alembic check compte tout, commentaires compris
+IGNORED_KINDS: frozenset[str] = frozenset()
 
 
 def _flat(diffs: list) -> list[tuple]:

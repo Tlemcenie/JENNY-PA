@@ -90,12 +90,35 @@ def test_ci_pytest_voit_les_services() -> None:
 
 def test_alembic_check_bloquant_si_derive_nulle() -> None:
     """Plus de dérive : check bloquant."""
-    from tests.e2e.test_p3_ci_schema_drift import KNOWN_DRIFT
+    from tests.e2e.test_p3_ci_schema_drift import IGNORED_KINDS, KNOWN_DRIFT
 
+    # cliquet à zéro, rien d'ignoré
+    assert not KNOWN_DRIFT and not IGNORED_KINDS
     check = next(s for n, s in _steps("tests").items() if n.startswith("Alembic check"))
     assert check["run"].strip() == "alembic check"
-    if not KNOWN_DRIFT:
-        assert not check.get("continue-on-error"), "rendre alembic check bloquant"
+    assert not check.get("continue-on-error"), "rendre alembic check bloquant"
+
+
+def test_migrations_toutes_bloquantes() -> None:
+    """Aucune étape alembic tolérée en échec."""
+    steps = _steps("tests")
+    alembic = {n: s for n, s in steps.items() if n.startswith("Alembic")}
+    assert alembic, "étapes alembic absentes"
+    for name, step in alembic.items():
+        assert not step.get("continue-on-error"), name
+        assert "informatif" not in name, name
+    assert steps["Alembic downgrade base"]["run"].strip() == "alembic downgrade base"
+    # base, puis head, avant check et tests
+    names = list(steps)
+    order = [
+        "Alembic upgrade head (base vierge)",
+        "Alembic downgrade base",
+        "Alembic remet head",
+        "Pytest + couverture",
+    ]
+    assert [names.index(n) for n in order] == sorted(names.index(n) for n in order)
+    assert names.index("Alembic remet head") < names.index("Alembic check")
+    assert "alembic upgrade head" in steps["Alembic remet head"]["run"]
 
 
 def test_deploy_doc_a_jour() -> None:
