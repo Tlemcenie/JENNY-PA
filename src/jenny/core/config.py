@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = 60
     # POST /auth/* par IP
     rate_limit_auth_max_requests: int = 20
-    # /auth/login par IP (échecs freinés à part)
+    # login par IP, échecs à part
     rate_limit_login_max_requests: int = 60
     # chat par IP
     rate_limit_chat_max_requests: int = 30
