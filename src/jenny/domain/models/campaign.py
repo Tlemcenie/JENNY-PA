@@ -25,7 +25,7 @@ class Campaign(Base, TimestampMixin):
     # dormants | no_shows | nouveaux | fideles
     segment: Mapped[str] = mapped_column(String(40), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    # sending | sent
+    # sending | sent | failed
     status: Mapped[str] = mapped_column(
         String(20), default="sending", server_default="sending", nullable=False
     )
