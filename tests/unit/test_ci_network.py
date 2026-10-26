@@ -1,4 +1,4 @@
-"""Env de test, passe 2 : vrai singleton, réseau coupé, timeout sûr."""
+"""Coupe-circuit réseau des tests : tout est bloqué sauf le local à nous."""
 
 from __future__ import annotations
 
@@ -7,22 +7,14 @@ import socket
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from jenny.engine import factory
-from jenny.rag import embeddings, knowledge_base
-from jenny.rag.embeddings import SentenceTransformerEmbedder
-from tests.conftest import (
-    _DEFAULT_TIMEOUT,
-    HashEmbedder,
-    _fallback_timeout,
-    _net_refused,
-)
+from tests.conftest import _NET_GUARDS, _net_refused, net_guard_active
 
 ROOT = Path(__file__).resolve().parents[2]
 # ip documentaire, jamais routée
@@ -57,64 +49,11 @@ def _run_pytest(tmp_path: Path, body: str, *args: str) -> tuple[int, str]:
     return proc.returncode, proc.stdout + proc.stderr
 
 
-# ── embedder : vraie fonction ──
-
-
-def test_singleton_jamais_remplace() -> None:
-    """Personne ne patche la fonction."""
-    real = embeddings.get_default_embedder
-    assert real.__module__ == "jenny.rag.embeddings"
-    assert factory.get_default_embedder is real
-    assert knowledge_base.get_default_embedder is real
-
-
-def test_hash_dans_le_vrai_cache() -> None:
-    """Le cache de prod sert le hash."""
-    emb = embeddings.get_default_embedder()
-    assert isinstance(emb, HashEmbedder)
-    assert any(v is emb for v in embeddings._DEFAULT_EMBEDDERS.values())
-    # retriever du moteur aussi
-    assert factory.build_retriever().embedder is emb
-
-
-@pytest.mark.real_embedder
-def test_marqueur_vrai_embedder() -> None:
-    """Marqueur : vrai embedder, paresseux."""
-    emb = embeddings.get_default_embedder()
-    assert type(emb) is SentenceTransformerEmbedder
-    assert emb is embeddings.get_default_embedder()
-    assert emb.dimension == 768
-
-
-# ── sqlite comme postgres ──
-
-
-async def test_sqlite_refuse_fk_orpheline(db_tables) -> None:
-    """Clé étrangère vérifiée en test."""
-    from datetime import UTC, datetime, timedelta
-    from uuid import uuid4
-
-    from sqlalchemy.exc import IntegrityError
-
-    from jenny.db.session import async_session_factory
-    from jenny.domain.models.appointment import Appointment
-
-    start = datetime(2031, 3, 4, 10, tzinfo=UTC)
-    async with async_session_factory() as session:
-        # salon inexistant
-        session.add(
-            Appointment(
-                business_id=uuid4(),
-                title="Coupe",
-                start_at=start,
-                end_at=start + timedelta(hours=1),
-            )
-        )
-        with pytest.raises(IntegrityError, match="FOREIGN KEY"):
-            await session.flush()
-
-
-# ── réseau coupé ──
+def test_garde_posee() -> None:
+    """Toutes les fonctions sont gardées."""
+    assert net_guard_active()
+    names = {name for _, name, _ in _NET_GUARDS}
+    assert {"connect", "connect_ex", "sendto", "getaddrinfo", "gethostbyname"} <= names
 
 
 def test_ip_externe_refusee(blocked_network) -> None:
@@ -130,7 +69,19 @@ def test_dns_externe_refuse(blocked_network) -> None:
     """Pas de résolution DNS."""
     with pytest.raises(socket.gaierror):
         socket.getaddrinfo("graph.facebook.com", 443)
-    assert blocked_network.targets == ["dns:graph.facebook.com"]
+    with pytest.raises(socket.gaierror):
+        socket.gethostbyname("api.stripe.com")
+    assert blocked_network.targets == ["dns:graph.facebook.com", "dns:api.stripe.com"]
+
+
+def test_udp_externe_refuse(blocked_network) -> None:
+    """UDP sans connect : coupé aussi."""
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock,
+        pytest.raises(ConnectionRefusedError),
+    ):
+        sock.sendto(b"x", (FAR_IP, 53))
+    assert blocked_network.targets == [f"{FAR_IP}:53"]
 
 
 async def test_httpx_externe_refuse(blocked_network) -> None:
@@ -142,16 +93,39 @@ async def test_httpx_externe_refuse(blocked_network) -> None:
 
 
 def test_services_locaux_refuses(blocked_network) -> None:
-    """Postgres/Redis/Ollama locaux : coupés."""
-    for port in (5433, 6381, 11434, 8000):
+    """Postgres/Redis/Ollama/API locaux : coupés."""
+    for port in (5432, 5433, 6379, 6381, 11434, 8000):
         with pytest.raises(ConnectionRefusedError, match="réseau coupé"):
             socket.create_connection(("127.0.0.1", port), timeout=1)
     assert blocked_network.targets == [
+        "127.0.0.1:5432",
         "127.0.0.1:5433",
+        "127.0.0.1:6379",
         "127.0.0.1:6381",
         "127.0.0.1:11434",
         "127.0.0.1:8000",
     ]
+
+
+def test_serveur_du_test_permis(blocked_network) -> None:
+    """Serveur local lancé ici : ok."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+
+        def _echo() -> None:
+            conn, _ = srv.accept()
+            with conn:
+                conn.sendall(conn.recv(2))
+
+        t = threading.Thread(target=_echo, daemon=True)
+        t.start()
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as cli:
+            cli.sendall(b"ok")
+            assert cli.recv(2) == b"ok"
+        t.join(2)
+    assert blocked_network.targets == []
 
 
 def test_port_mort_et_unix_permis(blocked_network) -> None:
@@ -167,9 +141,23 @@ def test_port_mort_et_unix_permis(blocked_network) -> None:
     assert blocked_network.targets == []
 
 
+def test_services_de_test_permis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """URL de test déclarée : permise."""
+    from tests import conftest
+
+    monkeypatch.setenv("JENNY_TEST_POSTGRES_URL", "postgresql+asyncpg://u:p@127.0.0.1:55432/x")
+    conftest._service_endpoints.cache_clear()
+    try:
+        assert _net_refused(("127.0.0.1", 55432)) is None
+    finally:
+        monkeypatch.delenv("JENNY_TEST_POSTGRES_URL")
+        conftest._service_endpoints.cache_clear()
+
+
 def test_hf_hors_ligne() -> None:
     """Hugging Face jamais joint."""
     assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
 
 
 @pytest.mark.allow_network
@@ -197,42 +185,40 @@ def test_reseau_non_voulu_fait_echouer(tmp_path: Path) -> None:
     assert "1 passed, 1 error" in out
 
 
-# ── timeout de secours ──
-
-
-def test_timeout_sans_option_ini() -> None:
-    """Option ini absente : pas de crash."""
-
-    def _no_ini(name: str) -> object:
-        raise ValueError(f"unknown configuration value: {name!r}")
-
-    config = SimpleNamespace(
-        pluginmanager=SimpleNamespace(hasplugin=lambda name: False),
-        getoption=lambda name, default=None: False,
-        getini=_no_ini,
-    )
-    item = SimpleNamespace(config=config, get_closest_marker=lambda name: None)
-    assert _fallback_timeout(item) == _DEFAULT_TIMEOUT  # type: ignore[arg-type]
-
-
-def test_timeout_plugin_coupe(tmp_path: Path) -> None:
-    """-p no:timeout : le secours prend le relais."""
-    start = time.monotonic()
+def test_reseau_a_la_collecte_fait_echouer(tmp_path: Path) -> None:
+    """Hors test aussi : run rouge."""
     code, out = _run_pytest(
         tmp_path,
         """
-        import time
+        import socket
 
-        def test_lent():
-            time.sleep(30)
+        # à l'import du module
+        try:
+            socket.getaddrinfo("example.com", 443)
+        except OSError:
+            pass
+
+        def test_rien():
+            assert True
         """,
-        "-p",
-        "no:timeout",
-        "-o",
-        "timeout=1",
     )
     assert code == 1, out
-    assert "INTERNALERROR" not in out
-    assert "secours conftest" in out
-    assert "1 failed" in out
-    assert time.monotonic() - start < 25
+    assert "1 passed" in out
+    assert "dns:example.com" in out
+
+
+def test_garde_retiree_fait_echouer(tmp_path: Path) -> None:
+    """Test qui retire la garde : rouge."""
+    code, out = _run_pytest(
+        tmp_path,
+        """
+        import socket
+
+        from tests import conftest
+
+        def test_retire():
+            socket.socket.connect = conftest._orig_connect
+        """,
+    )
+    assert code == 1, out
+    assert "coupe-circuit réseau retiré par le test" in out

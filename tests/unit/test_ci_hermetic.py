@@ -8,24 +8,54 @@ import sys
 import textwrap
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import inspect, text
 
 from jenny.core.config import Settings, get_settings
 from jenny.llm.providers import GroqProvider, LlamaProvider, get_default_llm_provider
+from jenny.rag import embeddings
+from jenny.rag.embeddings import SentenceTransformerEmbedder
 from tests.conftest import (
+    _DEFAULT_TIMEOUT,
     TEST_DB_PATH,
     TEST_DB_URL,
     HashEmbedder,
+    _fallback_timeout,
     _sweep_stale_runs,
     reset_schema,
 )
 
-if TYPE_CHECKING:
-    import pytest
-
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _run_pytest(tmp_path: Path, body: str, *args: str) -> tuple[int, str]:
+    """Lance un mini pytest isolé."""
+    (tmp_path / "test_mini.py").write_text(textwrap.dedent(body))
+    env = {**os.environ, "PYTHONPATH": f"{ROOT / 'src'}{os.pathsep}{ROOT}"}
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(tmp_path / "test_mini.py"),
+            "-p",
+            "tests.conftest",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+            "--rootdir",
+            str(tmp_path),
+            *args,
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return proc.returncode, proc.stdout + proc.stderr
 
 
 def test_dotenv_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,43 +170,123 @@ async def test_reset_schema_repairs_dirty_db(db_tables) -> None:
 
 def test_timeout_guard_stops_slow_test(tmp_path: Path) -> None:
     """Test bloqué : stoppé net."""
-    (tmp_path / "test_lent.py").write_text(
-        textwrap.dedent(
-            """
-            import time
-
-            def test_lent():
-                time.sleep(30)
-            """
-        )
-    )
-    env = {**os.environ, "PYTHONPATH": f"{ROOT / 'src'}{os.pathsep}{ROOT}"}
     start = time.monotonic()
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            str(tmp_path / "test_lent.py"),
-            "-p",
-            "tests.conftest",
-            "-p",
-            "no:cacheprovider",
-            "-o",
-            "timeout=1",
-            "-q",
-            "--rootdir",
-            str(tmp_path),
-        ],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
+    code, out = _run_pytest(
+        tmp_path,
+        """
+        import time
+
+        def test_lent():
+            time.sleep(30)
+        """,
+        "-o",
+        "timeout=1",
     )
-    out = proc.stdout + proc.stderr
-    assert proc.returncode == 1, out
+    assert code == 1, out
     assert "Timeout" in out
     assert "1 failed" in out
     # bien avant les 30 s
     assert time.monotonic() - start < 25
+
+
+def test_timeout_sans_option_ini() -> None:
+    """Option ini absente : pas de crash."""
+
+    def _no_ini(name: str) -> object:
+        raise ValueError(f"unknown configuration value: {name!r}")
+
+    config = SimpleNamespace(
+        pluginmanager=SimpleNamespace(hasplugin=lambda name: False),
+        getoption=lambda name, default=None: False,
+        getini=_no_ini,
+    )
+    item = SimpleNamespace(config=config, get_closest_marker=lambda name: None)
+    assert _fallback_timeout(item) == _DEFAULT_TIMEOUT  # type: ignore[arg-type]
+
+
+def test_timeout_plugin_coupe(tmp_path: Path) -> None:
+    """-p no:timeout : le secours prend le relais."""
+    start = time.monotonic()
+    code, out = _run_pytest(
+        tmp_path,
+        """
+        import time
+
+        def test_lent():
+            time.sleep(30)
+        """,
+        "-p",
+        "no:timeout",
+        "-o",
+        "timeout=1",
+    )
+    assert code == 1, out
+    assert "INTERNALERROR" not in out
+    assert "secours conftest" in out
+    assert "1 failed" in out
+    assert time.monotonic() - start < 25
+
+
+# ── embedder : vraie fonction ──
+
+
+def test_singleton_jamais_remplace() -> None:
+    """Personne ne patche la fonction."""
+    real = embeddings.get_default_embedder
+    assert real.__module__ == "jenny.rag.embeddings"
+    patched = [
+        name
+        for name, mod in list(sys.modules.items())
+        if mod is not None
+        and name.split(".")[0] in ("jenny", "ml")
+        and getattr(mod, "get_default_embedder", real) is not real
+    ]
+    assert patched == []
+
+
+def test_hash_dans_le_vrai_cache() -> None:
+    """Le cache de prod sert le hash."""
+    from jenny.engine import factory
+
+    emb = embeddings.get_default_embedder()
+    assert isinstance(emb, HashEmbedder)
+    assert any(v is emb for v in embeddings._DEFAULT_EMBEDDERS.values())
+    # retriever du moteur aussi
+    assert factory.build_retriever().embedder is emb
+
+
+@pytest.mark.real_embedder
+def test_marqueur_vrai_embedder() -> None:
+    """Marqueur : vrai embedder, paresseux."""
+    emb = embeddings.get_default_embedder()
+    assert type(emb) is SentenceTransformerEmbedder
+    assert emb is embeddings.get_default_embedder()
+    assert emb.dimension == 768
+
+
+# ── sqlite comme postgres ──
+
+
+async def test_sqlite_refuse_fk_orpheline(db_tables) -> None:
+    """Clé étrangère vérifiée en test."""
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from sqlalchemy.exc import IntegrityError
+
+    from jenny.db.session import async_session_factory
+    from jenny.domain.models.appointment import Appointment
+
+    start = datetime(2031, 3, 4, 10, tzinfo=UTC)
+    async with async_session_factory() as session:
+        # salon inexistant
+        session.add(
+            Appointment(
+                business_id=uuid4(),
+                title="Coupe",
+                start_at=start,
+                end_at=start + timedelta(hours=1),
+            )
+        )
+        with pytest.raises(IntegrityError, match="FOREIGN KEY"):
+            await session.flush()
