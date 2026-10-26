@@ -1,15 +1,10 @@
 import { cache } from "react";
-import { ApiError, request, type BookingBusinessInfo } from "./api";
+import type { PublicBookingInfoFull } from "./api-staff";
 
 // lecture serveur de la page publique
 
-/** Infos publiques, champs bonus optionnels. */
-export interface PublicBookingInfo extends BookingBusinessInfo {
-  phone?: string | null;
-  address?: string | null;
-  city?: string | null;
-  postal_code?: string | null;
-}
+/** Infos publiques vues par la page. */
+export type PublicBookingInfo = PublicBookingInfoFull;
 
 export type PublicBookingResult =
   | { status: "ok"; info: PublicBookingInfo }
@@ -21,19 +16,32 @@ const TTL_OK_MS = 120_000;
 const TTL_NOTFOUND_MS = 60_000;
 const MAX_ENTRIES = 300;
 
+/** Url de l'api vue du serveur. */
+export function serverApiBase(): string {
+  // réseau interne d'abord (docker)
+  const raw =
+    process.env.API_INTERNAL_URL?.trim() ||
+    process.env.NEXT_PUBLIC_API_URL?.trim() ||
+    "http://localhost:8000";
+  return raw.replace(/\/+$/, "");
+}
+
 // petit cache mémoire
 const memo = new Map<string, { exp: number; value: Promise<PublicBookingResult> }>();
 
 async function fetchBooking(slug: string): Promise<PublicBookingResult> {
   try {
-    const info = await request<PublicBookingInfo>(
-      `/api/v1/public/booking/${encodeURIComponent(slug)}`,
-      { signal: AbortSignal.timeout(TIMEOUT_MS) }
+    const res = await fetch(
+      `${serverApiBase()}/api/v1/public/booking/${encodeURIComponent(slug)}`,
+      { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(TIMEOUT_MS) }
     );
+    if (res.status === 404) return { status: "notfound" };
+    if (!res.ok) return { status: "error" };
+    const info = (await res.json()) as PublicBookingInfo | null;
     if (!info || typeof info.name !== "string") return { status: "error" };
     return { status: "ok", info };
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 404) return { status: "notfound" };
+  } catch {
+    // api lente ou coupée
     return { status: "error" };
   }
 }
@@ -117,15 +125,6 @@ export function hairSalonJsonLd(info: PublicBookingInfo, url: string): Record<st
   };
   if (info.description?.trim()) ld.description = info.description.trim();
   if (info.phone?.trim()) ld.telephone = info.phone.trim();
-  if (info.address?.trim()) {
-    ld.address = {
-      "@type": "PostalAddress",
-      streetAddress: info.address.trim(),
-      ...(info.postal_code ? { postalCode: info.postal_code } : {}),
-      ...(info.city ? { addressLocality: info.city } : {}),
-      addressCountry: "FR",
-    };
-  }
   if (hours.length) ld.openingHoursSpecification = hours;
   return ld;
 }

@@ -87,9 +87,33 @@ interface DayOption {
   month: string; // "juin"
 }
 
-export default function BookingClient({ slug, children }: { slug: string; children?: ReactNode }) {
-  const [phase, setPhase] = useState<Phase>("loading");
-  const [info, setInfo] = useState<PublicBookingInfoFull | null>(null);
+// ?date= du lien, sinon aujourd'hui
+function startDay(): string {
+  let wanted: string | null = null;
+  try {
+    wanted = new URLSearchParams(window.location.search).get("date");
+  } catch {
+    wanted = null;
+  }
+  const today = toDateIso(new Date());
+  const inRange =
+    wanted && /^\d{4}-\d{2}-\d{2}$/.test(wanted) && wanted >= today &&
+    wanted <= toDateIso(addDays(new Date(), DAYS_AHEAD - 1));
+  return inRange && wanted ? wanted : today;
+}
+
+export default function BookingClient({
+  slug,
+  initialInfo = null,
+  children,
+}: {
+  slug: string;
+  // infos déjà lues côté serveur
+  initialInfo?: PublicBookingInfoFull | null;
+  children?: ReactNode;
+}) {
+  const [phase, setPhase] = useState<Phase>(initialInfo ? "ready" : "loading");
+  const [info, setInfo] = useState<PublicBookingInfoFull | null>(initialInfo);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // prestation + coiffeur (null = peu importe)
@@ -149,24 +173,18 @@ export default function BookingClient({ slug, children }: { slug: string; childr
   // 1. infos business
   useEffect(() => {
     let active = true;
+    // déjà là : juste le jour
+    if (initialInfo) {
+      setSelectedIso(startDay());
+      return;
+    }
     setPhase("loading");
     getPublicBookingInfo(slug)
       .then((data) => {
         if (!active) return;
         setInfo(data);
         setPhase("ready");
-        // ?date= du lien, sinon aujourd'hui
-        let wanted: string | null = null;
-        try {
-          wanted = new URLSearchParams(window.location.search).get("date");
-        } catch {
-          wanted = null;
-        }
-        const today = toDateIso(new Date());
-        const inRange =
-          wanted && /^\d{4}-\d{2}-\d{2}$/.test(wanted) && wanted >= today &&
-          wanted <= toDateIso(addDays(new Date(), DAYS_AHEAD - 1));
-        setSelectedIso(inRange ? wanted : today);
+        setSelectedIso(startDay());
       })
       .catch((err) => {
         if (!active) return;
@@ -184,7 +202,7 @@ export default function BookingClient({ slug, children }: { slug: string; childr
     return () => {
       active = false;
     };
-  }, [slug]);
+  }, [slug, initialInfo]);
 
   // 3. créneaux par date, coiffeur, prestation
   const loadSlots = useCallback(
@@ -331,7 +349,8 @@ export default function BookingClient({ slug, children }: { slug: string; childr
             {phase === "ready" && info && (
               <motion.div
                 key="ready"
-                initial={{ opacity: 0, y: 18 }}
+                // rendu serveur : visible direct
+                initial={initialInfo ? false : { opacity: 0, y: 18 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -12 }}
                 transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
@@ -393,20 +412,25 @@ export default function BookingClient({ slug, children }: { slug: string; childr
 
                     {/* étape date */}
                     <StepLabel index={steps.day} total={steps.total} text="Choisissez un jour" />
-                    <DatePicker
-                      days={days}
-                      selectedIso={selectedIso}
-                      onSelect={handleSelectDate}
-                    />
+                    {/* dates : navigateur seulement */}
+                    {selectedIso ? (
+                      <DatePicker
+                        days={days}
+                        selectedIso={selectedIso}
+                        onSelect={handleSelectDate}
+                      />
+                    ) : (
+                      <DaysSkeleton />
+                    )}
 
                     {/* étape créneau */}
                     <StepLabel
                       index={steps.slot}
                       total={steps.total}
-                      text={`Créneaux · ${selectedDayLabel}`}
+                      text={selectedDayLabel ? `Créneaux · ${selectedDayLabel}` : "Créneaux"}
                     />
                     <SlotGrid
-                      loading={slotsLoading}
+                      loading={slotsLoading || !selectedIso}
                       error={slotsError}
                       slots={slots}
                       onPick={(slot) => {
@@ -675,6 +699,22 @@ function DatePicker({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// place des jours
+
+function DaysSkeleton() {
+  return (
+    <div aria-hidden="true" className="flex gap-2 overflow-hidden pb-2">
+      {Array.from({ length: 7 }).map((_, i) => (
+        <div
+          key={i}
+          className="shrink-0 w-[60px] h-[66px] rounded-2xl animate-pulse"
+          style={{ background: "rgba(255,255,255,0.06)" }}
+        />
+      ))}
     </div>
   );
 }
