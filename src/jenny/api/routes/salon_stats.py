@@ -179,7 +179,7 @@ async def salon_stats(
     upcoming_titles = {(t or ""): int(u) for t, _n, u in by_title if u}
 
     # fuseau du salon, en Python
-    starts =(await db.execute(select(a.start_at).where(*window, honored))).scalars().all()
+    starts = (await db.execute(select(a.start_at).where(*window, honored))).scalars().all()
     hour_counter: Counter[int] = Counter(_aware(s).astimezone(tz).hour for s in starts)
     day_counter: Counter[int] = Counter(_aware(s).astimezone(tz).weekday() for s in starts)
     peak_hours = [
