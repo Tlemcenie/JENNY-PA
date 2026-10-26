@@ -7,6 +7,9 @@ from httpx import ASGITransport, AsyncClient
 
 from jenny.api.main import create_app
 
+# schéma pour tous les tests
+pytestmark = pytest.mark.usefixtures("db_tables")
+
 
 @pytest.fixture
 async def client():

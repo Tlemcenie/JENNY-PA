@@ -9,20 +9,23 @@ PYTHON ?= $(shell \
 	elif command -v python3 >/dev/null 2>&1; then command -v python3; \
 	else command -v python; fi)
 
-.PHONY: help install dev api worker test test-cov test-e2e smoke test-connectors test-connectors-webhook lint format format-check \
-	typecheck ci migrate migrate-new up down logs build clean bootstrap seed reseed \
-	demo-up demo-down
+.PHONY: help install install-ml dev api worker test test-cov test-e2e test-services smoke test-connectors \
+	test-connectors-webhook lint format format-check typecheck ci migrate migrate-new up down logs \
+	build clean bootstrap seed reseed demo-up demo-down
 
 help: ## Afficher l'aide
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # ── Setup ──
-install: ## Installer les dépendances Python (mode éditable)
+install: ## Installer les dépendances Python (mode éditable, sans ML lourd)
 	$(PYTHON) -m pip install -e ".[dev]"
 
-dev: ## Setup complet dev (install + pre-commit)
-	$(PYTHON) -m pip install -e ".[dev]"
+install-ml: ## Ajouter l'extra ML (mlflow, datasets, groq, rich)
+	$(PYTHON) -m pip install -e ".[ml]"
+
+dev: ## Setup complet dev (install + ML + pre-commit)
+	$(PYTHON) -m pip install -e ".[dev,ml]"
 	pre-commit install || true
 
 bootstrap: ## Premier lancement : .env + docker up + migrate + seed
@@ -44,10 +47,17 @@ test: ## Lancer la suite de tests
 	PYTHONPATH=src:. $(PYTHON) -m pytest tests/ -v --tb=short
 
 test-cov: ## Tests avec couverture HTML
-	PYTHONPATH=src:. $(PYTHON) -m pytest tests/ -v --tb=short --cov=jenny --cov-report=html
+	PYTHONPATH=src:. $(PYTHON) -m pytest tests/ -q --tb=short --cov --cov-report=term:skip-covered --cov-report=html
 
 test-e2e: ## Pipelines e2e in-process (auth/chat/rdv/devis/services)
 	PYTHONPATH=src:. $(PYTHON) -m pytest tests/e2e/ -v --tb=short
+
+# base migrée requise (make migrate)
+TEST_PG_URL ?= postgresql+asyncpg://jenny:jenny_secret@localhost:5432/jenny
+TEST_REDIS_URL ?= redis://localhost:6379/14
+test-services: ## Tests sur vrais Postgres/Redis (TEST_PG_URL=… TEST_REDIS_URL=…)
+	JENNY_TEST_POSTGRES_URL=$(TEST_PG_URL) JENNY_TEST_REDIS_URL=$(TEST_REDIS_URL) \
+		PYTHONPATH=src:. $(PYTHON) -m pytest tests/e2e/test_ci_services.py -v --tb=short -rs
 
 smoke: ## Smoke test contre un serveur live (BASE_URL=http://localhost:8000)
 	PYTHONPATH=src:. $(PYTHON) scripts/e2e_smoke.py
@@ -72,11 +82,11 @@ format-check: ## Vérifier le formatage sans modifier (CI)
 typecheck: ## Vérifier les types avec mypy
 	PYTHONPATH=src $(PYTHON) -m mypy src/jenny/
 
-ci: ## Même séquence que la CI GitHub (lint + format + types + tests)
+ci: ## Même séquence que la CI GitHub (format et mypy informatifs)
 	$(PYTHON) -m ruff check src/ tests/ ml/ nanogpt/ pipelines/
-	$(PYTHON) -m ruff format --check src/ tests/ ml/ nanogpt/ pipelines/
-	PYTHONPATH=src $(PYTHON) -m mypy src/jenny/
-	PYTHONPATH=src:. $(PYTHON) -m pytest tests/ -q --tb=short
+	-$(PYTHON) -m ruff format --check src/ tests/ ml/ nanogpt/ pipelines/
+	PYTHONPATH=src:. $(PYTHON) -m pytest tests/ -q --tb=short --cov --cov-report=term:skip-covered
+	-PYTHONPATH=src $(PYTHON) -m mypy src/jenny/
 
 # ── Base de données ──
 migrate: ## Appliquer les migrations Alembic

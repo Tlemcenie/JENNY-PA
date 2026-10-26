@@ -17,6 +17,9 @@ from jenny.db.base import Base
 from jenny.db.session import async_session_factory, engine
 from jenny.domain.models.user import User
 
+# schéma pour tous les tests
+pytestmark = pytest.mark.usefixtures("db_tables")
+
 # mot de passe valide
 _E2E_PASSWORD = "Strong#1234"
 

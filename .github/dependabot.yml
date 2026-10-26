@@ -1,7 +1,27 @@
-# Mises à jour automatiques des actions GitHub
+# Mises à jour automatiques : actions GitHub + paquets Python
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+
+  # dépendances du pyproject
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # mineures groupées
+      python-minor:
+        update-types: [minor, patch]
+    ignore:
+      # torch : gros saut, à la main
+      - dependency-name: torch
+        update-types: [version-update:semver-major]
+      # ruff : bump avec pre-commit
+      - dependency-name: ruff
+    commit-message:
+      prefix: deps

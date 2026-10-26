@@ -12,6 +12,9 @@ from uuid import uuid4
 import pytest
 from httpx import AsyncClient
 
+# schéma pour tous les tests
+pytestmark = pytest.mark.usefixtures("db_tables")
+
 
 @pytest.mark.asyncio
 async def test_ingest_form_validation_error(async_client: AsyncClient) -> None:
