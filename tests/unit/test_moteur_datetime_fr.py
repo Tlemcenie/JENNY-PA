@@ -395,3 +395,14 @@ class TestAffichage:
         assert format_fr_time("09:30") == "9h30"
         assert format_fr_time(time(12, 5)) == "12h05"
         assert format_fr_time("") is None
+
+
+class TestPrixPasHeure:
+    @pytest.mark.parametrize(
+        "text", ["le brushing est à 15 ?", "ils sont à 12 ?", "ça coûte à 18 ?"]
+    )
+    def test_prix(self, text: str) -> None:
+        assert parse_fr_time(text) is None
+
+    def test_vraie_heure(self) -> None:
+        assert parse_fr_time("demain à 15 ?") == time(15, 0)

@@ -380,7 +380,8 @@ _HM_RE = re.compile(r"(?<![\d:,.])(\d{1,2})\s*(?:h|heures?|:)(?![a-z])\s*(\d{2})
 _MIDI_RE = re.compile(r"(?<!apres-)(?<!apres )\b(midi|minuit)\b")
 _MIDI_MIN_RE = re.compile(r"^\s*(\d{2})\b(?!\s*(?:€|eur|%|min|h\b|heures?))")
 _BARE_RE = re.compile(
-    r"(?<!il y )\b(?:a|vers)\s+(\d{1,2})"
+    # « est à 15 » = un prix
+    r"(?<!il y )(?<!est )(?<!sont )(?<!coute )(?<!coutent )\b(?:a|vers)\s+(\d{1,2})"
     r"(?=\s*(?:$|[?!.,;)]|(?:et|ou|svp|stp|s'il|c'est|ca|si|plutot|alors|merci|le|la|les|"
     r"ce|cet|cette|demain|apres|avant|pile|precises?|tapantes?|environ)\b))"
 )
