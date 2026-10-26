@@ -101,9 +101,10 @@ def load_ner_predictor() -> object | None:
     """charge le ner bigru."""
     settings = get_settings()
     try:
-        from ml.models.ner.predict import NERPredictor
+        from jenny.engine.ner_guard import GuardedNERPredictor
 
-        ner = NERPredictor.from_checkpoint(settings.ner_model_path)
+        # prestations vérifiées
+        ner = GuardedNERPredictor.from_checkpoint(settings.ner_model_path)
         logger.info("engine.ml.ner_loaded", path=settings.ner_model_path)
         return ner
     except Exception as e:
