@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from jenny.api.dependencies import CurrentUser, DbSession
 from jenny.core.logging import get_logger
 from jenny.engine.conversation_engine import EngineRequest
-from jenny.engine.factory import get_engine
+from jenny.engine.factory import aget_engine
 from jenny.services.learning_service import load_customer_facts
 from jenny.services.persona_loader import load_business_persona
 
@@ -48,7 +48,7 @@ async def suggest_reply(
     if bid is None:
         raise HTTPException(400, "Aucun business associé")
 
-    engine = get_engine()
+    engine = await aget_engine()
     persona, business_name = await load_business_persona(db, bid)
     facts = await load_customer_facts(db, bid, body.customer_id)
 

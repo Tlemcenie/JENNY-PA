@@ -18,11 +18,20 @@ from functools import partial
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+)
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# gardé au runtime (FastAPI)
-from jenny.api.dependencies import DbSession  # noqa: TC001
+from jenny.api.dependencies import get_db
 
 # schémas gardés au runtime (FastAPI)
 from jenny.connectors.instagram.ingest_bridge import (
@@ -52,7 +61,7 @@ from jenny.domain.models.message import Message
 from jenny.domain.schemas.message import MessageIn
 from jenny.engine.business_hours import is_open
 from jenny.engine.conversation_engine import ConversationEngine, EngineRequest
-from jenny.engine.factory import get_engine as _get_engine_factory
+from jenny.engine.factory import aget_engine
 from jenny.integrations.meta_signature import verify_meta_signature
 from jenny.services import channel_credentials_service as creds_svc
 from jenny.services.ingestion_service import MessageIngestionService
@@ -61,6 +70,9 @@ from jenny.services.persona_loader import load_business_persona_fresh
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
+
+# session fermée avant les tâches
+RouteDb = Annotated[AsyncSession, Depends(get_db, scope="function")]
 
 
 # les connecteurs
@@ -109,9 +121,9 @@ def verify_twitter_signature(body: bytes, header: str | None, consumer_secret: s
 # moteur partagé (factory)
 
 
-def _get_engine() -> ConversationEngine:
-    """le moteur partagé."""
-    return _get_engine_factory()
+async def _get_engine() -> ConversationEngine:
+    """moteur partagé, boucle libre."""
+    return await aget_engine()
 
 
 async def _engine_context(business_id, customer_id):
@@ -218,7 +230,8 @@ async def _ingest_and_reply(
     persona, business_name = await load_business_persona_fresh(message_in.business_id)
     facts, catalog, services, tz = await _engine_context(message_in.business_id, customer_id)
     try:
-        out = await _get_engine().process(
+        engine = await _get_engine()
+        out = await engine.process(
             EngineRequest(
                 conversation_id=conv_id,
                 business_id=message_in.business_id,
@@ -445,7 +458,7 @@ async def _whatsapp_ingest_and_reply(
     publish_conversation_event(
         business_id, conversation_id=conv_id, kind="processing", channel="whatsapp"
     )
-    engine = _get_engine()
+    engine = await _get_engine()
     persona, business_name = await load_business_persona_fresh(business_id)
     facts, catalog, services, tz = await _engine_context(business_id, customer_id)
     req = EngineRequest(
@@ -532,7 +545,7 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
     publish_conversation_event(
         business_id, conversation_id=conv_id, kind="processing", channel="instagram"
     )
-    engine = _get_engine()
+    engine = await _get_engine()
     persona, business_name = await load_business_persona_fresh(business_id)
     facts, catalog, services, tz = await _engine_context(business_id, customer_id)
     req = EngineRequest(
@@ -569,7 +582,7 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
 
 @router.get("/whatsapp")
 async def whatsapp_verify(
-    db: DbSession,
+    db: RouteDb,
     hub_mode: str = Query("", alias="hub.mode"),
     hub_verify_token: str = Query("", alias="hub.verify_token"),
     hub_challenge: str = Query("", alias="hub.challenge"),
@@ -586,7 +599,7 @@ async def whatsapp_verify(
 async def whatsapp_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    db: DbSession,
+    db: RouteDb,
     x_hub_signature_256: Annotated[str | None, Header(alias="X-Hub-Signature-256")] = None,
 ) -> dict:
     """réception messages WhatsApp."""
@@ -652,7 +665,7 @@ async def whatsapp_webhook(
 
 @router.get("/instagram")
 async def instagram_verify(
-    db: DbSession,
+    db: RouteDb,
     hub_mode: str = Query("", alias="hub.mode"),
     hub_verify_token: str = Query("", alias="hub.verify_token"),
     hub_challenge: str = Query("", alias="hub.challenge"),
@@ -669,7 +682,7 @@ async def instagram_verify(
 async def instagram_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    db: DbSession,
+    db: RouteDb,
     x_hub_signature_256: Annotated[str | None, Header(alias="X-Hub-Signature-256")] = None,
 ) -> dict:
     """réception DMs Instagram."""
@@ -739,7 +752,7 @@ async def twitter_crc(
 async def twitter_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    db: DbSession,
+    db: RouteDb,
 ) -> dict:
     """réception DMs Twitter (signée)."""
     settings = get_settings()
@@ -803,7 +816,7 @@ async def twitter_webhook(
 async def snapchat_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    db: DbSession,
+    db: RouteDb,
     x_jenny_webhook_secret: Annotated[str | None, Header(alias="X-Jenny-Webhook-Secret")] = None,
 ) -> dict:
     """réception messages Snapchat (secret partagé)."""

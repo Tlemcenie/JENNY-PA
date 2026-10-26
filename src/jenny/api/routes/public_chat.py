@@ -4,11 +4,13 @@ Contrat avec le chat : la conversation vaut uuid5(salon, visitor_id), calculé
 ici. Le widget ne donne jamais de customer_id : le serveur lit en base le
 client rattaché (voir conversation.py). Un autre visiteur a un autre id, donc
 une autre conversation.
+
+L'état moteur du widget vit dans le cache borné du moteur (LRU 5000, 48 h),
+comme les autres canaux : le widget n'évince rien lui-même.
 """
 
 from __future__ import annotations
 
-import inspect
 import ipaddress
 import re
 import time
@@ -33,7 +35,6 @@ from jenny.core.logging import get_logger
 from jenny.domain.models.business import Business
 from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.message import Message
-from jenny.engine.factory import get_engine
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Row
@@ -147,11 +148,6 @@ _LIMITS = (
 )
 # conversations en cours
 _BUSY: set[UUID] = set()
-# part du widget dans le cache moteur
-MAX_STATES = 2000
-_STATES: OrderedDict[UUID, float] = OrderedDict()
-# StateManager.forget du moteur
-EVICT_METHOD = "forget"
 
 _BUSY_TEXT = "Jenny reçoit beaucoup de messages, réessayez dans un instant."
 
@@ -161,7 +157,6 @@ def reset_limits() -> None:
     for w in _LIMITS:
         w.clear()
     _BUSY.clear()
-    _STATES.clear()
 
 
 def _limits_on() -> bool:
@@ -348,26 +343,6 @@ def _anonymous(request: Request) -> Request:
     # pas de principal en cache
     scope["state"] = {}
     return Request(scope)
-
-
-async def _track_state(conv_id: UUID) -> None:
-    """Borne la part du widget, mémoire seule."""
-    evict = getattr(get_engine().state_manager, EVICT_METHOD, None)
-    if not callable(evict):
-        # TTL du moteur, redis gardé
-        return
-    _STATES[conv_id] = time.monotonic()
-    _STATES.move_to_end(conv_id)
-    while len(_STATES) > MAX_STATES:
-        oldest, _seen = _STATES.popitem(last=False)
-        if oldest in _BUSY:
-            continue
-        try:
-            done = evict(oldest)
-            if inspect.isawaitable(done):
-                await done
-        except Exception as exc:  # pragma: no cover - best effort
-            logger.warning("public_chat.state_evict_error", error=str(exc))
 
 
 async def _salon(db, slug: str) -> Business:
@@ -691,7 +666,6 @@ async def public_chat(
     if conv_id in _BUSY:
         return _too_many(2, "Jenny vous répond, un message à la fois.")
     _BUSY.add(conv_id)
-    ran = False
     try:
         # reprise humaine : Jenny se tait
         if row is not None and row.business_id == biz.id and row.assigned_to:
@@ -703,7 +677,6 @@ async def public_chat(
 
         # client : lu en base par le chat
         engine_body = _EngineBody(conversation_id=conv_id, business_id=biz.id, message=body.message)
-        ran = True
         try:
             # toujours anonyme ici
             result, message_id = await _run_engine_chat(db, engine_body, _anonymous(request))
@@ -716,8 +689,6 @@ async def public_chat(
             ) from None
     finally:
         _BUSY.discard(conv_id)
-        if ran:
-            await _track_state(conv_id)
 
     if message_id is not None:
         publish_conversation_event(biz.id, conversation_id=conv_id, kind="inbound", channel=CHANNEL)
