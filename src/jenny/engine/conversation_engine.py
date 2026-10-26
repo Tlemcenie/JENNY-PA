@@ -91,11 +91,12 @@ _BYE_TAIL = (
     r"(?:et\s+)?bonne\s+(?:journ[ée]e|soir[ée]e|nuit|fin\s+de\s+journ[ée]e))"
 )
 # « merci, à jeudi 10h ! »
+# queue atomique : pas de ReDoS
 _FAREWELL_WHEN_RE = re.compile(
     rf"{_BYE_LEAD}[àa]\s+(?:demain|apr[èe]s[\s-]?demain|{_WD_FR}|"
     r"midi|tout\s+[àa]\s+l['’]heure)(?:\s+prochain)?(?:\s+en\s+(?:huit|quinze))?"  # noqa: RUF001
     rf"(?:[\s,]+(?:[àa]\s+)?(?:{_HOUR_FR}|midi))?"
-    rf"(?:[^\w?]+{_BYE_TAIL})*[^\w?]*$",
+    rf"(?>(?:[^\w?]++{_BYE_TAIL}(?!\w))*)[^\w?]*$",
     re.I,
 )
 # « bon week-end » : un souhait
