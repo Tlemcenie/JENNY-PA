@@ -17,11 +17,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
 from jenny.rag.embeddings import get_default_embedder
-from jenny.rag.ingestion import DocumentIngester
-from jenny.rag.rerank import rerank as _rerank
+from jenny.rag.ingestion import DocumentIngester, build_embed_text, embed_header
+from jenny.rag.retriever import embed_query
 from jenny.rag.vector_store import PgVectorStore
 
 if TYPE_CHECKING:
@@ -75,9 +74,15 @@ class KnowledgeBase:
         self.session = session
         self.embedder = embedder or get_default_embedder()
         self.vector_store = vector_store or PgVectorStore(embedding_dim=self.embedder.dimension)
-        self.ingester = ingester or DocumentIngester()
+        self.ingester = ingester or DocumentIngester(embedder=self.embedder)
 
-    async def _ingest(
+    def _require_pgvector(self) -> None:
+        """Échoue vite sans Postgres."""
+        bind = self.session.get_bind()
+        if bind.dialect.name != "postgresql":
+            raise RuntimeError(f"pgvector indisponible (base {bind.dialect.name})")
+
+    async def prepare_chunks(
         self,
         content: str,
         *,
@@ -86,16 +91,31 @@ class KnowledgeBase:
         category: str,
         source: str,
         extra_metadata: dict | None = None,
-    ) -> int:
-        """Découpe, vectorise et persiste un contenu. Retourne le nb de chunks."""
-        chunks = self.ingester.chunk_text(content)
+    ) -> list[dict]:
+        """Découpe et vectorise, sans écrire."""
+        # avant de charger le modèle
+        self._require_pgvector()
+        prepare = getattr(self.embedder, "prepare", None)
+        if prepare is not None:
+            await prepare()
+        header = embed_header(title, category)
+        count_tokens = getattr(self.embedder, "count_tokens", None)
+        reserved = (count_tokens(header) + 1) if (header and count_tokens) else 0
+        chunks = self.ingester.chunk_text(content, reserved_tokens=reserved)
         if not chunks:
-            return 0
+            return []
 
-        embeddings = await self.embedder.embed_batch([c.content for c in chunks])
+        # titre + catégorie embarqués
+        texts = [build_embed_text(c.content, title, category) for c in chunks]
+        embed = getattr(self.embedder, "embed_passages", None) or self.embedder.embed_batch
+        embeddings = await embed(texts)
 
         chunk_dicts: list[dict] = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings, strict=False)):
+            # section / overlap du découpage
+            layout = {
+                k: chunk.metadata[k] for k in ("section", "overlap_chars") if k in chunk.metadata
+            }
             chunk_dicts.append(
                 {
                     "content": chunk.content,
@@ -107,11 +127,34 @@ class KnowledgeBase:
                         "title": title,
                         "category": category,
                         "source": source,
+                        **layout,
                         **(extra_metadata or {}),
                     },
                 }
             )
+        return chunk_dicts
 
+    async def _ingest(
+        self,
+        content: str,
+        *,
+        knowledge_id: str,
+        title: str,
+        category: str,
+        source: str,
+        extra_metadata: dict | None = None,
+    ) -> int:
+        """Découpe, vectorise et persiste. Renvoie le nb de chunks."""
+        chunk_dicts = await self.prepare_chunks(
+            content,
+            knowledge_id=knowledge_id,
+            title=title,
+            category=category,
+            source=source,
+            extra_metadata=extra_metadata,
+        )
+        if not chunk_dicts:
+            return 0
         count = await self.vector_store.add_chunks(self.session, self.business_id, chunk_dicts)
         await self.session.commit()
         return count
@@ -284,18 +327,18 @@ class KnowledgeBase:
             "by_source": by_source,
         }
 
-    async def search(self, query: str, top_k: int = 3) -> list[dict]:
-        """Recherche sémantique dans la base de connaissances du business.
-
-        Récupère un pool de candidats via pgvector puis applique un re-ranking
-        lexical (si activé) pour améliorer la finesse avant de couper à top_k.
-        """
-        settings = get_settings()
-        embedding = await self.embedder.embed_text(query)
-        fetch_k = max(top_k, settings.rag_rerank_candidates) if settings.rag_rerank else top_k
+    async def search(self, query: str, top_k: int = 3, score_threshold: float = 0.0) -> list[dict]:
+        """Recherche hybride, même chemin que le chat."""
+        if self.session.get_bind().dialect.name != "postgresql":
+            # pas de pgvector ici
+            return []
+        embedding = await embed_query(self.embedder, query)
         docs = await self.vector_store.search(
-            self.session, self.business_id, embedding, top_k=fetch_k
+            self.session,
+            self.business_id,
+            embedding,
+            top_k=top_k,
+            score_threshold=score_threshold,
+            query_text=query,
         )
-        if settings.rag_rerank:
-            docs = _rerank(query, docs, top_k)
         return [{"content": d.content, "score": d.score, "metadata": d.metadata} for d in docs]
