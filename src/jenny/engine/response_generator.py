@@ -6,6 +6,7 @@ import re
 from typing import TYPE_CHECKING
 
 from jenny.core.logging import get_logger
+from jenny.engine.thresholds import RULES_MAX_CHARS
 from jenny.llm.prompts import PromptBuilder
 
 if TYPE_CHECKING:
@@ -557,7 +558,8 @@ class ResponseGenerator:
         )
         from jenny.engine.intelligence import _retrieval_has_answer
 
-        return _retrieval_has_answer(docs, last_user)
+        # même texte borné que le moteur
+        return _retrieval_has_answer(docs, last_user[:RULES_MAX_CHARS])
 
     def _template_fallback(self, state: ConversationState) -> str:
         """Réponses de secours sans LLM."""

@@ -6,7 +6,7 @@ import asyncio
 import re
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from jenny.agents.faq_agent import FAQ_MAX_DOCS, FAQ_MIN_SCORE, select_documents
 from jenny.core.logging import get_logger
@@ -477,7 +477,7 @@ def picks_offered_slot(
     message: str,
     *,
     today: date,
-    offer: dict,
+    offer: dict[str, Any],
     asked_day: str | None = None,
     booked: tuple[str | None, str | None] = (None, None),
 ) -> bool:
