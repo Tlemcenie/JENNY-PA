@@ -91,6 +91,14 @@ class _Unit:
     text: str
     tokens: int
     new_line: bool  # commence une ligne
+    para: bool = False  # ligne vide avant
+
+    @property
+    def sep(self) -> str:
+        """Lien avec le texte d'avant."""
+        if self.para:
+            return "\n\n"
+        return "\n" if self.new_line else " "
 
 
 class DocumentIngester:
@@ -165,22 +173,27 @@ class DocumentIngester:
             out.append(cur)
         return out
 
-    def _sections(self, text: str) -> list[tuple[str, list[str]]]:
-        """Sections (titre, lignes)."""
-        sections: list[tuple[str, list[str]]] = [("", [])]
+    def _sections(self, text: str) -> list[tuple[str, list[tuple[str, bool]]]]:
+        """Sections (titre, lignes + paragraphe)."""
+        sections: list[tuple[str, list[tuple[str, bool]]]] = [("", [])]
+        gap = False
         for raw in text.splitlines():
             line = raw.strip()
             if not line:
+                gap = True
                 continue
             m = _HEADING_RE.match(line)
             if m:
                 sections.append((m.group(1).strip(), []))
+                gap = False
                 continue
-            sections[-1][1].append(line)
+            lines = sections[-1][1]
+            lines.append((line, gap and bool(lines)))
+            gap = False
         kept = [(t, lines) for t, lines in sections if lines]
         if not kept:
             # que des titres : on garde
-            kept = [("", [ln.strip() for ln in text.splitlines() if ln.strip()])]
+            kept = [("", [(ln.strip(), False) for ln in text.splitlines() if ln.strip()])]
         return [(t, lines) for t, lines in kept if lines]
 
     def _overlap(self, units: list[_Unit], max_tok: int, max_chars: int) -> str:
@@ -228,14 +241,24 @@ class DocumentIngester:
 
         chunks: list[DocumentChunk] = []
 
-        def emit(section: str, body: str, overlap_chars: int) -> None:
+        def emit(section: str, items: list[_Unit], overlap: str) -> None:
+            body = body_of(items, overlap)
             content = f"{section}\n{body}" if section else body
             meta = {**(metadata or {}), "chunk_index": len(chunks)}
             if section:
                 meta["section"] = section
-            if overlap_chars:
-                meta["overlap_chars"] = overlap_chars
+            if overlap:
+                meta["overlap_chars"] = len(overlap)
+            # pour recoller à l'identique
+            if items[0].sep != "\n":
+                meta["sep"] = items[0].sep
             chunks.append(DocumentChunk(content=content, metadata=meta))
+
+        def body_of(items: list[_Unit], prefix: str) -> str:
+            out = prefix
+            for u in items:
+                out = f"{out}{u.sep}{u.text}" if out else u.text
+            return out
 
         for section, lines in self._sections(text or ""):
             head_tok = count(section) + 1 if section else 0
@@ -244,40 +267,31 @@ class DocumentIngester:
             room_chars = max(40, max_chars - head_chars)
 
             units: list[_Unit] = []
-            for line in lines:
+            for line, para in lines:
                 for i, part in enumerate(self._split_long(line, room_tok, room_chars, count)):
-                    units.append(_Unit(part, count(part), new_line=i == 0))
+                    units.append(_Unit(part, count(part), new_line=i == 0, para=para and i == 0))
 
             cur: list[_Unit] = []
             cur_tok = 0
             overlap_text = ""
 
-            def body_of(items: list[_Unit], prefix: str) -> str:
-                out = prefix
-                for u in items:
-                    if not out:
-                        out = u.text
-                    else:
-                        out += ("\n" if u.new_line else " ") + u.text
-                return out
-
             for u in units:
                 cand_tok = cur_tok + u.tokens + 1
                 cand_len = len(body_of([*cur, u], overlap_text))
                 if cur and (cand_tok > room_tok or cand_len > room_chars):
-                    emit(section, body_of(cur, overlap_text), len(overlap_text))
+                    emit(section, cur, overlap_text)
                     overlap_text = self._overlap(cur, ov_tokens, ov_chars)
                     cur, cur_tok = [], count(overlap_text) if overlap_text else 0
                     # l'overlap doit laisser la place
                     if overlap_text and (
                         cur_tok + u.tokens + 1 > room_tok
-                        or len(overlap_text) + 1 + len(u.text) > room_chars
+                        or len(overlap_text) + len(u.sep) + len(u.text) > room_chars
                     ):
                         overlap_text, cur_tok = "", 0
                 cur.append(u)
                 cur_tok += u.tokens + 1
             if cur:
-                emit(section, body_of(cur, overlap_text), len(overlap_text))
+                emit(section, cur, overlap_text)
 
         logger.info("ingestion.chunked", num_chunks=len(chunks), budget=budget)
         return chunks
@@ -373,7 +387,7 @@ class DocumentIngester:
 
 def reassemble(chunks: list[tuple[str, dict]]) -> str:
     """Recolle les fragments d'une entrée."""
-    parts: list[str] = []
+    out = ""
     last_section = ""
     for content, meta in sorted(chunks, key=lambda c: (c[1] or {}).get("chunk_index") or 0):
         meta = meta or {}
@@ -384,9 +398,11 @@ def reassemble(chunks: list[tuple[str, dict]]) -> str:
         ov = int(meta.get("overlap_chars") or 0)
         if ov:
             body = body[ov:].lstrip()
+        sep = meta.get("sep") or "\n"
         if section and section != last_section:
-            parts.append(f"## {section}")
+            out = f"{out}\n## {section}" if out else f"## {section}"
+            sep = "\n"
         last_section = section
         if body:
-            parts.append(body)
-    return "\n".join(parts)
+            out = f"{out}{sep}{body}" if out else body
+    return out
