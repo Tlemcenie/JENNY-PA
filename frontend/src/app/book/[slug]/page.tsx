@@ -78,12 +78,11 @@ export default async function BookPage({ params }: Props) {
   const [res, site] = await Promise.all([getPublicBooking(slug), getSiteUrl()]);
 
   return (
-    <>
-      <BookingClient slug={slug} />
+    <BookingClient slug={slug}>
       {res.status === "ok" && (
         <SalonInfo info={res.info} url={`${site}/book/${encodeURIComponent(slug)}`} />
       )}
-    </>
+    </BookingClient>
   );
 }
 
@@ -94,19 +93,18 @@ function SalonInfo({ info, url }: { info: PublicBookingInfo; url: string }) {
     .map((part) => part?.trim())
     .filter(Boolean)
     .join(", ");
+  const days = DAY_LABELS.map(([key, label]) => ({ key, label, w: dayWindow(info, key) }));
+  // pas d'horaires, pas de bloc
+  const hasHours = days.some((d) => d.w);
 
   return (
-    <section
-      aria-labelledby="salon-infos"
-      className="w-full flex justify-center px-4 pb-14 text-[#F4F1ED]"
-      style={{ background: "#0E0B14" }}
-    >
+    <section aria-labelledby="salon-infos" className="mt-6">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: safeJsonLd(hairSalonJsonLd(info, url)) }}
       />
       <div
-        className="w-full max-w-[540px] rounded-[24px] p-6 sm:p-7"
+        className="w-full rounded-[24px] p-6 sm:p-7"
         style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)" }}
       >
         <h2
@@ -128,22 +126,23 @@ function SalonInfo({ info, url }: { info: PublicBookingInfo; url: string }) {
           </p>
         )}
 
-        <h3 className="mt-5 mb-2 text-[13px] font-semibold text-[#F4F1ED]/85">
-          Horaires d&apos;ouverture
-        </h3>
-        <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1.5 text-[13.5px]">
-          {DAY_LABELS.map(([key, label]) => {
-            const w = dayWindow(info, key);
-            return (
-              <Fragment key={key}>
-                <dt className="text-[#F4F1ED]/65">{label}</dt>
-                <dd className={w ? "tabular-nums text-right" : "text-right text-[#F4F1ED]/50"}>
-                  {w ? `${w[0]} – ${w[1]}` : "Fermé"}
-                </dd>
-              </Fragment>
-            );
-          })}
-        </dl>
+        {hasHours && (
+          <>
+            <h3 className="mt-5 mb-2 text-[13px] font-semibold text-[#F4F1ED]/85">
+              Horaires d&apos;ouverture
+            </h3>
+            <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1.5 text-[13.5px]">
+              {days.map(({ key, label, w }) => (
+                <Fragment key={key}>
+                  <dt className="text-[#F4F1ED]/65">{label}</dt>
+                  <dd className={w ? "tabular-nums text-right" : "text-right text-[#F4F1ED]/50"}>
+                    {w ? `${w[0]} – ${w[1]}` : "Fermé"}
+                  </dd>
+                </Fragment>
+              ))}
+            </dl>
+          </>
+        )}
       </div>
     </section>
   );

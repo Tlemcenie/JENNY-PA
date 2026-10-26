@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
@@ -63,7 +63,7 @@ interface DayOption {
   month: string; // "juin"
 }
 
-export default function BookingClient({ slug }: { slug: string }) {
+export default function BookingClient({ slug, children }: { slug: string; children?: ReactNode }) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [info, setInfo] = useState<BookingBusinessInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -321,6 +321,9 @@ export default function BookingClient({ slug }: { slug: string }) {
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* infos rendues serveur */}
+          {children}
 
           {/* pied de page */}
           <p className="mt-7 text-center font-mono text-[11px] tracking-[0.12em] text-[#F4F1ED]/50">
