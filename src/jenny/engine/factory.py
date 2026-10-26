@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from pathlib import Path
 
 from jenny.actions.handlers.book_appointment_db import BookAppointmentDBAction
 from jenny.actions.handlers.check_planning import CheckPlanningAction
@@ -70,6 +71,9 @@ def load_intent_predictor(kind: str | None = None, *, fallback: bool = True) -> 
         try:
             from ml.models.intent_head.predict import EmbeddingIntentPredictor
 
+            # pas de mpnet pour rien
+            if not Path(settings.intent_head_path).exists():
+                raise FileNotFoundError(f"Checkpoint non trouvé : {settings.intent_head_path}")
             # un seul mpnet en ram
             head = EmbeddingIntentPredictor.from_checkpoint(
                 settings.intent_head_path, encoder=rag_encoder()
