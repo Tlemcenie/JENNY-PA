@@ -116,6 +116,7 @@ interface StaffForm {
   days: Record<string, DayRow>;
   allServices: boolean; // sait tout faire
   prestationIds: string[];
+  skillsTouched: boolean; // section modifiée ?
 }
 
 function daysFrom(hours: StaffHours | BusinessHours | null, salon: BusinessHours): Record<string, DayRow> {
@@ -139,6 +140,7 @@ function emptyForm(salon: BusinessHours, color: string): StaffForm {
     days: daysFrom(null, salon),
     allServices: true,
     prestationIds: [],
+    skillsTouched: false,
   };
 }
 
@@ -151,6 +153,7 @@ function formFromStaff(m: StaffMember, salon: BusinessHours): StaffForm {
     days: daysFrom(m.working_hours, salon),
     allServices: doesEverything(m),
     prestationIds: [...m.prestation_ids],
+    skillsTouched: false,
   };
 }
 
@@ -162,6 +165,8 @@ export default function TeamPage() {
 
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [prestations, setPrestations] = useState<Prestation[]>([]);
+  // catalogue entier, inactives comprises
+  const [catalogueSize, setCatalogueSize] = useState(0);
   const [load, setLoad] = useState<Record<string, StaffLoad>>({});
   const [salonHours, setSalonHours] = useState<BusinessHours>(FALLBACK_HOURS);
   const [isLoading, setIsLoading] = useState(true);
@@ -187,6 +192,7 @@ export default function TeamPage() {
       ]);
       setStaff(s.staff);
       setPrestations(p.prestations.filter((x) => x.is_active));
+      setCatalogueSize(p.prestations.length);
       setLoad(Object.fromEntries(occ.staff.map((l) => [l.staff_id, l])));
       if (biz?.business_hours) setSalonHours(biz.business_hours);
     } catch (err) {
@@ -242,9 +248,11 @@ export default function TeamPage() {
         working_hours[d.key] = row.on ? [row.start, row.end] : null;
       }
     }
-    // catalogue vide : fait tout
-    const allServices = form.allServices || prestations.length === 0;
-    if (!allServices && !form.prestationIds.some((id) => prestaName[id])) {
+    // section pas touchée : on garde
+    const sendSkills = !editing || form.skillsTouched;
+    // catalogue vraiment vide : fait tout
+    const allServices = form.allServices || catalogueSize === 0;
+    if (sendSkills && !allServices && !form.prestationIds.some((id) => prestaName[id])) {
       toast.error("Cochez au moins une prestation, ou « Toutes les prestations ».");
       return;
     }
@@ -253,8 +261,9 @@ export default function TeamPage() {
       color: form.color,
       is_active: form.isActive,
       working_hours,
-      all_services: allServices,
-      prestation_ids: allServices ? [] : form.prestationIds,
+      ...(sendSkills
+        ? { all_services: allServices, prestation_ids: allServices ? [] : form.prestationIds }
+        : {}),
     };
     setSaving(true);
     try {
@@ -315,6 +324,7 @@ export default function TeamPage() {
   const togglePresta = (id: string) =>
     setForm((f) => ({
       ...f,
+      skillsTouched: true,
       prestationIds: f.prestationIds.includes(id)
         ? f.prestationIds.filter((x) => x !== id)
         : [...f.prestationIds, id],
@@ -474,12 +484,21 @@ export default function TeamPage() {
                 {prestations.length === 0 ? (
                   <>
                     <div className="text-[12.5px] font-semibold text-jenny-text mb-1">Prestations réalisées</div>
-                    <p className="text-[12.5px] text-jenny-text-secondary">
-                      Aucune prestation dans le catalogue : ce coiffeur fera tout.{" "}
-                      <Link href="/prestations" className="text-jenny-coral font-semibold hover:underline">
-                        Créer le catalogue
-                      </Link>
-                    </p>
+                    {catalogueSize === 0 ? (
+                      <p className="text-[12.5px] text-jenny-text-secondary">
+                        Aucune prestation dans le catalogue : ce coiffeur fera tout.{" "}
+                        <Link href="/prestations" className="text-jenny-coral font-semibold hover:underline">
+                          Créer le catalogue
+                        </Link>
+                      </p>
+                    ) : (
+                      <p className="text-[12.5px] text-jenny-text-secondary">
+                        Aucune prestation active pour l&apos;instant : ses prestations restent inchangées.{" "}
+                        <Link href="/prestations" className="text-jenny-coral font-semibold hover:underline">
+                          Voir le catalogue
+                        </Link>
+                      </p>
+                    )}
                   </>
                 ) : (
                   <ToggleRow
@@ -490,7 +509,9 @@ export default function TeamPage() {
                         : "Décoché : seulement les prestations cochées ci-dessous."
                     }
                     on={form.allServices}
-                    onToggle={() => setForm((f) => ({ ...f, allServices: !f.allServices }))}
+                    onToggle={() =>
+                      setForm((f) => ({ ...f, allServices: !f.allServices, skillsTouched: true }))
+                    }
                   />
                 )}
                 {prestations.length > 0 && !form.allServices && (
@@ -519,6 +540,7 @@ export default function TeamPage() {
                 )}
                 {prestations.length > 0 &&
                   !form.allServices &&
+                  (!editing || form.skillsTouched) &&
                   !form.prestationIds.some((id) => prestaName[id]) && (
                     <p className="mt-2 text-[11.5px] text-jenny-warning">
                       Cochez au moins une prestation.
