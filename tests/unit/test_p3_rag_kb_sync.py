@@ -101,9 +101,7 @@ class _KB:
         return old is not None
 
     def by_key(self) -> dict[str, SimpleNamespace]:
-        return {
-            e.metadata["kb_key"]: e for e in self.entries.values() if e.metadata.get("kb_key")
-        }
+        return {e.metadata["kb_key"]: e for e in self.entries.values() if e.metadata.get("kb_key")}
 
 
 async def _seeded() -> _KB:
@@ -142,7 +140,9 @@ async def test_retour_au_texte_genere_redevient_a_nous() -> None:
     kb = await _seeded()
     acompte = kb.by_key()["acompte-montant"]
     original = acompte.content
-    await kb.update_text_entry(acompte.id, "Autre texte.", title=acompte.title, category="politique")
+    await kb.update_text_entry(
+        acompte.id, "Autre texte.", title=acompte.title, category="politique"
+    )
     await kb.update_text_entry(acompte.id, original, title=acompte.title, category="politique")
     off = _real({**BUSINESS, "deposit_enabled": False})
     stats = await kc.sync_real_entries(kb, off, families=FAMS)
@@ -213,7 +213,9 @@ async def test_anciennes_fiches_prix_retirees() -> None:
 
 
 def _pg() -> SimpleNamespace:
-    return SimpleNamespace(get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="postgresql")))
+    return SimpleNamespace(
+        get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+    )
 
 
 def _salon(business, staff=()):
@@ -247,7 +249,9 @@ async def test_refresh_salon_jamais_seede(monkeypatch: pytest.MonkeyPatch) -> No
 
 @pytest.mark.asyncio
 async def test_refresh_sqlite_rien() -> None:
-    sqlite = SimpleNamespace(get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="sqlite")))
+    sqlite = SimpleNamespace(
+        get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+    )
     assert await kc.refresh_real_entries(sqlite, uuid4(), kb=_KB()) is None
 
 

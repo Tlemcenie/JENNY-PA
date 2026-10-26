@@ -189,7 +189,9 @@ async def test_batch_sans_commit_pour_le_script() -> None:
 
 
 def test_reindex_ignore_les_traces() -> None:
-    spec = importlib.util.spec_from_file_location("reindex_kb_p3", ROOT / "scripts" / "reindex_kb.py")
+    spec = importlib.util.spec_from_file_location(
+        "reindex_kb_p3", ROOT / "scripts" / "reindex_kb.py"
+    )
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.modules["reindex_kb_p3"] = mod

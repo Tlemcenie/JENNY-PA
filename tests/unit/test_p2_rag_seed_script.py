@@ -113,9 +113,7 @@ class _Db:
             self.last_delete = (sql, params)
             tag = params.get("tag")
             if tag:
-                self.rows = [
-                    r for r in self.rows if json.loads(r["metadata_"]).get("seed") != tag
-                ]
+                self.rows = [r for r in self.rows if json.loads(r["metadata_"]).get("seed") != tag]
             return SimpleNamespace(rowcount=1)
         if sql.startswith("INSERT"):
             self.inserted.append(params)

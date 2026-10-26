@@ -75,7 +75,9 @@ async def test_patch_acompte_et_contact(
     await kb_sync.wait_idle()
     calls.clear()
     body = {"deposit_enabled": True, "deposit_percent": 40, "phone": "01 02 03 04 05"}
-    assert (await client.patch("/api/v1/business/me", headers=headers, json=body)).status_code == 200
+    assert (
+        await client.patch("/api/v1/business/me", headers=headers, json=body)
+    ).status_code == 200
     await kb_sync.wait_idle()
     assert calls == [bid]
 
