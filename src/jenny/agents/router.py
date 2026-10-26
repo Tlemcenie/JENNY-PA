@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from jenny.core.logging import get_logger
+from jenny.engine.thresholds import LOW_CONFIDENCE_FLOOR
 
 if TYPE_CHECKING:
     from jenny.engine.state_manager import ConversationState
@@ -91,8 +92,8 @@ class AgentRouter:
         intent = state.current_intent or "general"
         confidence = state.intent_confidence
 
-        # Si la confiance est trop basse, utiliser le fallback
-        if confidence < 0.4:
+        # seuil partagé avec le moteur
+        if confidence < LOW_CONFIDENCE_FLOOR:
             agent_name = "fallback"
             logger.info(
                 "router.low_confidence",
