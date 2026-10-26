@@ -786,9 +786,15 @@ class TestTwitterSnapchatWebhookTolerance:
         assert r.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_snapchat_message_acknowledged(self, client: AsyncClient, db_tables: None) -> None:
+    async def test_snapchat_message_acknowledged(
+        self, client: AsyncClient, db_tables: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from jenny.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "snapchat_webhook_secret", "snap-secret")
         r = await client.post(
             "/api/v1/webhooks/snapchat",
+            headers={"X-Jenny-Webhook-Secret": "snap-secret"},
             json={
                 "event_type": "message",
                 "messages": [
@@ -799,8 +805,17 @@ class TestTwitterSnapchatWebhookTolerance:
         assert r.status_code == 200, r.text
 
     @pytest.mark.asyncio
-    async def test_snapchat_non_json_rejected(self, client: AsyncClient, db_tables: None) -> None:
-        r = await client.post("/api/v1/webhooks/snapchat", content="nope {{{")
+    async def test_snapchat_non_json_rejected(
+        self, client: AsyncClient, db_tables: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from jenny.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "snapchat_webhook_secret", "snap-secret")
+        r = await client.post(
+            "/api/v1/webhooks/snapchat",
+            content="nope {{{",
+            headers={"X-Jenny-Webhook-Secret": "snap-secret"},
+        )
         assert r.status_code == 400
 
 
