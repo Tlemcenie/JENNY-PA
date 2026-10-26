@@ -135,6 +135,11 @@
   color: var(--w-text);
 }
 
+.iconBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* fil de messages */
 
 .log {

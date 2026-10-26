@@ -438,6 +438,7 @@ export function WidgetChat({ slug, color, theme, embedded = false }: WidgetChatP
             type="button"
             className={styles.iconBtn}
             onClick={reset}
+            disabled={typing}
             aria-label="Nouvelle conversation"
             title="Nouvelle conversation"
           >
