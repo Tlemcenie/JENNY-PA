@@ -1,0 +1,46 @@
+{"text": "C'est combien une couleur et vous acceptez la CB ?", "intents": ["pricing", "payment_question"]}
+{"text": "Quels sont vos tarifs et vous prenez la carte ?", "intents": ["pricing", "payment_question"]}
+{"text": "Quel est le prix d'une coupe homme et je peux payer en espèces ?", "intents": ["pricing", "payment_question"]}
+{"text": "Combien pour un lissage et vous prenez le paiement en plusieurs fois ?", "intents": ["pricing", "payment_question"]}
+{"text": "Je voudrais un rdv samedi et savoir si vous prenez la CB", "intents": ["appointment", "payment_question"]}
+{"text": "Je voudrais un rendez-vous demain, vous acceptez la carte ?", "intents": ["appointment", "payment_question"]}
+{"text": "Mon colis n'est pas arrivé et je veux parler à un humain", "intents": ["order_status", "escalation"]}
+{"text": "Mon colis est en retard, c'est inadmissible", "intents": ["order_status", "complaint"]}
+{"text": "Où en est ma commande de shampoing ? Et je voudrais payer la facture", "intents": ["order_status", "payment"]}
+{"text": "Je veux régler ma facture et suivre ma commande", "intents": ["payment", "order_status"]}
+{"text": "Ma couleur est ratée, je veux parler au responsable", "intents": ["complaint", "escalation"]}
+{"text": "Je suis déçue de ma coupe et je veux un conseiller au téléphone", "intents": ["complaint", "escalation"]}
+{"text": "Je veux prendre rendez-vous et savoir le prix d'un balayage", "intents": ["appointment", "pricing"]}
+{"text": "Je voudrais réserver une coupe et savoir combien ça coûte", "intents": ["appointment", "pricing"]}
+{"text": "Je souhaite réserver jeudi et avoir un devis pour une coloration", "intents": ["appointment", "quote"]}
+{"text": "Je voudrais un devis pour un mariage et prendre rendez-vous pour l'essai", "intents": ["quote", "appointment"]}
+{"text": "Je voudrais un devis pour un mariage et savoir si vous prenez les chèques", "intents": ["quote", "payment_question"]}
+{"text": "Pouvez-vous me faire un devis et me dire combien coûte un chignon ?", "intents": ["quote", "pricing"]}
+{"text": "Vous avez des créneaux vendredi ? Je voudrais prendre rdv", "intents": ["planning", "appointment"]}
+{"text": "Vos disponibilités de la semaine et le prix d'une couleur svp", "intents": ["planning", "pricing"]}
+{"text": "jveux un rdv mardi et c combien la coupe", "intents": ["appointment", "pricing"]}
+{"text": "vs prenez la cb et c quoi vos tarifs", "intents": ["payment_question", "pricing"]}
+{"text": "Bonjour !", "intents": ["greeting"]}
+{"text": "Vous prenez la carte ?", "intents": ["payment_question"]}
+{"text": "Quels sont vos tarifs ?", "intents": ["pricing"]}
+{"text": "Combien coûte une coupe femme ?", "intents": ["pricing"]}
+{"text": "Je voudrais savoir le prix de la coupe et du brushing", "intents": ["pricing"]}
+{"text": "Je voudrais un rendez-vous samedi à 10h", "intents": ["appointment"]}
+{"text": "Je voudrais prendre rendez-vous pour une coupe et un balayage", "intents": ["appointment"]}
+{"text": "Je veux une coupe et une couleur samedi", "intents": ["appointment"]}
+{"text": "jvoudrais un rdv demain", "intents": ["appointment"]}
+{"text": "Mon colis n'est pas arrivé", "intents": ["order_status"]}
+{"text": "Je veux parler à un humain", "intents": ["escalation"]}
+{"text": "Merci, bonne journée", "intents": ["closing"]}
+{"text": "Merci beaucoup et à bientôt", "intents": ["closing"]}
+{"text": "Je voudrais un devis pour un mariage", "intents": ["quote"]}
+{"text": "Ma coupe est ratée", "intents": ["complaint"]}
+{"text": "Je peux payer en plusieurs fois ?", "intents": ["payment_question"]}
+{"text": "vs prenez la cb", "intents": ["payment_question"]}
+{"text": "Vous avez de la place jeudi ?", "intents": ["planning"]}
+{"text": "Quelles sont vos disponibilités samedi après-midi ?", "intents": ["planning"]}
+{"text": "Je voudrais payer ma facture", "intents": ["payment"]}
+{"text": "c combien une couleur", "intents": ["pricing"]}
+{"text": "Ça va ? Quoi de neuf ?", "intents": ["small_talk"]}
+{"text": "Je voudrais un devis pour une coupe et une couleur", "intents": ["quote"]}
+{"text": "Le service était lent et la coupe pas terrible", "intents": ["complaint"]}

@@ -15,7 +15,7 @@ from ml.models.intent.predict import IntentPredictor
 from ml.models.intent_head.predict import ENCODER_NAME, EmbeddingIntentPredictor
 from ml.models.ner.predict import NERPredictor
 
-HEAD_OK = Path("checkpoints/intent_head/head.joblib").exists()
+HEAD_OK = Path("checkpoints/intent_head/head.npz").exists()
 LSTM_OK = Path("checkpoints/intent/best_model.pt").exists()
 NER_OK = Path("checkpoints/ner/best_model.pt").exists()
 
@@ -41,8 +41,9 @@ class TestReglages:
         monkeypatch.delenv("JENNY_ENABLE_NER_MODEL", raising=False)
         s = Settings(_env_file=None)
         assert s.intent_model_kind == "head"
+        # ner coupé, slot pas protégé
         assert s.enable_ner_model is False
-        assert s.intent_head_path == "checkpoints/intent_head/head.joblib"
+        assert s.intent_head_path == "checkpoints/intent_head/head.npz"
 
     def test_type_inconnu_refuse(self) -> None:
         with pytest.raises(ValidationError):
@@ -58,14 +59,14 @@ class TestChargement:
 
     @pytest.mark.skipif(not HEAD_OK, reason="checkpoint tête absent")
     def test_head_sans_ner(self, env) -> None:
-        env(enable_ml_models="true", intent_model_kind="head")
+        env(enable_ml_models="true", intent_model_kind="head", enable_ner_model="false")
         intent, ner = factory.load_ml_predictors()
         assert isinstance(intent, EmbeddingIntentPredictor)
         assert ner is None
 
     @pytest.mark.skipif(not LSTM_OK, reason="checkpoint lstm absent")
     def test_lstm_reste_chargeable(self, env) -> None:
-        env(enable_ml_models="true", intent_model_kind="lstm")
+        env(enable_ml_models="true", intent_model_kind="lstm", enable_ner_model="false")
         intent, ner = factory.load_ml_predictors()
         assert type(intent) is IntentPredictor
         assert ner is None

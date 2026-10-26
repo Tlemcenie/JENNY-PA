@@ -9,6 +9,11 @@ n'évalue que sur le TEST. Les deux modèles d'intention passent sur le MÊME
 test, le MÊME test perturbé (sans accents / sans ponctuation / SMS) et un
 test « SMS inédit » dont les formes ne sont jamais vues à l'entraînement.
 On mesure aussi la latence par message (appel unitaire, comme le moteur).
+Multi-intention : rappel (au moins deux intentions sur les lignes à deux
+étiquettes), paire complète, faux multi sur les lignes simples, set-F1.
+« sonde_multi » = petit jeu écrit à la main, hors gabarits, jamais entraîné.
+« intent_head_avant » = la même tête sans les têtes secondaires (softmax
+seule, seuil calé sur VAL), donc le comportement de la passe 1.
 
 Usage : PYTHONPATH=src:. .venv/bin/python scripts/eval_ml_models.py
         [--skip-ner] [--skip-train] [--skip-cpu] [--latency-n 200]
@@ -31,8 +36,10 @@ from ml.models.intent_head.augment import perturb_unseen
 SEED = 42
 OUT = Path("var/eval/ml_metrics.json")
 LSTM_PATH = "checkpoints/intent/best_model.pt"
-HEAD_PATH = "checkpoints/intent_head/head.joblib"
+HEAD_PATH = "checkpoints/intent_head/head.npz"
 NER_PATH = "checkpoints/ner/best_model.pt"
+# sonde manuelle hors gabarits
+PROBE_PATH = Path("data/generated/intents_multi_probe.jsonl")
 
 
 def load_jsonl(path: str) -> list[dict]:
@@ -110,6 +117,36 @@ def latency_ms(fn, texts: list[str]) -> dict:
     }
 
 
+def multi_scores(gold: list[list[str]], preds: list[dict]) -> dict:
+    """multi-intention : rappel, faux, set-f1."""
+    set_f1 = faux = single = clarif = det = complet = hit = tot = n_multi = 0.0
+    for g, p in zip(gold, preds, strict=True):
+        ps = {d["intent"] for d in p["intents"]}
+        gs = set(g)
+        set_f1 += 2 * len(ps & gs) / (len(ps) + len(gs))
+        if len(gs) == 1:
+            single += 1
+            faux += p["is_multi_intent"]
+        else:
+            n_multi += 1
+            det += len(ps) > 1
+            complet += gs <= ps
+            hit += len(gs & ps)
+            tot += len(gs)
+        clarif += bool(p["needs_clarification"])
+    return {
+        "n_multi": int(n_multi),
+        # au moins deux intentions
+        "rappel_multi_pct": round(100 * det / max(n_multi, 1), 1),
+        # les deux bonnes
+        "multi_complet_pct": round(100 * complet / max(n_multi, 1), 1),
+        "rappel_etiquettes_multi_pct": round(100 * hit / max(tot, 1), 1),
+        "faux_multi_pct": round(100 * faux / max(single, 1), 1),
+        "set_f1": round(100 * set_f1 / len(gold), 1),
+        "clarif_pct": round(100 * clarif / len(gold), 1),
+    }
+
+
 def score_intent(predictor, rows: list[dict], idx: dict, with_train: bool) -> dict:
     """Top-1, macro-F1, multi-intention, clarif sur le split test."""
     res: dict = {}
@@ -124,25 +161,40 @@ def score_intent(predictor, rows: list[dict], idx: dict, with_train: bool) -> di
         acc = 100 * sum(v == pr for v, pr in pairs) / len(pairs)
         mf1, detail = macro_f1(pairs)
         res[nom] = {"n": len(pairs), "top1": round(acc, 1), "macro_f1": round(mf1, 1)}
+        if nom != "train":
+            res[nom]["multi"] = multi_scores(gold, preds)
         if nom == "test":
             res["par_classe"] = dict(sorted(detail.items(), key=lambda kv: kv[1]["f1"]))
-            # multi-intention et clarif
-            set_f1 = faux = single = clarif = 0.0
-            for g, p in zip(gold, preds, strict=True):
-                ps = {d["intent"] for d in p["intents"]}
-                gs = set(g)
-                set_f1 += 2 * len(ps & gs) / (len(ps) + len(gs))
-                if len(gs) == 1:
-                    single += 1
-                    faux += p["is_multi_intent"]
-                clarif += bool(p["needs_clarification"])
-            res["multi"] = {
-                "set_f1": round(100 * set_f1 / len(gold), 1),
-                "faux_multi_pct": round(100 * faux / max(single, 1), 1),
-                "clarif_pct": round(100 * clarif / len(gold), 1),
-            }
+            res["multi"] = res[nom]["multi"]
     res["chute_robustesse_pts"] = round(res["test"]["top1"] - res["test_perturbe"]["top1"], 1)
+    if PROBE_PATH.exists():
+        probe = load_jsonl(str(PROBE_PATH))
+        preds = predictor.predict_batch_multi([r["text"] for r in probe])
+        gold = [gold_labels(r) for r in probe]
+        res["sonde_multi"] = multi_scores(gold, preds)
+        ok = sum(p["primary_intent"] in g for g, p in zip(gold, preds, strict=True))
+        res["sonde_multi"]["top1_dans_gold_pct"] = round(100 * ok / len(probe), 1)
     return res
+
+
+def softmax_only(head):
+    """même tête, sans secondaires."""
+    from ml.models.intent_head.predict import EmbeddingIntentPredictor
+
+    # seuil softmax calé sur val
+    t = head.meta.get("softmax_multi_threshold", 0.47)
+    return EmbeddingIntentPredictor(
+        head.encoder,
+        head.coef,
+        head.intercept,
+        temperature=head.temperature,
+        multi_threshold=t,
+        max_intents=3,
+        clarify_threshold=head.clarify_threshold,
+        labels=head.labels,
+        chars=head.chars,
+        char_coef=head.char_coef,
+    )
 
 
 def eval_intents(with_train: bool, cpu_latency: bool, latency_n: int) -> dict:
@@ -174,7 +226,13 @@ def eval_intents(with_train: bool, cpu_latency: bool, latency_n: int) -> dict:
         res["latence_ms"]["cpu"] = latency_ms(head_cpu.predict_multi, sample)
     res["checkpoint"] = {k: head.meta.get(k) for k in ("alpha", "C", "temperature")}
     res["checkpoint"]["multi_threshold"] = head.multi_threshold
+    res["checkpoint"]["secondaires"] = head.has_secondary
     out["intent_head"] = res
+
+    # avant : softmax seule (passe 1)
+    avant = softmax_only(head)
+    out["intent_head_avant"] = score_intent(avant, rows, idx, False)
+    out["intent_head_avant"]["multi_threshold"] = avant.multi_threshold
 
     a, b = out["intent_lstm"], out["intent_head"]
     comp = {}
@@ -185,9 +243,21 @@ def eval_intents(with_train: bool, cpu_latency: bool, latency_n: int) -> dict:
             "delta_pts": round(b[nom]["top1"] - a[nom]["top1"], 1),
             "lstm_macro_f1": a[nom]["macro_f1"],
             "head_macro_f1": b[nom]["macro_f1"],
+            "lstm_rappel_multi": a[nom]["multi"]["rappel_multi_pct"],
+            "head_rappel_multi": b[nom]["multi"]["rappel_multi_pct"],
+            "lstm_set_f1": a[nom]["multi"]["set_f1"],
+            "head_set_f1": b[nom]["multi"]["set_f1"],
+            "head_avant_rappel_multi": out["intent_head_avant"][nom]["multi"]["rappel_multi_pct"],
+            "head_avant_set_f1": out["intent_head_avant"][nom]["multi"]["set_f1"],
+            "lstm_faux_multi": a[nom]["multi"]["faux_multi_pct"],
+            "head_faux_multi": b[nom]["multi"]["faux_multi_pct"],
         }
+        # top-1 inchangé par les secondaires
+        comp[nom]["top1_identique_avant"] = out["intent_head_avant"][nom]["top1"] == b[nom]["top1"]
     comp["head_bat_lstm_test"] = b["test"]["top1"] > a["test"]["top1"]
     comp["head_bat_lstm_perturbe"] = b["test_perturbe"]["top1"] > a["test_perturbe"]["top1"]
+    # critère de bascule complet
+    comp["head_set_f1_ok"] = b["multi"]["set_f1"] >= a["multi"]["set_f1"]
     out["comparaison"] = comp
     return out
 

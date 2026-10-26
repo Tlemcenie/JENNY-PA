@@ -80,7 +80,7 @@ def intent_kind(request, monkeypatch):
     reason = KNOWN_FAILS.get((kind, request.node.originalname))
     if reason:
         request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
-    if kind == "head" and not Path("checkpoints/intent_head/head.joblib").exists():
+    if kind == "head" and not Path("checkpoints/intent_head/head.npz").exists():
         pytest.skip("checkpoint tête absent")
     monkeypatch.setenv("JENNY_ENABLE_ML_MODELS", "true")
     monkeypatch.setenv("JENNY_INTENT_MODEL_KIND", kind)
