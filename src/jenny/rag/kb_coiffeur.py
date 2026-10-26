@@ -1099,6 +1099,28 @@ async def sync_real_entries(kb, entries: list[dict], *, families: tuple[str, ...
     return stats
 
 
+async def refresh_hours(session, business_id, kb=None) -> dict | None:
+    """Fiches horaires après un changement."""
+    if session.get_bind().dialect.name != "postgresql":
+        return None
+    if kb is None:
+        from jenny.rag.knowledge_base import KnowledgeBase
+
+        kb = KnowledgeBase(business_id=business_id, session=session)
+    business, _prestas, _staff = await load_salon(session, business_id)
+    existing = await kb.list_entries()
+    # salon jamais seedé : rien
+    seeded = any(
+        (getattr(e, "metadata", None) or {}).get("seed") == REAL_TAG
+        or (e.content or "").strip() == LEGACY_HOURS_TEXT
+        for e in existing
+    )
+    if not seeded:
+        return None
+    entries = hours_entries(business.get("business_hours"))
+    return await sync_real_entries(kb, entries, families=("horaires-",))
+
+
 async def load_salon(session, business_id) -> tuple[dict, list[dict], list[str]]:
     """Salon, prestations et équipe en base."""
     from sqlalchemy import select

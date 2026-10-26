@@ -272,3 +272,44 @@ async def test_sync_ignore_fiches_demo() -> None:
     assert len([e for e in kb.entries.values() if e.metadata.get("seed") == kc.SEED_TAG]) == len(
         demo
     )
+
+
+# ── horaires modifiés plus tard ──
+
+
+def _session(dialect: str) -> SimpleNamespace:
+    return SimpleNamespace(get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name=dialect)))
+
+
+def _salon_with(hours):
+    async def load(_s, _bid):
+        return {**BUSINESS, "business_hours": hours}, PRESTAS, []
+
+    return load
+
+
+@pytest.mark.asyncio
+async def test_refresh_hours_suit_le_changement(monkeypatch: pytest.MonkeyPatch) -> None:
+    kb = _KB()
+    await kc.sync_real_entries(kb, _real(include_prices=False), families=FAMS)
+    monkeypatch.setattr(kc, "load_salon", _salon_with({**HOURS, "thu": ["10:00", "18:30"]}))
+    stats = await kc.refresh_hours(_session("postgresql"), uuid4(), kb=kb)
+    by = kb.by_key()
+    assert stats is not None and stats["updated"] >= 1
+    assert "20h" not in by["horaires-semaine"].content
+    assert "horaires-nocturne" not in by
+    # le reste ne bouge pas
+    assert "acompte-montant" in by and "assistante" in by
+
+
+@pytest.mark.asyncio
+async def test_refresh_hours_salon_jamais_seede(monkeypatch: pytest.MonkeyPatch) -> None:
+    kb = _KB([{"title": "Ma fiche", "content": "Texte du gérant."}])
+    monkeypatch.setattr(kc, "load_salon", _salon_with(HOURS))
+    assert await kc.refresh_hours(_session("postgresql"), uuid4(), kb=kb) is None
+    assert kb.calls == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_hours_sqlite_rien() -> None:
+    assert await kc.refresh_hours(_session("sqlite"), uuid4(), kb=_KB()) is None
