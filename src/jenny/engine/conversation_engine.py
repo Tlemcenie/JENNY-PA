@@ -196,6 +196,12 @@ _DECLINE_RE = re.compile(
     r"laisse[zr]?\s+tomber|tant\s+pis)\b|\bpas\s+int[ée]ress",
     re.I,
 )
+# « ok, inscrivez-moi »
+_OPT_IN_RE = re.compile(
+    r"\b(?:inscri(?:s|vez|re)|mett(?:ez|re)|note[zr]?|pr[ée]ven(?:ez|ir))[\s-]*moi\b"
+    r"|\bje\s+veux\s+bien\b|\bvolontiers\b",
+    re.I,
+)
 # refus poli, n'importe où
 _DECLINE_ANY_RE = re.compile(
     r"\b(?:tant\s+pis|merci\s+quand\s+m[êe]me|quand\s+m[êe]me\s+merci|voir\s+ailleurs|"
@@ -223,7 +229,7 @@ def accepts_offer(message: str) -> bool:
     m = message or ""
     if declines_offer(m):
         return False
-    return is_confirmation(m) or bool(_ACK_ONLY_RE.match(m))
+    return is_confirmation(m) or bool(_ACK_ONLY_RE.match(m) or _OPT_IN_RE.search(m))
 
 
 # signaux de prise de rdv

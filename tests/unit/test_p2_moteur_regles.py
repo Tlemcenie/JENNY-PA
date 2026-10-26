@@ -326,7 +326,20 @@ class TestNoms:
 
 class TestOffre:
     @pytest.mark.parametrize(
-        "msg", ["ok", "Ok !", "oui", "Oui, avec plaisir", "d'accord merci", "Super, merci !", "go"]
+        "msg",
+        [
+            "ok",
+            "Ok !",
+            "oui",
+            "Oui, avec plaisir",
+            "d'accord merci",
+            "Super, merci !",
+            "go",
+            "ok, inscrivez-moi",
+            "d'accord, mettez-moi sur la liste",
+            "Parfait, prévenez-moi",
+            "ah je veux bien",
+        ],
     )
     def test_accepte(self, msg: str) -> None:
         assert accepts_offer(msg)
