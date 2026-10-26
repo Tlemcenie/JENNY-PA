@@ -222,27 +222,46 @@ class TestStates:
     async def test_engine_states_are_bounded(
         self, client: AsyncClient, db_tables, monkeypatch
     ) -> None:
+        """Éviction publique, mémoire seule."""
         monkeypatch.setattr(public_chat, "MAX_STATES", 2)
+        sm = get_engine().state_manager
+        evicted: list = []
+        deleted: list = []
+
+        def evict(conv_id) -> None:
+            evicted.append(conv_id)
+            sm._states.pop(str(conv_id), None)
+
+        async def adelete(conv_id) -> None:
+            deleted.append(conv_id)
+
+        monkeypatch.setattr(sm, public_chat.EVICT_METHOD, evict, raising=False)
+        monkeypatch.setattr(sm, "adelete", adelete)
         biz = await _salon()
         vids = [_visitor() for _ in range(3)]
         for i, vid in enumerate(vids):
             assert (await _say(client, biz.slug, vid, f"198.51.100.{20 + i}")).status_code == 200
-        sm = get_engine().state_manager
         first, *rest = [conversation_id_for(biz.id, v) for v in vids]
+        assert evicted == [first]
         assert sm.get(first) is None
         assert all(sm.get(c) is not None for c in rest)
         assert len(public_chat._STATES) == 2
+        # copie Redis jamais effacée
+        assert deleted == []
 
-    async def test_idle_state_dropped(self, client: AsyncClient, db_tables) -> None:
+    async def test_no_public_evict_keeps_states(
+        self, client: AsyncClient, db_tables, monkeypatch
+    ) -> None:
+        """Sans méthode publique : TTL du moteur."""
+        monkeypatch.setattr(public_chat, "EVICT_METHOD", "pas_de_methode")
+        monkeypatch.setattr(public_chat, "MAX_STATES", 1)
         biz = await _salon()
         old, new = _visitor(), _visitor()
         assert (await _say(client, biz.slug, old, LEGIT)).status_code == 200
-        old_id = conversation_id_for(biz.id, old)
-        # vieille de 3 h
-        public_chat._STATES[old_id] = time.monotonic() - 3 * 3600
         assert (await _say(client, biz.slug, new, "198.51.100.30")).status_code == 200
-        assert get_engine().state_manager.get(old_id) is None
-        assert old_id not in public_chat._STATES
+        old_id = conversation_id_for(biz.id, old)
+        assert get_engine().state_manager.get(old_id) is not None
+        assert not public_chat._STATES
 
     async def test_limiter_memory_bounded(self, db_tables) -> None:
         w = public_chat._Window(3, 60, max_keys=10)
