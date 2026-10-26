@@ -146,6 +146,10 @@ class DocumentIngester:
 
         return safe
 
+    def count_tokens(self, text: str) -> int:
+        """Tokens, repli sur l'estimation."""
+        return self._counter()(text)
+
     # ── découpage ──
 
     def _split_long(self, text: str, max_tok: int, max_chars: int, count) -> list[str]:

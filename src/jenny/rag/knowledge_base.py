@@ -145,8 +145,8 @@ class KnowledgeBase:
         if prepare is not None:
             await prepare()
         header = embed_header(title, category)
-        count_tokens = getattr(self.embedder, "count_tokens", None)
-        reserved = (count_tokens(header) + 1) if (header and count_tokens) else 0
+        # même repli que le découpage
+        reserved = (self.ingester.count_tokens(header) + 1) if header else 0
         chunks = self.ingester.chunk_text(content, reserved_tokens=reserved)
         if not chunks:
             return []
