@@ -123,7 +123,7 @@ _NUMERIC_RE = re.compile(
 _APRES_DEMAIN_RE = re.compile(r"\bapres[\s-]?demain\b")
 _DEMAIN_RE = re.compile(r"\bdemain\b")
 _TODAY_RE = re.compile(
-    r"\baujourd|\bce\s+(?:matin|soir|midi)\b|\bcet\s+apres[\s-]?midi\b|\bce\s+jour\b"
+    r"\baujourd(?:'?\s?hui)?|\bce\s+(?:matin|soir|midi)\b|\bcet\s+apres[\s-]?midi\b|\bce\s+jour\b"
     r"|\btout\s+a\s+l'heure\b|\bcet\s+aprem\b"
 )
 _IN_N_RE = re.compile(rf"\b(?:dans|d'ici)\s+({_NUM_ALT})\s+(jours?|semaines?|mois)\b")
@@ -154,7 +154,7 @@ _DOM_RE = re.compile(
 # jours exclus (« pas demain »)
 _DAY_WORD = rf"(?:apres[\s-]?demain|demain|aujourd'?\s?hui|(?:{_WD_ALT})(?:\s+prochain)?)"
 _NEG_BEFORE_RE = re.compile(
-    rf"\b(?:pas|sauf|hors)\s+(?:dispo(?:nibles?)?\s+|libres?\s+)?(?:pour\s+)?"
+    rf"\b(?:pas|sauf|hors)\s+(?:dispo(?:nibles?)?\s+|libres?\s+|possible\s+|la\s+)?(?:pour\s+)?"
     rf"(?:le\s+|ce\s+)?{_DAY_WORD}\b"
 )
 _NEG_AFTER_RE = re.compile(
@@ -290,8 +290,8 @@ def parse_fr_date(text: str, *, today: date | None = None) -> date | None:
             return None
         return _resolve_day_month(int(day), int(month), int(yr) if yr else None, today)
 
-    # demain, aujourd'hui
-    for rx, delta in ((_APRES_DEMAIN_RE, 2), (_DEMAIN_RE, 1), (_TODAY_RE, 0)):
+    # demain, après-demain
+    for rx, delta in ((_APRES_DEMAIN_RE, 2), (_DEMAIN_RE, 1)):
         m = rx.search(t)
         if m:
             return _shift_en_huit(today + timedelta(days=delta), t[m.end() :])
@@ -359,6 +359,11 @@ def parse_fr_date(text: str, *, today: date | None = None) -> date | None:
     m = _DOM_RE.search(t)
     if m:
         return _next_dom(_day_num(m.group(1)), today)
+
+    # aujourd'hui en dernier
+    m = _TODAY_RE.search(t)
+    if m:
+        return _shift_en_huit(today, t[m.end() :])
 
     return None
 

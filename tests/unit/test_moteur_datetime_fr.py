@@ -406,3 +406,14 @@ class TestPrixPasHeure:
 
     def test_vraie_heure(self) -> None:
         assert parse_fr_time("demain à 15 ?") == time(15, 0)
+
+
+class TestPriorites:
+    def test_aujourdhui_simple_politesse(self) -> None:
+        assert d("aujourd'hui je voudrais un rdv pour jeudi") == date(2026, 10, 29)
+        assert d("ce soir je réserve pour le 14") == date(2026, 11, 14)
+        assert d("aujourd'hui en huit") == date(2026, 11, 2)
+
+    def test_negations_courantes(self) -> None:
+        assert d("ce n'est pas possible demain, vendredi ?") == date(2026, 10, 30)
+        assert d("je ne serai pas là demain") is None
