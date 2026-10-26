@@ -430,6 +430,25 @@ class TestPublicBooking:
         assert r.status_code == 409
 
     @pytest.mark.asyncio
+    async def test_booking_pushes_live_event(
+        self, client: AsyncClient, db_tables: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, bid = await _auth(client, "live@x.com")
+        from jenny.api.routes import public_booking
+
+        seen: list[tuple] = []
+        monkeypatch.setattr(
+            public_booking, "publish_notification_event", lambda b, **kw: seen.append((b, kw))
+        )
+        r = await client.post(
+            f"/api/v1/public/booking/{await _slug(bid)}/book",
+            json={"full_name": "Sophie", "email": "live-s@x.com", "start_at": _at(10)},
+        )
+        assert r.status_code == 201, r.text
+        # agenda rafraîchi en direct
+        assert seen and seen[0][0] == UUID(bid) and seen[0][1]["kind"] == "booking"
+
+    @pytest.mark.asyncio
     async def test_unknown_prestation_400(self, client: AsyncClient, db_tables: None) -> None:
         _, bid = await _auth(client, "p1@x.com")
         h2, _ = await _auth(client, "p2@x.com")

@@ -26,6 +26,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 
 from jenny.api.dependencies import DbSession
+from jenny.core.events import publish_notification_event
 from jenny.core.logging import get_logger
 from jenny.db.conflicts import is_slot_taken
 from jenny.domain.models.appointment import Appointment
@@ -462,7 +463,10 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
             recipient=None,
             kind="booking",
             title="Nouvelle réservation en ligne",
-            body=f"{body.full_name.strip()} a réservé le {when_local}{with_staff}.",
+            body=(
+                f"{body.full_name.strip()} a réservé"
+                f"{f' « {presta.name} »' if presta else ''} le {when_local}{with_staff}."
+            ),
             meta={"appointment_id": str(appt.id), "customer_id": str(customer.id)},
         )
     )
@@ -489,6 +493,8 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
         appt_id=str(appt.id),
         customer_id=str(customer.id),
     )
+    # cloche + agenda en direct
+    publish_notification_event(b.id, kind="booking", title="Nouvelle réservation en ligne")
     # confirmation AU CLIENT : avant, il ne recevait rien du tout
     await notify_customer(
         db,
