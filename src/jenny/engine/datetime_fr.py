@@ -154,13 +154,20 @@ _DOM_RE = re.compile(
 
 # jours exclus (« pas demain »)
 _DAY_WORD = rf"(?:apres[\s-]?demain|demain|aujourd'?\s?hui|(?:{_WD_ALT})(?:\s+prochain)?)"
+# « pourquoi pas samedi » : un oui
 _NEG_BEFORE_RE = re.compile(
-    rf"\b(?:pas|sauf|hors)\s+(?:dispo(?:nibles?)?\s+|libres?\s+|possible\s+|la\s+)?(?:pour\s+)?"
-    rf"(?:le\s+|ce\s+)?{_DAY_WORD}\b"
+    r"(?<!pourquoi )\b(?:pas|sauf|hors)\s+(?:dispo(?:nibles?)?\s+|libres?\s+|possible\s+|la\s+)?"
+    rf"(?:pour\s+)?(?:le\s+|ce\s+)?{_DAY_WORD}\b"
+)
+# « pas un souci » : pas un refus
+_NOT_A_REFUSAL = (
+    r"(?!\s+(?:de\s+|d'|un\s+|une\s+|du\s+tout\s+(?:un\s+)?)?"
+    r"(?:soucis?|problemes?|mal|grave|inconvenients?|gene|genant)\b)"
 )
 _NEG_AFTER_RE = re.compile(
-    rf"\b{_DAY_WORD}\s*,?\s*(?:c'est|ce\s+n'est|ca\s+(?:ne\s+)?(?:va|m'arrange)|"
-    r"je\s+(?:ne\s+)?(?:peux|suis))\s+pas\b"
+    rf"\b{_DAY_WORD}\s*,?\s*(?:c'est|ce\s+n'est|"
+    r"ca\s+(?:ne\s+)?(?:me\s+|m'\s?)?(?:va|vas|arrange|irait|ira|m'arrange|m'arrangerait)|"
+    rf"je\s+(?:ne\s+)?(?:peux|suis))\s+pas\b{_NOT_A_REFUSAL}"
 )
 
 
@@ -408,7 +415,8 @@ _DURATION_CTX_RE = re.compile(
     r"presque\s+)?\d{1,2}\s*(?:h|heures?)(?![a-z])(?:\s*\d{2})?"
 )
 _NEG_TIME_RE = re.compile(
-    r"\bpas\s+(?:a\s+)?(?:\d{1,2}\s*(?:h|heures?|:)(?:\s*\d{2})?|midi|minuit)(?![a-z\d])"
+    r"(?<!pourquoi )\bpas\s+(?:a\s+)?(?:\d{1,2}\s*(?:h|heures?|:)(?:\s*\d{2})?|midi|minuit)"
+    r"(?![a-z\d])"
 )
 _HM_RE = re.compile(r"(?<![\d:,.])(\d{1,2})\s*(?:h|heures?|:)(?![a-z])\s*(\d{2})?(?!\d)")
 _MIDI_RE = re.compile(r"(?<!apres-)(?<!apres )(?<!avant )\b(midi|minuit)\b")
