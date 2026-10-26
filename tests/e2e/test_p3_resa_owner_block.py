@@ -160,6 +160,13 @@ class TestCoiffeurFlou:
         rows = await _blocks(biz)
         assert len(rows) == 1 and rows[0].staff_id == members["Marie Leroy"].id
 
+    async def test_deux_coiffeurs_un_par_un(self, db_tables) -> None:
+        biz, _ = await _salon(("Léa", True), ("Marc", True))
+        out = await _say(biz, f"bloque Léa et Marc le {_txt(_day())} 14h")
+        assert out["data"].get("several") is True
+        assert "Léa puis pour Marc" in out["response"]
+        assert await _blocks(biz) == []
+
     async def test_accent_oublie(self, db_tables) -> None:
         biz, members = await _salon(("Léa", True), ("Marc", True))
         await _say(biz, f"bloque lea le {_txt(_day())} 14h")

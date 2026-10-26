@@ -290,12 +290,22 @@ async def _whole_team(db: AsyncSession, bid: UUID) -> list[Staff]:
 def _unclear_staff(pool: StaffPool, team: list[Staff], message: str) -> dict | None:
     """Coiffeur flou : on demande."""
     named = staff_named(team, message)
-    if len(named) > 1:
+    firsts = {re.findall(r"[a-z0-9]+", _plain(m.display_name))[0] for m in named}
+    if len(named) > 1 and len(firsts) == 1:
+        # même prénom : lequel ?
         return {
             "response": f"Tu parles de qui : {' ou '.join(m.display_name for m in named)} ? "
             "Redis-moi avec le nom complet et je bloque.",
             "action": "block_slot",
             "data": {"ambiguous": True},
+        }
+    if len(named) > 1:
+        # plusieurs : un par un
+        return {
+            "response": f"Je bloque une personne à la fois : redis-le pour "
+            f"{' puis pour '.join(m.display_name for m in named)}.",
+            "action": "block_slot",
+            "data": {"several": True},
         }
     if named:
         m = named[0]
