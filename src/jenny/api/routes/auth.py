@@ -3,6 +3,8 @@
 bcrypt (mots de passe, codes) tourne dans un thread : la boucle asyncio n'est
 jamais bloquée. Brute-force freiné par IP (middleware) et par email (ici) :
 seuls les échecs comptent, par (email, IP) puis plafond global par email.
+L'essai est réservé de façon atomique AVANT bcrypt, puis rendu s'il réussit :
+une rafale parallèle ne dépasse jamais le plafond.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import httpx
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from jenny.api.auth.email_verification import (
     MAX_VERIFY_ATTEMPTS,
@@ -36,11 +38,12 @@ from jenny.api.dependencies import (
     member_business_ids,
 )
 from jenny.api.middleware.rate_limit import (
-    _client_ip,
-    add_failure,
     clear_failures,
+    client_key,
     limiter_active,
     recent_failures,
+    release_failure,
+    reserve_failure,
 )
 from jenny.core.config import get_settings
 from jenny.core.logging import get_logger
@@ -124,32 +127,55 @@ def _fail_keys(action: str, email: str, ip: str, pair_max: int, email_max: int) 
     return keys
 
 
-async def _blocked(keys: list) -> bool:
-    """Trop d'échecs ?"""
+async def _reserve(keys: list) -> list | None:
+    """Réserve l'essai, None si bloqué."""
+    if not limiter_active():
+        return []
+    held: list = []
+    for bucket, key, limit, window in keys:
+        token = await reserve_failure(bucket, key, limit, window)
+        if token is None:
+            # refus : rien ne compte
+            await _release(held)
+            return None
+        held.append((bucket, key, token))
+    return held
+
+
+async def _release(held: list) -> None:
+    """Pas un échec : on rend."""
+    for bucket, key, token in held:
+        await release_failure(bucket, key, token)
+
+
+async def _succeeded(held: list) -> None:
+    """Succès : compteurs email à zéro."""
+    for bucket, key, token in held:
+        if bucket.endswith("_ip"):
+            # l'ip garde ses échecs
+            await release_failure(bucket, key, token)
+        else:
+            await clear_failures(bucket, key)
+
+
+async def _reset_burned(email: str) -> bool:
+    """Plafond email atteint ?"""
     if not limiter_active():
         return False
-    for bucket, key, limit, window in keys:
-        if await recent_failures(bucket, key, window) >= limit:
-            return True
-    return False
+    return await recent_failures("reset_email", _norm(email), _WINDOW) >= _RESET_EMAIL_MAX
 
 
-async def _failed(keys: list) -> None:
-    """Note un échec."""
-    if not limiter_active():
-        return
-    for bucket, key, _limit, window in keys:
-        await add_failure(bucket, key, window)
-
-
-async def _succeeded(keys: list) -> None:
-    """Succès : compteurs email à zéro."""
-    if not limiter_active():
-        return
-    # l'ip garde ses échecs
-    for bucket, key, _limit, _window in keys:
-        if not bucket.endswith("_ip"):
-            await clear_failures(bucket, key)
+async def _take_verify_try(db, user: User) -> bool:
+    """Un essai de code, atomique."""
+    res = await db.execute(
+        update(User)
+        .where(User.id == user.id, User.email_verification_attempts < MAX_VERIFY_ATTEMPTS)
+        .values(email_verification_attempts=User.email_verification_attempts + 1)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    await db.refresh(user)
+    return res.rowcount == 1
 
 
 async def _ensure_business_for_user(db, user: User, display_name: str | None) -> UUID:
@@ -283,18 +309,19 @@ async def register(body: RegisterRequest, db: DbSession) -> JSONResponse:
 @router.post("/login")
 async def login(body: LoginRequest, db: DbSession, request: Request) -> JSONResponse:
     keys = _fail_keys(
-        "login", body.email, _client_ip(request), _LOGIN_PAIR_MAX, _LOGIN_EMAIL_MAX
+        "login", body.email, client_key(request), _LOGIN_PAIR_MAX, _LOGIN_EMAIL_MAX
     )
-    # avant bcrypt
-    if await _blocked(keys):
+    # réservé avant bcrypt
+    held = await _reserve(keys)
+    if held is None:
         raise HTTPException(429, _TOO_MANY_TRIES)
     r = await db.execute(select(User).where(User.email == body.email))
     user = r.scalar_one_or_none()
     ok = await _check(body.password, user.password_hash if user else None)
     if user is None or not ok:
-        await _failed(keys)
+        # l'essai reste compté
         raise HTTPException(401, "Email ou mot de passe incorrect")
-    await _succeeded(keys)
+    await _succeeded(held)
     if not user.email_verified:
         raise HTTPException(403, "email_not_verified")
 
@@ -327,15 +354,13 @@ async def verify_email(body: VerifyEmailRequest, db: DbSession) -> JSONResponse:
     if is_expired(user.email_verification_expires_at):
         raise HTTPException(400, "Code invalide ou expiré")
 
-    if user.email_verification_attempts >= MAX_VERIFY_ATTEMPTS:
+    # essai pris avant bcrypt
+    if not await _take_verify_try(db, user):
         raise HTTPException(429, "Trop de tentatives. Demandez un nouveau code.")
 
     if not await asyncio.to_thread(
         verify_code, body.code.strip(), user.email_verification_code_hash
     ):
-        user.email_verification_attempts += 1
-        # persiste le compteur avant
-        await db.commit()
         raise HTTPException(400, "Code invalide")
 
     user.email_verified = True
@@ -401,7 +426,7 @@ async def forgot_password(
 ) -> JSONResponse:
     """envoie un code de reset."""
     # anti spam d'emails
-    pair = f"{_norm(body.email)}|{_client_ip(request)}"
+    pair = f"{_norm(body.email)}|{client_key(request)}"
     if await _too_many("forgot_pair", pair, limit=_FORGOT_PAIR_MAX) or await _too_many(
         "forgot", body.email, limit=_FORGOT_EMAIL_MAX
     ):
@@ -433,25 +458,32 @@ async def reset_password(
 ) -> JSONResponse:
     """reset via code email."""
     keys = _fail_keys(
-        "reset", body.email, _client_ip(request), _RESET_PAIR_MAX, _RESET_EMAIL_MAX
+        "reset", body.email, client_key(request), _RESET_PAIR_MAX, _RESET_EMAIL_MAX
     )
-    # peu d'essais permis
-    if await _blocked(keys):
+    # peu d'essais, réservés
+    held = await _reserve(keys)
+    if held is None:
         raise HTTPException(429, _TOO_MANY_TRIES)
     r = await db.execute(select(User).where(User.email == body.email))
     user = r.scalar_one_or_none()
     if user is None or not user.password_reset_code_hash:
-        await _failed(keys)
         raise HTTPException(400, "Code invalide ou expiré")
     if is_expired(user.password_reset_expires_at):
+        await _release(held)
         raise HTTPException(400, "Code expiré, redemandez-en un")
     if not await asyncio.to_thread(
         verify_code, body.code.strip(), user.password_reset_code_hash
     ):
-        await _failed(keys)
+        if await _reset_burned(body.email):
+            # trop de faux : code grillé
+            user.password_reset_code_hash = None
+            user.password_reset_expires_at = None
+            await db.commit()
+            logger.warning("auth.reset_password.code_burned", user_id=str(user.id))
         raise HTTPException(400, "Code invalide")
     pw_err = _check_password_strength(body.new_password)
     if pw_err:
+        await _release(held)
         raise HTTPException(400, pw_err)
 
     user.password_hash = await _hash(body.new_password)
@@ -459,7 +491,7 @@ async def reset_password(
     user.password_reset_expires_at = None
     user.email_verified = True  # adresse prouvée par email
     await db.commit()
-    await _succeeded(keys)
+    await _succeeded(held)
     logger.info("auth.reset_password.done", user_id=str(user.id))
     return JSONResponse({"status": "reset"})
 
