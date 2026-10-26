@@ -573,6 +573,11 @@ class StateManager:
             except Exception as e:
                 logger.warning("state_manager.redis_save_error", error=str(e))
 
+    def forget(self, conversation_id: UUID) -> bool:
+        """Oublie la copie mémoire seule."""
+        # Redis garde l'état
+        return self._states.pop(str(conversation_id)) is not None
+
     def delete(self, conversation_id: UUID) -> None:
         """Supprime un état."""
         key = str(conversation_id)
