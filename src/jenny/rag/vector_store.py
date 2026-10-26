@@ -96,6 +96,43 @@ class _Caps:
 
 _CAPS: dict[str, _Caps] = {}
 
+# verrous consultatifs de la KB
+_LOCK_SQL = "SELECT {fn}(hashtextextended(:key, 0))"
+
+
+def _is_pg(session: AsyncSession) -> bool:
+    try:
+        return session.get_bind().dialect.name == "postgresql"
+    except Exception:
+        return False
+
+
+async def lock_entry(session: AsyncSession, business_id: UUID | str, knowledge_id: str) -> bool:
+    """Verrou d'une entrée, jusqu'au commit."""
+    if not _is_pg(session):
+        return False
+    # salon partagé, puis l'entrée
+    await session.execute(
+        text(_LOCK_SQL.format(fn="pg_advisory_xact_lock_shared")),
+        {"key": f"jenny:kb:{business_id}"},
+    )
+    await session.execute(
+        text(_LOCK_SQL.format(fn="pg_advisory_xact_lock")),
+        {"key": f"jenny:kb:{business_id}:{knowledge_id}"},
+    )
+    return True
+
+
+async def lock_business_kb(session: AsyncSession, business_id: UUID | str) -> bool:
+    """Verrou de toute la KB d'un salon."""
+    if not _is_pg(session):
+        return False
+    await session.execute(
+        text(_LOCK_SQL.format(fn="pg_advisory_xact_lock")),
+        {"key": f"jenny:kb:{business_id}"},
+    )
+    return True
+
 
 class PgVectorStore:
     """store pgvector scopé par business."""

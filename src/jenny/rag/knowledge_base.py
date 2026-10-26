@@ -22,7 +22,7 @@ from jenny.core.logging import get_logger
 from jenny.rag.embeddings import get_default_embedder
 from jenny.rag.ingestion import DocumentIngester, build_embed_text, embed_header, reassemble
 from jenny.rag.retriever import embed_query
-from jenny.rag.vector_store import PgVectorStore
+from jenny.rag.vector_store import PgVectorStore, lock_entry
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -327,6 +327,8 @@ class KnowledgeBase:
 
     async def delete_entry(self, knowledge_id: str) -> bool:
         """Supprime une entrée (tous ses chunks) de la base de connaissances."""
+        # pas pendant une réindexation
+        await lock_entry(self.session, self.business_id, knowledge_id)
         count = await self.vector_store.delete_by_knowledge_id(
             self.session, self.business_id, knowledge_id
         )
@@ -343,6 +345,12 @@ class KnowledgeBase:
     ) -> KnowledgeEntry | None:
         """Remplace le texte, même knowledge_id (None si absente)."""
         self._require_pgvector()
+        prepare = getattr(self.embedder, "prepare", None)
+        if prepare is not None:
+            # modèle chargé avant le verrou
+            await prepare()
+        # lu et réécrit sous verrou
+        await lock_entry(self.session, self.business_id, knowledge_id)
         current = await self.get_entry(knowledge_id)
         if current is None:
             return None
