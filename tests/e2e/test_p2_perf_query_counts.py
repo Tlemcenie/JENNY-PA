@@ -395,3 +395,31 @@ async def test_duplicates_do_not_crash_ingestion(client: AsyncClient, db_tables:
             )
         )
     assert ing.customer.id == cid and ing.conversation.id == conv.id
+
+
+@pytest.mark.asyncio
+async def test_reply_and_assign_query_count(client: AsyncClient, db_tables: None) -> None:
+    headers, bid = await _auth(client, "reply@perf.com")
+    await _seed_customer(bid)
+    async with async_session_factory() as s:
+        conv_id = (
+            await s.execute(
+                select(Conversation.id).where(Conversation.external_conversation_id == "ext-0")
+            )
+        ).scalar_one()
+    base = f"/api/v1/conversations/{conv_id}"
+
+    with count_sql() as stmts:
+        r = await client.post(f"{base}/reply", headers=headers, json={"text": "Bien reçu !"})
+    assert r.status_code == 200, r.text
+    _report("POST /conversations/{id}/reply", stmts)
+    msg = r.json()["message"]
+    assert msg["content"] == "Bien reçu !" and msg["created_at"]
+    assert not any("customer_documents" in q for q in stmts)
+
+    with count_sql() as more:
+        r = await client.post(f"{base}/assign", headers=headers, json={"assignee": "max@salon.fr"})
+    assert r.status_code == 200, r.text
+    _report("POST /conversations/{id}/assign", more)
+    assert r.json()["assigned_to"] == "max@salon.fr"
+    assert not any("FROM businesses" in q for q in more)
