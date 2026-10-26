@@ -74,26 +74,45 @@ _CLOSING_RE = re.compile(
     re.I,
 )
 
-# avant « à demain » : début, virgule, merci
-_BYE_LEAD = r"(?:^|[,;.!]|\b(?:merci|ok|super|parfait|top|alors|et|bon(?:ne)?\s+\w+))\s*"
+# avant « à demain » : début, ponctuation, merci
+_BYE_LEAD = (
+    # pas « jusqu'à demain »
+    r"(?:^|[^\w\s'’]|\b(?:merci|ok|super|parfait|top|alors|et|bisous|bises|bcp|beaucoup|vous|"  # noqa: RUF001
+    r"toi|encore|bon(?:ne)?\s+\w+))\s*"
+)
+_WD_FR = r"lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche"
+_HOUR_FR = r"\d{1,2}\s*h(?:\s*\d{2})?"
+# fin d'au revoir : merci, bisous
+_BYE_TAIL = (
+    rf"(?:alors|donc|matin|soir|midi|sans\s+faute|bisous|bises|bisou|{_HOUR_FR}|"
+    r"(?:et\s+)?(?:encore\s+)?merci(?:\s+(?:encore|beaucoup|bcp|bien|infiniment|"
+    r"[àa]\s+vous|pour\s+tout))?|j['’]ai\s+h[âa]te|[àa]\s+(?:vous|toi|tous)|"  # noqa: RUF001
+    r"pour\s+(?:mon|ma|le|la|notre|votre)\s+(?:rdv|rendez[\s-]?vous|r[ée]servation)|"
+    r"(?:et\s+)?bonne\s+(?:journ[ée]e|soir[ée]e|nuit|fin\s+de\s+journ[ée]e))"
+)
 # « merci, à jeudi 10h ! »
 _FAREWELL_WHEN_RE = re.compile(
-    rf"{_BYE_LEAD}[àa]\s+(?:demain|apr[èe]s[\s-]?demain|lundi|mardi|mercredi|jeudi|vendredi|"
-    r"samedi|dimanche|midi|tout\s+[àa]\s+l['’]heure)(?:\s+prochain)?"  # noqa: RUF001
-    r"(?:[\s,]+(?:[àa]\s+)?(?:\d{1,2}\s*h(?:\s*\d{2})?|midi))?"
-    r"(?:[\s,]+(?:alors|donc|matin|soir|midi))*\s*[!.]*\s*$",
+    rf"{_BYE_LEAD}[àa]\s+(?:demain|apr[èe]s[\s-]?demain|{_WD_FR}|"
+    r"midi|tout\s+[àa]\s+l['’]heure)(?:\s+prochain)?(?:\s+en\s+(?:huit|quinze))?"  # noqa: RUF001
+    rf"(?:[\s,]+(?:[àa]\s+)?(?:{_HOUR_FR}|midi))?"
+    rf"(?:[^\w?]+{_BYE_TAIL})*[^\w?]*$",
     re.I,
 )
 # « bon week-end » : un souhait
 _WISH_RE = re.compile(
     r"\bbon(?:ne)?\s+(?:week[\s-]?end|soir[ée]e|nuit|semaine|vacances|"
-    r"apr[èe]s[\s-]?midi|aprem|fin\s+de\s+(?:journ[ée]e|semaine|soir[ée]e))\b",
+    r"apr[èe]s[\s-]?midi|aprem|fin\s+de\s+(?:journ[ée]e|semaine|soir[ée]e))\b"
+    # « bon dimanche ! », pas « bon samedi 10h »
+    rf"|\bbon(?:ne)?\s+(?:{_WD_FR})\b(?=\s*(?:$|[^\w\s?]|et\b|[àa]\s+(?:vous|toi|tous)\b))",
     re.I,
 )
 # « à ce soir », « à la prochaine »
 _SEE_YOU_RE = re.compile(
-    r"\b[àa]\s+(?:ce\s+(?:soir|midi|matin)|cet\s+apr[èe]s[\s-]?midi|tout\s+[àa]\s+l['’]heure|"  # noqa: RUF001
-    r"la\s+semaine\s+prochaine|la\s+prochaine|plus\s+tard|tr[èe]s\s+vite)\b",
+    r"\b[àa]\s+(?:ce\s+(?:soir|midi|matin)|cet\s+apr[èe]s[\s-]?midi|cet\s+aprem|"
+    r"tout\s+[àa]\s+l['’]heure|la\s+semaine\s+prochaine|la\s+prochaine|plus\s+tard|"  # noqa: RUF001
+    r"tr[èe]s\s+vite|dans\s+(?:\d{1,2}|une?|deux|trois|quinze|huit)\s+(?:jours?|semaines?|mois))\b"
+    # « à ce soir 18h »
+    rf"(?:[\s,]+(?:[àa]\s+|vers\s+)?{_HOUR_FR})?",
     re.I,
 )
 # vrai signal de report
@@ -355,7 +374,7 @@ def detect_appointment_mgmt(message: str, awaiting_confirmation: bool) -> str | 
     return None
 
 
-def strip_farewell(message: str) -> str:
+def strip_farewell(message: str, *, keep_days: bool = False) -> str:
     """Retire « bon week-end », « à demain »."""
     m = _WISH_RE.sub(" ", message or "")
     # « décaler à jeudi » : on garde
@@ -366,13 +385,16 @@ def strip_farewell(message: str) -> str:
         or re.search(r"\bavanc", m, re.I)
     )
     if not keep:
-        m = _FAREWELL_WHEN_RE.sub(" ", _SEE_YOU_RE.sub(" ", m))
+        m = _SEE_YOU_RE.sub(" ", m)
+        # créneau proposé : « à jeudi 10h » = oui
+        if not keep_days:
+            m = _FAREWELL_WHEN_RE.sub(" ", m)
     return m
 
 
-def is_farewell(message: str, *, today: date | None = None) -> bool:
+def is_farewell(message: str, *, today: date | None = None, keep_days: bool = False) -> bool:
     """Juste un au revoir ?"""
-    rest = strip_farewell(message)
+    rest = strip_farewell(message, keep_days=keep_days)
     if rest == (message or ""):
         return False
     return not (parse_fr_date(rest, today=today) or parse_fr_time(rest))
@@ -430,7 +452,9 @@ def is_implicit_reschedule(
         or intent in _BYE_INTENTS
     ):
         return cue
-    return cue or bool(_ALT_LEAD_RE.match(m)) or _when_only(m)
+    # « sinon jeudi ? », pas « et jeudi vous ouvrez ? »
+    alt = _ALT_LEAD_RE.match(m)
+    return cue or bool(alt and _when_only(m[alt.end() :])) or _when_only(m)
 
 
 # clés NER gardées en slot
@@ -640,6 +664,11 @@ class ConversationEngine:
         state.expire_latches(LATCH_MAX_TURNS)
         today = today_in(state.business_timezone)
         prev_pending = state.pending_intent
+        # créneaux proposés au tour d'avant
+        _prev_ar = state.action_result or {}
+        _offered = prev_pending in ("appointment", "manage_appointment") and bool(
+            _prev_ar.get("propose_slots") or _prev_ar.get("alternatives_text")
+        )
 
         # 2. intention
         intent_result = await self._detect_intent(request.message_text, state)
@@ -653,8 +682,10 @@ class ConversationEngine:
             "escalation",
         ) or (_model_intent == "complaint" and _COMPLAINT_SIGNAL_RE.search(_msg_txt))
         # « bon week-end » : pas un jour
-        _when_txt = strip_farewell(_msg_txt)
-        _farewell = is_farewell(_msg_txt, today=today)
+        _when_txt = strip_farewell(_msg_txt, keep_days=_offered)
+        _farewell = is_farewell(_msg_txt, today=today, keep_days=_offered)
+        # jour ou heure dans le message
+        _slot_in_msg = bool(parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt))
         # rdv sans mot-clé
         _has_when = False
         if not _blocks_appt_override:
@@ -739,6 +770,26 @@ class ConversationEngine:
                 "needs_clarification": False,
             }
 
+        # « à demain pour mon rdv » : un au revoir
+        _bye_only = (
+            _farewell
+            and "?" not in _msg_txt
+            and not _STRONG_APPOINTMENT_RE.search(_when_txt)
+            and len(re.findall(r"\w+", _when_txt)) <= 4
+        )
+        if _bye_only and intent_result["intent"] in (
+            "appointment",
+            "manage_appointment",
+            "planning",
+        ):
+            logger.info("engine.intent.farewell_to_closing", was=intent_result["intent"])
+            intent_result = {
+                **intent_result,
+                "intent": "closing",
+                "confidence": max(intent_result.get("confidence", 0.0), 0.8),
+                "needs_clarification": False,
+            }
+
         intent = intent_result["intent"]
         intent_confidence = intent_result["confidence"]
         detected_intents = intent_result.get("detected_intents", [])
@@ -750,11 +801,12 @@ class ConversationEngine:
         if state.pending_intent and state.pending_intent != intent:
             msg_l = request.message_text or ""
             real_closing = (intent == "closing" and bool(_CLOSING_RE.search(msg_l))) or _farewell
+            # « merci, à jeudi 10h » choisit le créneau
+            if _offered and _slot_in_msg:
+                real_closing = False
             hard_interrupt = intent in _INTERRUPTING_INTENTS or real_closing
             # complète une prise de rdv ?
-            provides_appt_info = state.pending_intent == "appointment" and bool(
-                parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt)
-            )
+            provides_appt_info = state.pending_intent == "appointment" and _slot_in_msg
             # question d'info pendant un rdv
             info_interrupt = intent in _INFO_REQUEST_INTENTS and not provides_appt_info
             real_complaint = intent == "complaint" and bool(_COMPLAINT_SIGNAL_RE.search(msg_l))
