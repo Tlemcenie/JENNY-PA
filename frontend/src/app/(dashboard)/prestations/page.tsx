@@ -163,7 +163,13 @@ export default function PrestationsPage() {
     setSeeding(true);
     try {
       const res = await seedCoiffeurTemplate();
-      toast.success(`Catalogue créé · ${res.prestations} prestation(s) ajoutée(s).`);
+      // fiches kb aussi créées
+      const kb = res.knowledge > 0 ? ` · ${res.knowledge} fiche(s) ajoutée(s) à la base` : "";
+      toast.success(
+        res.prestations > 0
+          ? `Catalogue créé · ${res.prestations} prestation(s) ajoutée(s)${kb}.`
+          : `Vous aviez déjà des prestations : rien n'a été dupliqué${kb}.`
+      );
       await fetchPrestations();
     } catch (err) {
       toast.error(humanError(err, "Échec de la création du catalogue."));

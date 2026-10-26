@@ -85,7 +85,7 @@ export function SetupChecklist({
       const r = await seedCoiffeurTemplate();
       const kbNote =
         r.knowledge > 0
-          ? ` ${r.knowledge} fiches génériques ajoutées à la base (horaires, annulation) : relisez-les.`
+          ? ` ${r.knowledge} fiche${r.knowledge > 1 ? "s" : ""} tirée${r.knowledge > 1 ? "s" : ""} de vos réglages (horaires, acompte, rappels…) ajoutée${r.knowledge > 1 ? "s" : ""} à la base : relisez-les.`
           : "";
       setSeedMsg(
         r.prestations > 0
