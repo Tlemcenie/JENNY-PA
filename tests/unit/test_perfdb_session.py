@@ -21,7 +21,7 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_sqlite_ignores_pool_args() -> None:
-    assert engine_options("sqlite+aiosqlite:///test.db") == {"echo": False}
+    assert engine_options("sqlite+aiosqlite:///test.db") == {"echo": False, "hide_parameters": True}
 
 
 def test_postgres_pool_defaults() -> None:
@@ -43,9 +43,25 @@ def test_postgres_pool_defaults() -> None:
 def test_echo_only_on_demand(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JENNY_ENV", "dev")
     assert engine_options(PG)["echo"] is False
+    assert engine_options(PG)["hide_parameters"] is True
     monkeypatch.setenv("JENNY_SQL_ECHO", "1")
     assert engine_options(PG)["echo"] is True
+    assert engine_options(PG)["hide_parameters"] is False  # debug local
     assert engine_options("sqlite+aiosqlite:///x.db")["echo"] is True
+
+
+@pytest.mark.asyncio
+async def test_errors_hide_parameters() -> None:
+    from sqlalchemy import text
+
+    eng = create_async_engine("sqlite+aiosqlite://", **engine_options("sqlite+aiosqlite://"))
+    try:
+        async with eng.connect() as conn:
+            with pytest.raises(Exception) as exc:
+                await conn.execute(text("SELECT * FROM nope WHERE x = :v"), {"v": "secret@mail.fr"})
+        assert "secret@mail.fr" not in str(exc.value)
+    finally:
+        await eng.dispose()
 
 
 def test_pool_size_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

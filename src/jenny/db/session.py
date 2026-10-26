@@ -39,7 +39,9 @@ def _pg_stmt_name() -> str:
 def engine_options(url: str) -> dict[str, Any]:
     """Options du moteur selon la base."""
     # SQL en clair seulement sur demande
-    opts: dict[str, Any] = {"echo": os.getenv("JENNY_SQL_ECHO", "").strip().lower() in _TRUE}
+    echo = os.getenv("JENNY_SQL_ECHO", "").strip().lower() in _TRUE
+    # pas de données perso dans les logs
+    opts: dict[str, Any] = {"echo": echo, "hide_parameters": not echo}
     if url.startswith("sqlite"):
         return opts  # pool par défaut
     if os.getenv("JENNY_DB_POOLER", "").strip().lower() == "transaction":
