@@ -7,6 +7,7 @@ import {
   useRef,
   type KeyboardEvent,
 } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import {
   Plus,
@@ -137,6 +138,31 @@ function SaveStatus({
       )}
     </div>
   );
+}
+
+// exemple de réponse par ton
+function previewReplies(tone: ToneId, tu: boolean): [string, string] {
+  const te = tu ? "te" : "vous";
+  const ta = tu ? "ta" : "votre";
+  const first: Record<ToneId, string> = {
+    pro: `Bonjour ! Samedi, il reste 10h30 ou 14h pour ${ta} coupe. Lequel ${te} convient ?`,
+    cool: `Hello ! Samedi j'ai 10h30 ou 14h pour ${ta} coupe, ça ${te} va ?`,
+    vendeur: `Bonne idée ! Samedi : 10h30 ou 14h. Et un soin avec ${ta} coupe ? Le rendu est top.`,
+    chaleureux: `Avec plaisir ! Samedi, je peux ${te} proposer 10h30 ou 14h pour ${ta} coupe.`,
+  };
+  const second = tu
+    ? "C'est noté pour samedi 14h. Je t'envoie un rappel la veille."
+    : "C'est noté pour samedi 14h. Je vous envoie un rappel la veille.";
+  return [first[tone], second];
+}
+
+// json à clés triées
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) => {
+    if (!v || typeof v !== "object" || Array.isArray(v)) return v;
+    const obj = v as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(obj).sort().map((k) => [k, obj[k]]));
+  });
 }
 
 // lit sector en extra
@@ -316,7 +342,7 @@ export default function BrainPage() {
         return;
       }
       const payload = buildPayload();
-      const snap = JSON.stringify(payload);
+      const snap = stableStringify(payload);
       // rien de neuf à envoyer
       if (silent && snap === lastSaved.current) {
         dirty.current = false;
@@ -356,7 +382,7 @@ export default function BrainPage() {
   // autosave débouncé
   useEffect(() => {
     if (loading || loadError || readOnly) return;
-    const snapshot = JSON.stringify(buildPayload());
+    const snapshot = stableStringify(buildPayload());
     if (!hydrated.current) {
       hydrated.current = true;
       lastSaved.current = snapshot; // déjà sauvé
@@ -451,13 +477,13 @@ export default function BrainPage() {
   useEffect(() => {
     let alive = true;
     const LABELS: Record<string, string> = {
-      persona_humaine: "Persona humaine",
+      pas_de_fuite_interne: "Pas de jargon technique",
       info_cle_presente: "Précision factuelle",
       interdits_absents: "Respect des règles",
       langue: "Bonne langue",
       lacune_detectee: "Lacunes détectées",
     };
-    const ORDER = ["persona_humaine", "interdits_absents", "info_cle_presente"];
+    const ORDER = ["pas_de_fuite_interne", "interdits_absents", "info_cle_presente"];
     void (async () => {
       try {
         const m = await getJennyMetrics();
@@ -550,6 +576,7 @@ export default function BrainPage() {
   };
 
   const toneLabel = (TONES.find((t) => t.id === tone)?.name || "Cool").toUpperCase();
+  const [replyOne, replyTwo] = previewReplies(tone, tutoiement);
 
   // input partagé
   const fieldClass =
@@ -1234,7 +1261,7 @@ export default function BrainPage() {
           >
             <div className="flex items-center gap-2 mb-3">
               <span className="w-1.5 h-1.5 rounded-full bg-jenny-success" />
-              <span className={eyebrowClass}>aperçu en direct</span>
+              <span className={eyebrowClass}>exemple selon le ton</span>
             </div>
 
             {/* téléphone sombre */}
@@ -1259,7 +1286,7 @@ export default function BrainPage() {
 
               <div className="flex-1 flex flex-col gap-2 overflow-hidden">
                 <div className="self-end max-w-[85%] px-[11px] py-2 bg-jenny-coral text-[#1a0a08] text-[11.5px] font-medium rounded-[12px_12px_3px_12px]">
-                  Salut ! Vous livrez vite à Lyon ?
+                  Bonjour, vous avez de la place samedi pour une coupe ?
                 </div>
                 <div
                   className="self-start max-w-[88%] px-[11px] py-2 text-[11.5px] rounded-[12px_12px_12px_3px]"
@@ -1269,11 +1296,10 @@ export default function BrainPage() {
                     border: "1px solid rgba(255,255,255,0.06)",
                   }}
                 >
-                  Hello 👋 Yes, à Lyon on est à 48-72h via Colissimo. Tu cherches une pièce
-                  particulière ?
+                  {replyOne}
                 </div>
                 <div className="self-end max-w-[85%] px-[11px] py-2 bg-jenny-coral text-[#1a0a08] text-[11.5px] font-medium rounded-[12px_12px_3px_12px]">
-                  Le sac caramel
+                  14h c&apos;est parfait
                 </div>
                 <div
                   className="self-start max-w-[88%] px-[11px] py-2 text-[11.5px] rounded-[12px_12px_12px_3px]"
@@ -1283,17 +1309,18 @@ export default function BrainPage() {
                     border: "1px solid rgba(255,255,255,0.06)",
                   }}
                 >
-                  Top choix ✨ C&apos;est une pièce unique cousue main à l&apos;atelier. Il en reste
-                  3. Tu veux que je te montre ?
+                  {replyTwo}
                 </div>
               </div>
 
-              <div
-                className="px-2 py-2 rounded-[10px] text-[10px] font-mono text-center"
-                style={{ background: "rgba(255,255,255,0.04)", color: "rgba(244,241,237,0.5)" }}
+              {/* vrai test dans le chat */}
+              <Link
+                href="/chat"
+                className="block px-2 py-2 rounded-[10px] text-[10px] font-mono text-center transition-colors hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-jenny-coral/40"
+                style={{ background: "rgba(255,255,255,0.04)", color: "rgba(244,241,237,0.6)" }}
               >
-                ↓ tape pour tester en direct ↓
-              </div>
+                Tester Jenny dans le chat →
+              </Link>
             </div>
 
             {/* tests de cohérence */}

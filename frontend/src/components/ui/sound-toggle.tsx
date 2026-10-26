@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bell, BellOff } from "lucide-react";
+import { Volume2, VolumeX } from "lucide-react";
 import { isSoundEnabled, setSoundEnabled, playNotificationSound } from "@/lib/sound";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +31,7 @@ export function SoundToggle({ className }: { className?: string }) {
         className
       )}
     >
-      {on ? <Bell className="w-[18px] h-[18px]" /> : <BellOff className="w-[18px] h-[18px]" />}
+      {on ? <Volume2 className="w-[18px] h-[18px]" /> : <VolumeX className="w-[18px] h-[18px]" />}
     </button>
   );
 }

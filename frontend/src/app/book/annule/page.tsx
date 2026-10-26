@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
+
 // page retour Stripe : paiement annulé
+export const metadata: Metadata = {
+  title: "Paiement annulé",
+  robots: { index: false, follow: false },
+};
+
 const PAGE_BG =
   "radial-gradient(ellipse at 70% -10%, rgba(255,127,106,0.20) 0%, transparent 52%), radial-gradient(ellipse at 0% 90%, rgba(114,132,168,0.12) 0%, transparent 50%), #0E0B14";
 
@@ -32,7 +39,7 @@ export default async function DepositCancelPage({
             Paiement annulé
           </h1>
           <p className="text-[15px] leading-[1.6] text-[#F4F1ED]/70">
-            Le paiement n'a pas abouti, ton créneau n'est donc pas encore
+            Le paiement n&apos;a pas abouti, ton créneau n&apos;est donc pas encore
             confirmé. Tu peux réessayer quand tu veux.
           </p>
           {dep && (

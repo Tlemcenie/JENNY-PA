@@ -25,6 +25,8 @@ function loadMascot(): Promise<string | null> {
 export default async function Image({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const [res, logo] = await Promise.all([getPublicBooking(slug), loadMascot()]);
+  // api coupée : pas d'image en cache
+  if (res.status === "error") throw new Error("API de réservation injoignable");
   const name = res.status === "ok" ? res.info.name : "Réservation en ligne";
   const nameSize = name.length > 34 ? 64 : name.length > 20 ? 80 : 96;
 

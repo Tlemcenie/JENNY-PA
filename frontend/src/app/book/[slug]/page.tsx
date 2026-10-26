@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import type { Metadata, Viewport } from "next";
+import { notFound } from "next/navigation";
 import BookingClient from "./booking-client";
 import {
   DAY_LABELS,
@@ -76,9 +77,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function BookPage({ params }: Props) {
   const { slug } = await params;
   const [res, site] = await Promise.all([getPublicBooking(slug), getSiteUrl()]);
+  // vrai 404, pas de soft 404
+  if (res.status === "notfound") notFound();
 
   return (
-    <BookingClient slug={slug}>
+    <BookingClient slug={slug} initialInfo={res.status === "ok" ? res.info : null}>
       {res.status === "ok" && (
         <SalonInfo info={res.info} url={`${site}/book/${encodeURIComponent(slug)}`} />
       )}
@@ -86,19 +89,10 @@ export default async function BookPage({ params }: Props) {
   );
 }
 
-// catalogue public (optionnel)
-type SalonInfoData = PublicBookingInfo & {
-  prestations?: { id: string; name: string; duration_minutes: number; price_cents: number | null }[];
-};
-
 // infos pratiques rendues serveur
-function SalonInfo({ info, url }: { info: SalonInfoData; url: string }) {
+function SalonInfo({ info, url }: { info: PublicBookingInfo; url: string }) {
   const phone = info.phone?.trim();
   const prestations = info.prestations ?? [];
-  const address = [info.address, [info.postal_code, info.city].filter(Boolean).join(" ")]
-    .map((part) => part?.trim())
-    .filter(Boolean)
-    .join(", ");
   const days = DAY_LABELS.map(([key, label]) => ({ key, label, w: dayWindow(info, key) }));
   // pas d'horaires, pas de bloc
   const hasHours = days.some((d) => d.w);
@@ -120,7 +114,6 @@ function SalonInfo({ info, url }: { info: SalonInfoData; url: string }) {
           Infos pratiques
         </h2>
         <p className="text-[15px] font-semibold">{info.name}</p>
-        {address && <p className="mt-1 text-[13.5px] text-[#F4F1ED]/65">{address}</p>}
         {phone && (
           <p className="mt-1 text-[13.5px]">
             <a

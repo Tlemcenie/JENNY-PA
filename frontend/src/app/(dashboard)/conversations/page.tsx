@@ -94,7 +94,7 @@ import { ChannelAvatar, StatusBadge } from "@/components/jenny/jenny-ui";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { FeedbackButtons } from "@/components/chat/feedback-buttons";
 
-const channels = ["all", "whatsapp", "instagram", "email", "twitter", "form"];
+const channels = ["all", "whatsapp", "instagram", "email", "widget", "twitter", "form"];
 const statuses = ["all", "open", "closed", "archived"];
 const STATUS_LABELS: Record<string, string> = {
   all: "Tous",
@@ -147,15 +147,6 @@ interface Segment {
 
 // pastille active
 type InboxView = "all" | "unread" | "you" | "jenny";
-
-// canal design
-type DesignChannel = "whatsapp" | "instagram" | "email" | "twitter";
-function designChannel(ch: string): DesignChannel {
-  if (ch === "whatsapp" || ch === "instagram" || ch === "email" || ch === "twitter") {
-    return ch;
-  }
-  return "email";
-}
 
 // statut du badge
 function conversationStatusKind(c: {
@@ -1032,13 +1023,15 @@ export default function ConversationsPage() {
                 <button
                   key={f.key}
                   onClick={f.apply}
+                  aria-pressed={active}
                   style={{
                     padding: "6px 12px",
                     borderRadius: 999,
                     border: "1px solid",
                     borderColor: active ? "var(--text)" : "var(--divider)",
                     background: active ? "var(--text)" : "var(--surface)",
-                    color: active ? "white" : f.accent ? "var(--coral)" : "var(--text)",
+                    // inversé, lisible en sombre
+                    color: active ? "var(--surface)" : f.accent ? "var(--coral)" : "var(--text)",
                     fontSize: 12,
                     fontWeight: 600,
                     cursor: "pointer",
@@ -1057,7 +1050,7 @@ export default function ConversationsPage() {
                       padding: "1px 6px",
                       borderRadius: 999,
                       background: active
-                        ? "rgba(255,255,255,0.18)"
+                        ? "color-mix(in srgb, var(--surface) 20%, transparent)"
                         : f.accent
                         ? "var(--coral-tint)"
                         : "var(--bg-tint)",
@@ -1435,7 +1428,7 @@ export default function ConversationsPage() {
                             )}
                             <ChannelAvatar
                               name={conv.customer_name || "Client"}
-                              ch={designChannel(conv.channel)}
+                              ch={conv.channel}
                               size={42}
                             />
                             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1766,7 +1759,7 @@ export default function ConversationsPage() {
                 <div className="flex items-start gap-3.5 min-w-0">
                   <ChannelAvatar
                     name={detail.customer_name || "Client"}
-                    ch={designChannel(detail.channel)}
+                    ch={detail.channel}
                     size={44}
                   />
                   <div className="min-w-0">

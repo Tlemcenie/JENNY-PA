@@ -1,32 +1,9 @@
 import type { MetadataRoute } from "next";
 import { getSiteUrl } from "@/lib/site-url";
 
-// espace connecté : pas d'index
-// le layout (dashboard) met aussi noindex
-const PRIVATE = [
-  "/admin",
-  "/analytics",
-  "/assistant",
-  "/brain",
-  "/calendar",
-  "/campaigns",
-  "/channels",
-  "/chat",
-  "/conversations",
-  "/customers",
-  "/dashboard",
-  "/efficacy",
-  "/forgot-password",
-  "/knowledge",
-  "/lab",
-  "/learning",
-  "/messages",
-  "/onboarding",
-  "/prestations",
-  "/profile",
-  "/stats",
-  "/team",
-  "/verify",
+// pages privées : noindex dans leur layout
+// pas de liste à tenir ici
+const BLOCKED = [
   // widget : iframe, pas une page
   "/widget/",
 ];
@@ -34,7 +11,7 @@ const PRIVATE = [
 export default async function robots(): Promise<MetadataRoute.Robots> {
   const site = await getSiteUrl();
   return {
-    rules: [{ userAgent: "*", allow: ["/", "/book/"], disallow: PRIVATE }],
+    rules: [{ userAgent: "*", allow: "/", disallow: BLOCKED }],
     sitemap: `${site}/sitemap.xml`,
   };
 }

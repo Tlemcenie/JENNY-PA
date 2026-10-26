@@ -19,7 +19,7 @@ import {
   Users,
   Wallet,
 } from "lucide-react";
-import { ApiError } from "@/lib/api";
+import { humanError } from "@/lib/api";
 import {
   getCampaignHistory,
   getGaps,
@@ -59,13 +59,9 @@ const SEGMENT_STYLE: Record<SegmentKey, { icon: ReactNode; tint: string }> = {
 const MIN_LEN = 10;
 const MAX_LEN = 600;
 
+// message lisible, sans code
 function errorText(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    const detail = (err.data as { detail?: unknown })?.detail;
-    if (typeof detail === "string") return detail;
-    return `Erreur ${err.status}`;
-  }
-  return fallback;
+  return humanError(err, fallback);
 }
 
 function plural(n: number, one: string, many: string): string {

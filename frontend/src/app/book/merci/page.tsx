@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
+
 // page retour Stripe : acompte payé
+export const metadata: Metadata = {
+  title: "Acompte réglé",
+  robots: { index: false, follow: false },
+};
+
 const PAGE_BG =
   "radial-gradient(ellipse at 70% -10%, rgba(255,127,106,0.20) 0%, transparent 52%), radial-gradient(ellipse at 0% 90%, rgba(114,132,168,0.12) 0%, transparent 50%), #0E0B14";
 

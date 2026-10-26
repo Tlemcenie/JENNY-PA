@@ -10,7 +10,7 @@ import {
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Loader2, AlertCircle } from "lucide-react";
-import { ownerChat, ApiError, type OwnerChatResponse } from "@/lib/api";
+import { ownerChat, humanError, type OwnerChatResponse } from "@/lib/api";
 import { easeOutExpo } from "@/lib/motion";
 import { generateUUID, cn } from "@/lib/utils";
 
@@ -106,11 +106,8 @@ export default function AssistantPage() {
           },
         ]);
       } catch (err) {
-        let msg = "Oups, je n'ai pas pu traiter ta demande. Vérifie que le backend tourne et réessaie.";
-        if (err instanceof ApiError) {
-          const detail = (err.data as { detail?: string })?.detail;
-          msg = detail || `Erreur ${err.status} : ${err.statusText}`;
-        }
+        // message lisible, sans code
+        const msg = humanError(err, "Oups, je n'ai pas pu traiter ta demande. Réessaie dans un instant.");
         setMessages((prev) => [
           ...prev,
           {

@@ -6,7 +6,7 @@ import {
   getBusiness,
   updateBusiness,
   type SlaRules,
-  ApiError,
+  humanError,
 } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -27,11 +27,9 @@ const CHANNEL_ROWS: { key: string; label: string }[] = [
   { key: "form", label: "Formulaire" },
 ];
 
+// message lisible, sans code
 function extractError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return (err.data as { detail?: string })?.detail || `Erreur ${err.status}`;
-  }
-  return fallback;
+  return humanError(err, fallback);
 }
 
 // Champ minutes : "" = pas de surcharge.
