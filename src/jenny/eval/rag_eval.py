@@ -20,10 +20,13 @@ from uuid import UUID
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from jenny.agents.faq_agent import FAQ_MIN_SCORE
+from jenny.engine.intelligence import GAP_SCORE_HARD_FLOOR
+
 DATA_PATH = Path(__file__).resolve().parent / "data" / "rag_questions_coiffeur.json"
 DEMO_SLUG = "demo"
-# seuil du grounding moteur
-ENGINE_GROUNDING_THRESHOLD = 0.35
+# même seuil que le moteur
+ENGINE_GROUNDING_THRESHOLD = GAP_SCORE_HARD_FLOOR
 KS = (1, 3, 5)
 
 
@@ -300,7 +303,7 @@ def sweep(cands) -> list[tuple[float, dict, dict]]:
     grid = itertools.product(
         (0.6, 0.7, 0.8),  # poids vectoriel
         ("mix", "rrf", "score"),
-        (ENGINE_GROUNDING_THRESHOLD,),  # seuil injection
+        (FAQ_MIN_SCORE,),  # seuil injection
         (0.30, 0.35, 0.40, 0.45, 0.50),  # plancher
         (0.55, 0.60, 0.65, 0.70, 0.75, 0.80),  # fort
         (0.0, 0.34, 0.5, 0.67, 1.0),  # couverture sujet
