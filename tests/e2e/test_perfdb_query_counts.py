@@ -255,3 +255,23 @@ async def test_admin_query_count(client: AsyncClient, db_tables: None) -> None:
     print(f"\n[perf] admin/overview: {len(stmts)} requêtes")
     assert r.json()["businesses"] == 6 and r.json()["users"] == 6
     assert len(stmts) <= 4, stmts
+
+    # actions admin : compteurs relus
+    sid = by_slug["salon-perf-3"]["id"]
+    r = await client.patch(
+        f"/api/v1/admin/businesses/{sid}/active", headers=headers, json={"is_active": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["is_active"] is False and r.json()["conversations"] == 3
+    uid = by_mail["u2@perf.com"]["id"]
+    r = await client.patch(
+        f"/api/v1/admin/users/{uid}/superuser", headers=headers, json={"is_superuser": True}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["is_superuser"] is True and r.json()["businesses"] == 1
+
+    # audit : nom du salon joint
+    r = await client.get("/api/v1/admin/audit", headers=headers)
+    assert r.status_code == 200, r.text
+    item = next(i for i in r.json()["items"] if i["action"] == "admin.business_active")
+    assert item["business_name"] == "Salon 3"
