@@ -226,11 +226,7 @@ def _net(ip: str) -> str | None:
 
 
 async def _admit(business_id: UUID, ip: str, visitor_key: str, new: bool) -> tuple[int, str | None]:
-    """Laisse passer ou non, avec le texte.
-
-    Les places sont prises AVANT l'await du quota commun, puis rendues s'il
-    refuse : une rafale parallèle ne passe pas entre contrôle et comptage.
-    """
+    """Laisse passer ou non, places prises avant l'await."""
     if not _limits_on():
         return 0, None
     salon = str(business_id)
@@ -355,13 +351,10 @@ def _anonymous(request: Request) -> Request:
 
 
 async def _track_state(conv_id: UUID) -> None:
-    """Borne la part du widget, mémoire seule.
-
-    Jamais de suppression Redis : sans méthode publique d'éviction du moteur,
-    c'est son propre cache borné (TTL) qui fait le ménage.
-    """
+    """Borne la part du widget, mémoire seule."""
     evict = getattr(get_engine().state_manager, EVICT_METHOD, None)
     if not callable(evict):
+        # TTL du moteur, redis gardé
         return
     _STATES[conv_id] = time.monotonic()
     _STATES.move_to_end(conv_id)

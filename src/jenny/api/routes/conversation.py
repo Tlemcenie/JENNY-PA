@@ -175,10 +175,7 @@ async def _anon_customer(db, conv: Conversation | None, state, widget: bool) -> 
 async def _guard_conversation(
     db, body: ConversationRequest, principal: CurrentPrincipal | None, *, widget: bool = False
 ) -> UUID | None:
-    """Bloque la reprise d'une conv d'autrui.
-
-    Renvoie le client qu'un anonyme garde (lu en base, jamais du client).
-    """
+    """Bloque la reprise d'une conv d'autrui, renvoie le client gardé."""
     state = await get_engine().state_manager.aget(body.conversation_id)
     if state is not None and state.business_id not in (None, body.business_id):
         raise HTTPException(403, _FORBIDDEN_CONV)

@@ -148,11 +148,7 @@ async def take_slot(
     window_seconds: int,
     bucket: str = "default",
 ) -> tuple[bool, int, str | None]:
-    """Prend une place, atomique.
-
-    Renvoie ``(autorisé, retry_after, jeton)`` ; le jeton sert à rendre la
-    place avec :func:`release_slot`.
-    """
+    """Prend une place, atomique, avec jeton."""
     now = time.time()
     key = _key(bucket, identifier)
     token = _token(now)

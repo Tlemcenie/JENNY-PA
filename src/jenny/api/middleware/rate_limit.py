@@ -156,9 +156,7 @@ async def enforce_business_chat_limit(business_id: UUID | str) -> None:
 
 
 # ── compteur d'échecs ──
-# On réserve l'essai AVANT le travail coûteux (bcrypt) : contrôle et comptage
-# atomiques, donc une rafale parallèle ne dépasse pas le plafond. Le jeton est
-# rendu si l'essai n'était pas un échec.
+# essai réservé avant bcrypt
 
 _FAIL = "fail_"
 # pas de plafond
