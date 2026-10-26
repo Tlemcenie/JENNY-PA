@@ -1,19 +1,8 @@
-"""Retriever pour le RAG (Retrieval-Augmented Generation).
-
-Recherche dans la base vectorielle (pgvector) les chunks les plus
-pertinents — scopés par business — pour enrichir le contexte du LLM.
-
-Pipeline :
-1. Encoder la requête en embedding
-2. Rechercher les chunks similaires dans document_embeddings (par business)
-3. Retourner les documents pertinents
-
-Le retriever ouvre sa propre session DB courte (via le session factory)
-car le moteur conversationnel ne transporte pas de session.
-"""
+"""Retriever RAG hybride, par business."""
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -38,12 +27,34 @@ class RetrievedDocument:
     metadata: dict
 
 
-class VectorRetriever:
-    """Retriever sémantique basé sur pgvector, scopé par business.
+def _accepts(fn, name: str) -> bool:
+    try:
+        return name in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
 
-    Combine un embedder (encode la requête) et un vector store (recherche
-    de similarité) en un composant utilisable par les agents.
-    """
+
+def _is_postgres(session) -> bool:
+    """Base Postgres (ou inconnue) ?"""
+    get_bind = getattr(session, "get_bind", None)
+    if get_bind is None:
+        return True
+    try:
+        return get_bind().dialect.name == "postgresql"
+    except Exception:
+        return True
+
+
+async def embed_query(embedder, query: str) -> list[float]:
+    """Embedding de question (préfixe/cache)."""
+    fn = getattr(embedder, "embed_query", None)
+    if fn is not None:
+        return await fn(query)
+    return await embedder.embed_text(query)
+
+
+class VectorRetriever:
+    """Retriever hybride (embedder + store pgvector)."""
 
     def __init__(
         self,
@@ -69,51 +80,56 @@ class VectorRetriever:
         top_k: int = 3,
         score_threshold: float = 0.0,
     ) -> list[RetrievedDocument]:
-        """Recherche les chunks les plus pertinents pour une requête.
-
-        Args:
-            query: Texte de la requête utilisateur.
-            business_id: Business propriétaire de la base de connaissances.
-            top_k: Nombre maximum de résultats.
-            score_threshold: Score minimum de similarité (cosinus).
-
-        Returns:
-            Documents triés par pertinence décroissante.
-        """
+        """Chunks pertinents, triés, au-dessus du seuil."""
         if self.embedder is None or self.vector_store is None or business_id is None:
             return []
 
+        hybrid = _accepts(self.vector_store.search, "query_text")
+        kwargs: dict = {
+            "business_id": business_id,
+            "top_k": top_k,
+            "score_threshold": score_threshold,
+        }
+        if hybrid:
+            kwargs["query_text"] = query
+        else:
+            # vieux store : pool sans seuil
+            from jenny.core.config import get_settings
+
+            kwargs["top_k"] = max(top_k, get_settings().rag_rerank_candidates)
+            kwargs["score_threshold"] = 0.0
+
         try:
-            query_embedding = await self.embedder.embed_text(query)
+            factory = self._get_session_factory()
+            async with factory() as session:
+                if not _is_postgres(session):
+                    # pas de pgvector : pas de modèle
+                    return []
+                try:
+                    kwargs["query_embedding"] = await embed_query(self.embedder, query)
+                except Exception as e:
+                    logger.warning("retriever.embed_error", error=str(e))
+                    return []
+                stored = await self.vector_store.search(session=session, **kwargs)
         except Exception as e:
-            logger.warning("retriever.embed_error", error=str(e))
+            # le chat continue sans docs
+            logger.error(
+                "retriever.search_failed",
+                business_id=str(business_id),
+                error_type=type(e).__name__,
+                error=str(e),
+            )
             return []
 
-        # Re-ranking lexical (partagé, cf. rag/rerank.py) : on récupère un pool
-        # de candidats SANS seuil, on blende vectoriel + lexical, PUIS on coupe
-        # au seuil sur le score blendé — l'échelle sur laquelle les seuils du
-        # moteur (grounding, GAP_SCORE_FLOOR) sont calibrés.
-        from jenny.core.config import get_settings
+        if not hybrid:
+            # vieux store : blend ici
+            from jenny.core.config import get_settings
 
-        settings = get_settings()
-        fetch_k = max(top_k, settings.rag_rerank_candidates) if settings.rag_rerank else top_k
+            if get_settings().rag_rerank:
+                from jenny.rag.rerank import rerank
 
-        factory = self._get_session_factory()
-        async with factory() as session:
-            stored = await self.vector_store.search(
-                session=session,
-                business_id=business_id,
-                query_embedding=query_embedding,
-                top_k=fetch_k,
-                score_threshold=0.0 if settings.rag_rerank else score_threshold,
-            )
-
-        if settings.rag_rerank:
-            from jenny.rag.rerank import rerank
-
-            stored = rerank(query, stored, top_k)
-            if score_threshold:
-                stored = [d for d in stored if d.score >= score_threshold]
+                stored = rerank(query, list(stored), len(stored))
+            stored = [d for d in stored if d.score >= score_threshold][:top_k]
 
         results = [
             RetrievedDocument(
@@ -124,5 +140,10 @@ class VectorRetriever:
             )
             for doc in stored
         ]
-        logger.info("retriever.search", results=len(results), business_id=str(business_id))
+        logger.info(
+            "retriever.search",
+            results=len(results),
+            top_score=round(results[0].score, 3) if results else None,
+            business_id=str(business_id),
+        )
         return results
