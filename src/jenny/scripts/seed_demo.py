@@ -2,7 +2,8 @@
 
 Crée un environnement fonctionnel pour tester localement :
 - 1 utilisateur démo (email/mot de passe) déjà rattaché à un business
-- 1 business actif (slug : `demo`)
+- 1 salon de coiffure actif (slug : `demo`) : horaires, acompte, catalogue
+- La KB coiffeur du salon démo (fiche horaires tirée de ses horaires)
 - Quelques clients, conversations, messages, commandes et tickets
 
 Idempotent : si le user `demo@jenny.ai` existe déjà, le script ne fait rien.
@@ -36,6 +37,8 @@ from jenny.domain.models import (
     SupportTicket,
     User,
 )
+from jenny.domain.models.prestation import Prestation
+from jenny.rag.kb_coiffeur import DEFAULT_COIFFEUR, SEED_TAG, build_entries, load_salon
 from jenny.rag.knowledge_base import KnowledgeBase
 
 logger = get_logger(__name__)
@@ -44,44 +47,19 @@ DEMO_EMAIL = "demo@jenny.ai"
 DEMO_PASSWORD = "Demo!1234"
 DEMO_BUSINESS_SLUG = "demo"
 
-# Entrées (titre, catégorie, contenu) ajoutées à la base de connaissances du
-# business démo. Vectorisées via l'embedder configuré : Jenny s'y réfère (RAG).
-_DEMO_KNOWLEDGE: list[tuple[str, str, str]] = [
-    (
-        "Horaires d'ouverture",
-        "horaires",
-        "La boutique est ouverte du lundi au samedi de 9h à 19h. "
-        "Fermée le dimanche et les jours fériés. "
-        "Le service client répond aux messages 7j/7 de 8h à 22h.",
-    ),
-    (
-        "Livraison et frais de port",
-        "tarifs",
-        "Livraison standard en France métropolitaine : 4,90 € (offerte dès 50 € "
-        "d'achat), en 2 à 4 jours ouvrés. Livraison express 24h à Paris : 9,90 €. "
-        "Nous livrons aussi en Belgique et au Luxembourg (6,90 €).",
-    ),
-    (
-        "Retours et remboursements",
-        "politique",
-        "Vous disposez de 30 jours pour retourner un article non utilisé dans son "
-        "emballage d'origine. Le remboursement est effectué sous 14 jours après "
-        "réception du retour. Les frais de retour sont offerts pour un article défectueux.",
-    ),
-    (
-        "Moyens de paiement",
-        "faq",
-        "Nous acceptons les cartes Visa, Mastercard et American Express, ainsi que "
-        "PayPal et Apple Pay. Le paiement en 3 fois sans frais est disponible dès "
-        "100 € d'achat.",
-    ),
-    (
-        "Nos services",
-        "services",
-        "Jenny Demo Boutique propose la vente de prêt-à-porter, un service de "
-        "retouches sur mesure, des conseils de style personnalisés en boutique et "
-        "la réservation de créneaux d'essayage privés.",
-    ),
+# horaires du salon démo
+DEMO_HOURS: dict[str, list[str] | None] = {
+    "mon": None,
+    "tue": ["09:00", "19:00"],
+    "wed": ["09:00", "19:00"],
+    "thu": ["09:00", "21:00"],
+    "fri": ["09:00", "19:00"],
+    "sat": ["09:00", "18:00"],
+    "sun": None,
+}
+# en plus du catalogue type
+_DEMO_EXTRA_PRESTATIONS: list[tuple[str, str, int, int]] = [
+    ("Dégradé à la lame", "coupe", 26, 1200),
 ]
 
 
@@ -118,9 +96,28 @@ async def _seed() -> uuid.UUID | None:
             slug=DEMO_BUSINESS_SLUG,
             email="contact@demo.jenny.ai",
             is_active=True,
+            business_hours=DEMO_HOURS,
+            deposit_enabled=True,
+            deposit_percent=25,
+            deposit_min_cents=1000,
         )
         session.add(business)
         await session.flush()
+
+        # catalogue du salon
+        catalog = [*DEFAULT_COIFFEUR, *_DEMO_EXTRA_PRESTATIONS]
+        for order, (name, category, duration, price_cents) in enumerate(catalog):
+            session.add(
+                Prestation(
+                    business_id=business.id,
+                    name=name,
+                    category=category,
+                    duration_minutes=duration,
+                    price_cents=price_cents,
+                    is_active=True,
+                    sort_order=order,
+                )
+            )
 
         user = User(
             id=uuid.uuid4(),
@@ -198,7 +195,7 @@ async def _seed() -> uuid.UUID | None:
                         direction="inbound",
                         sender_name=customer.full_name,
                         sender_email=customer.email,
-                        content_text="Bonjour, est-ce que vous livrez à Paris ce week-end ?",
+                        content_text="Bonjour, vous avez de la place samedi pour une coupe ?",
                         status="received",
                         source_created_at=now - timedelta(minutes=5),
                         received_at=now - timedelta(minutes=5),
@@ -212,8 +209,8 @@ async def _seed() -> uuid.UUID | None:
                         direction="outbound",
                         sender_name="Jenny",
                         content_text=(
-                            "Bonjour ! Oui, livraison Paris en 24h, "
-                            "je vous prépare un devis."
+                            "Bonjour ! Oui, il reste des créneaux samedi matin. "
+                            "Je vous en propose quelques-uns ?"
                         ),
                         status="responded",
                         source_created_at=now - timedelta(minutes=4),
@@ -255,17 +252,31 @@ async def _seed() -> uuid.UUID | None:
 
 
 async def _seed_knowledge(business_id: uuid.UUID) -> None:
-    """Ajoute des entrées de base de connaissances pour le business démo.
+    """KB coiffeur du salon démo.
 
-    Vectorisé via l'embedder configuré (Ollama par défaut). Best-effort : si
-    l'embedder est indisponible, on log un avertissement sans bloquer le seed.
+    Tirée des données en base (horaires, prestations, acompte...) + les
+    fiches inventées du salon démo. Best-effort : sans pgvector ou sans
+    encodeur, on log sans bloquer le seed.
     """
     try:
         async with async_session_factory() as session:
+            business, prestas, _staff = await load_salon(session, business_id)
+            entries = build_entries(business, prestas, demo=True)
             kb = KnowledgeBase(business_id=business_id, session=session)
-            for title, category, content in _DEMO_KNOWLEDGE:
-                await kb.add_text(content=content, title=title, category=category)
-        logger.info("seed.demo.knowledge_done", entries=len(_DEMO_KNOWLEDGE))
+            chunks: list[dict] = []
+            for e in entries:
+                chunks += await kb.prepare_chunks(
+                    e["content"],
+                    knowledge_id=str(uuid.uuid4()),
+                    title=e["title"],
+                    category=e["category"],
+                    source="text",
+                    extra_metadata={"kb_key": e["key"], "seed": SEED_TAG},
+                )
+            # tout d'un coup
+            await kb.vector_store.add_chunks(session, business_id, chunks)
+            await session.commit()
+        logger.info("seed.demo.knowledge_done", entries=len(entries), chunks=len(chunks))
     except Exception as exc:
         logger.warning("seed.demo.knowledge_skipped", error=str(exc))
 

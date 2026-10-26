@@ -146,6 +146,10 @@ class DocumentIngester:
 
         return safe
 
+    def count_tokens(self, text: str) -> int:
+        """Tokens, repli sur l'estimation."""
+        return self._counter()(text)
+
     # ── découpage ──
 
     def _split_long(self, text: str, max_tok: int, max_chars: int, count) -> list[str]:
@@ -385,19 +389,52 @@ class DocumentIngester:
         return total_chunks
 
 
+# ancien découpage : overlap 50 car.
+_LEGACY_OVERLAP = 50
+_LEGACY_SENT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _legacy_overlap(prev: str) -> str:
+    """Fin recopiée par l'ancien découpage."""
+    picked: list[str] = []
+    text = ""
+    # même boucle que l'ancien code
+    for s in reversed(_LEGACY_SENT_RE.split(prev.strip())):
+        if len(text) + len(s) > _LEGACY_OVERLAP:
+            break
+        picked.insert(0, s)
+        text = " ".join(picked)
+    return text
+
+
+def _strip_legacy_overlap(body: str, prev: str | None) -> str:
+    """Retire la phrase répétée (vieux fragments)."""
+    if not prev:
+        return body
+    lo = _legacy_overlap(prev)
+    if lo and len(body) > len(lo) and body.startswith(lo) and body[len(lo)].isspace():
+        return body[len(lo) :].lstrip()
+    return body
+
+
 def reassemble(chunks: list[tuple[str, dict]]) -> str:
     """Recolle les fragments d'une entrée."""
     out = ""
     last_section = ""
+    prev_raw: str | None = None
     for content, meta in sorted(chunks, key=lambda c: (c[1] or {}).get("chunk_index") or 0):
         meta = meta or {}
-        body = content or ""
+        body = raw = content or ""
         section = meta.get("section") or ""
         if section and body.startswith(section + "\n"):
             body = body[len(section) + 1 :]
         ov = int(meta.get("overlap_chars") or 0)
         if ov:
             body = body[ov:].lstrip()
+        elif not section and "sep" not in meta:
+            # vieux fragment sans repère
+            body = _strip_legacy_overlap(body, prev_raw)
+        prev_raw = raw
         sep = meta.get("sep") or "\n"
         if section and section != last_section:
             out = f"{out}\n## {section}" if out else f"## {section}"

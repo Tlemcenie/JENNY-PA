@@ -22,7 +22,7 @@ from jenny.core.logging import get_logger
 from jenny.rag.embeddings import get_default_embedder
 from jenny.rag.ingestion import DocumentIngester, build_embed_text, embed_header, reassemble
 from jenny.rag.retriever import embed_query
-from jenny.rag.vector_store import PgVectorStore
+from jenny.rag.vector_store import PgVectorStore, lock_entry
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -145,8 +145,8 @@ class KnowledgeBase:
         if prepare is not None:
             await prepare()
         header = embed_header(title, category)
-        count_tokens = getattr(self.embedder, "count_tokens", None)
-        reserved = (count_tokens(header) + 1) if (header and count_tokens) else 0
+        # même repli que le découpage
+        reserved = (self.ingester.count_tokens(header) + 1) if header else 0
         chunks = self.ingester.chunk_text(content, reserved_tokens=reserved)
         if not chunks:
             return []
@@ -304,6 +304,10 @@ class KnowledgeBase:
                     category=r["category"],
                     chunks_count=r["chunks_count"],
                     created_at=r["created_at"] or datetime.now(UTC),
+                    # kb_key, seed...
+                    metadata={
+                        k: v for k, v in (r.get("metadata") or {}).items() if k not in LAYOUT_KEYS
+                    },
                 )
             )
         return entries
@@ -327,6 +331,8 @@ class KnowledgeBase:
 
     async def delete_entry(self, knowledge_id: str) -> bool:
         """Supprime une entrée (tous ses chunks) de la base de connaissances."""
+        # pas pendant une réindexation
+        await lock_entry(self.session, self.business_id, knowledge_id)
         count = await self.vector_store.delete_by_knowledge_id(
             self.session, self.business_id, knowledge_id
         )
@@ -343,6 +349,12 @@ class KnowledgeBase:
     ) -> KnowledgeEntry | None:
         """Remplace le texte, même knowledge_id (None si absente)."""
         self._require_pgvector()
+        prepare = getattr(self.embedder, "prepare", None)
+        if prepare is not None:
+            # modèle chargé avant le verrou
+            await prepare()
+        # lu et réécrit sous verrou
+        await lock_entry(self.session, self.business_id, knowledge_id)
         current = await self.get_entry(knowledge_id)
         if current is None:
             return None

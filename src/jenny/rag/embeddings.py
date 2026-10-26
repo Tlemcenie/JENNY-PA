@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import math
 import threading
+import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import ClassVar
@@ -62,6 +64,50 @@ class BaseEmbedder(ABC):
 # modèles chargés, partagés
 _ST_MODELS: dict[str, object] = {}
 _ST_LOCK = threading.Lock()
+# tokenizers à part, pour compter
+_COUNT_TOKENIZERS: dict[str, tuple[object, object, bool]] = {}
+_COUNT_LOCK = threading.Lock()
+# copie ratée : on réessaie
+_COPY_TRIES = 3
+
+
+def _copy_tokenizer(tok) -> tuple[object, bool] | None:
+    """Copie du tokenizer, sans le partager."""
+    backend = getattr(tok, "backend_tokenizer", None)
+    for _ in range(_COPY_TRIES):
+        try:
+            if backend is not None:
+                from tokenizers import Tokenizer
+
+                fresh = Tokenizer.from_str(backend.to_str())
+                # réglé une fois, jamais modifié
+                fresh.no_truncation()
+                fresh.no_padding()
+                return fresh, True
+            return copy.deepcopy(tok), False
+        except RuntimeError:
+            # modèle en cours d'écriture
+            time.sleep(0.01)
+    return None
+
+
+def _counting_tokenizer(model_name: str, model) -> tuple[object, bool] | None:
+    """Tokenizer dédié au comptage."""
+    hit = _COUNT_TOKENIZERS.get(model_name)
+    # même modèle qu'à la copie
+    if hit is not None and hit[0] is model:
+        return hit[1], hit[2]
+    tok = getattr(model, "tokenizer", None)
+    if tok is None:
+        return None
+    with _COUNT_LOCK:
+        hit = _COUNT_TOKENIZERS.get(model_name)
+        if hit is not None and hit[0] is model:
+            return hit[1], hit[2]
+        got = _copy_tokenizer(tok)
+        if got is not None:
+            _COUNT_TOKENIZERS[model_name] = (model, *got)
+    return got
 
 
 def _load_st_model(model_name: str):
@@ -176,12 +222,17 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         await asyncio.to_thread(self._load_model)
 
     def count_tokens(self, text: str) -> int:
-        """Tokens réels via le tokenizer."""
+        """Tokens réels, tokenizer à part."""
         model = self._model if self._model is not None else self._load_model()
-        tok = getattr(model, "tokenizer", None)
-        if tok is None:
+        got = _counting_tokenizer(self.model_name, model)
+        if got is None:
             return estimate_tokens(text)
-        return len(tok.encode(text or "", add_special_tokens=False))
+        tok, is_rust = got
+        if is_rust:
+            # lecture seule : sûr entre threads
+            return len(tok.encode(text or "", add_special_tokens=False).ids)
+        with _COUNT_LOCK:
+            return len(tok.encode(text or "", add_special_tokens=False))
 
     async def embed_text(self, text: str) -> list[float]:
         """Embedding brut, hors event loop."""
