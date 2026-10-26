@@ -519,6 +519,60 @@ class TestNoms:
         assert not looks_like_name("c'est bon")
         assert looks_like_name("Camille Durand")
 
+    @pytest.mark.parametrize(
+        "msg",
+        [
+            "Merci beaucoup !",
+            "Merci infiniment",
+            "Merci Jenny",
+            "Merci, Jenny !",
+            "Merci madame",
+            "Merci Marie",
+            "Merci beaucoup Marie",
+            "Oui avec plaisir",
+            "Avec plaisir",
+            "En fin de journée",
+            "Un dégradé",
+            "Les pointes",
+            "Du volume",
+            "madame",
+        ],
+    )
+    def test_merci_et_mots_courants(self, msg: str) -> None:
+        assert extract_customer_name(msg, CATALOG) is None
+
+    @pytest.mark.parametrize(
+        ("msg", "name"),
+        [
+            ("Super merci beaucoup, Marie Dupont", "Marie Dupont"),
+            ("Merci, c'est Marie", "Marie"),
+            ("Merci c'est Marie", "Marie"),
+            ("Merci, Marie", "Marie"),
+            ("Madame Dupont", "Madame Dupont"),
+            ("Le Gall", "Le Gall"),
+        ],
+    )
+    def test_nom_malgre_merci(self, msg: str, name: str) -> None:
+        assert extract_customer_name(msg, CATALOG) == name
+
+    def test_pas_le_nom_du_salon(self) -> None:
+        assert extract_customer_name("Chez Lina", CATALOG) == "Chez Lina"
+        assert extract_customer_name("Chez Lina", CATALOG, "Chez Lina") is None
+
+    @pytest.mark.asyncio
+    async def test_merci_beaucoup_puis_vrai_nom(self) -> None:
+        eng, acts = _engine(book_result={"ask_name": True})
+        chat = _Chat(eng)
+        await chat.say("je réserve une coupe femme demain à 10h")
+        r = await chat.say("Merci beaucoup !")
+        assert r.intent != "set_customer_name"
+        assert acts["name"].calls == []
+        # verrou toujours armé
+        assert chat.state.awaiting_name is True
+        r = await chat.say("Marie")
+        assert r.intent == "set_customer_name"
+        assert acts["name"].calls[-1]["name"] == "Marie"
+
 
 # ── B11 : entités filtrées ──
 

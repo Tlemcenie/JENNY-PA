@@ -225,13 +225,23 @@ _NOT_NAME_TEXT = """
     lissage permanente barbe soin soins frange demain aujourdhui matin soir midi apres aprem
     semaine weekend lundi mardi mercredi jeudi vendredi samedi dimanche janvier fevrier mars
     juin juillet aout septembre octobre novembre decembre salut bonjour bonsoir coucou
-    hello hey svp stp plait desole desolee pardon vite urgent
+    hello hey svp stp plait desole desolee pardon vite urgent beaucoup infiniment plaisir
+    avec un une les en au aux fin debut journee soiree nuit heure heures apresmidi plutot
+    finalement possible dispo disponible libre place jenny gentil gentille sympa adorable
+    degrade pointes carre chignon tresse tresses boucles racines keratine defrisage
+    decoloration mise pli plis volume
 """
 _NOT_NAME_WORDS = frozenset(_NOT_NAME_TEXT.split())
 # de, la, van...
 _NAME_PARTICLES = frozenset(
     {"de", "du", "des", "la", "le", "van", "von", "der", "den", "el", "al", "da", "di", "dos"}
 )
+# madame Dupont : titre pas compté
+_CIVILITIES = frozenset({"madame", "monsieur", "mademoiselle", "mme", "mlle", "mr", "m"})
+# « du volume », « le carré »
+_ARTICLE_LEADS = frozenset({"de", "du", "des", "la", "le"})
+# « merci Jenny » : pas son nom
+_THANKS_RE = re.compile(r"\bmerci\b", re.I)
 # « oui » devant le nom
 _LEAD_FILLER_RE = re.compile(
     r"^\s*(?:(?:oui|ouais|ok|okay|d['’]accord|parfait|super|top|merci|alors|euh|bah|bon|"  # noqa: RUF001
@@ -257,30 +267,50 @@ def looks_like_name(text: str) -> bool:
     if _CLOSING_RE.search(t) or _GREETING_PREFIX_RE.match(t):
         return False
     words = t.split()
-    # particules non comptées
-    core = [w for w in words if _word_key(w) not in _NAME_PARTICLES]
+    # article + nom commun
+    if _word_key(words[0]) in _ARTICLE_LEADS and len(words) > 1 and words[1][:1].islower():
+        return False
+    # particules et titres non comptés
+    skip = _NAME_PARTICLES | _CIVILITIES
+    core = [w for w in words if _word_key(w) not in skip]
     if not 1 <= len(core) <= 3 or len(words) > 5 or not _NAME_RE.match(t):
         return False
     # politesse, jour, prestation
     return not any(_word_key(w) in _NOT_NAME_WORDS for w in words)
 
 
-def extract_customer_name(message: str, services: list[str] | None = None) -> str | None:
+def _split_lead(part: str) -> tuple[str, str]:
+    """Sépare « oui, » du reste."""
+    m = _LEAD_FILLER_RE.match(part)
+    lead = m.group(0) if m else ""
+    return lead, part[len(lead) :].strip()
+
+
+def extract_customer_name(
+    message: str, services: list[str] | None = None, business_name: str | None = None
+) -> str | None:
     """Trouve le nom dans le message."""
     text = (message or "").strip()
     if not text or "?" in text:
         return None
     parts = [p.strip() for p in _NAME_SPLIT_RE.split(text) if p and p.strip()]
     # présentation explicite d'abord
-    parts.sort(key=lambda p: 0 if _NAME_INTRO_RE.match(_LEAD_FILLER_RE.sub("", p)) else 1)
+    parts.sort(key=lambda p: 0 if _NAME_INTRO_RE.match(_split_lead(p)[1]) else 1)
     for part in parts:
-        cand = _LEAD_FILLER_RE.sub("", part).strip()
+        lead, cand = _split_lead(part)
         if not cand or (services and match_catalog_services(cand, services)):
+            continue
+        # « merci X » remercie X
+        if _THANKS_RE.search(lead) and not _NAME_INTRO_RE.match(cand):
             continue
         if parse_fr_date(cand) or parse_fr_time(cand):
             continue
         if looks_like_name(cand):
-            return _NAME_INTRO_RE.sub("", cand).strip(" .!,")
+            name = _NAME_INTRO_RE.sub("", cand).strip(" .!,")
+            # le salon, pas le client
+            if business_name and _norm_txt(name) == _norm_txt(business_name):
+                continue
+            return name
     return None
 
 
@@ -715,7 +745,7 @@ class ConversationEngine:
 
         # nom attendu ?
         name_value = (
-            extract_customer_name(msg_text, request.catalog_services)
+            extract_customer_name(msg_text, request.catalog_services, state.business_name)
             if state.awaiting_name and not joining_waitlist
             else None
         )
