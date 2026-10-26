@@ -12,7 +12,14 @@ from sqlalchemy import text
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from jenny.db import session as db_session
-from jenny.db.session import build_engines, engine_options, session_factory
+from jenny.db.session import (
+    MAX_CONNECTIONS,
+    MAX_OVERFLOW,
+    POOL_SIZE,
+    build_engines,
+    engine_options,
+    session_factory,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -78,13 +85,14 @@ def _pool_opts(**over) -> dict:  # type: ignore[no-untyped-def]
 
 
 def test_defaults_fit_cloud_sql() -> None:
-    """10+10 par pool, budget API borné."""
+    """4+4 par pool, budget borné."""
     opts = engine_options(PG)
-    assert opts["pool_size"] == 10 and opts["max_overflow"] == 10
+    assert opts["pool_size"] == POOL_SIZE and opts["max_overflow"] == MAX_OVERFLOW
     assert opts["pool_timeout"] == 10
     per_pool = opts["pool_size"] + opts["max_overflow"]
-    # db-g1-small : 50 connexions
-    assert 2 * per_pool <= 47
+    assert 2 * per_pool == MAX_CONNECTIONS
+    # db-g1-small : 47 utiles, 2 workers + arq
+    assert 2 * (2 * per_pool) + per_pool <= 47
     # un pool tient 30 chats ?
     assert per_pool < N_CHATS
 
@@ -94,7 +102,7 @@ def test_postgres_gets_two_pools() -> None:
     main, req = build_engines(PG)
     try:
         assert main is not req and main.pool is not req.pool
-        assert req.pool.size() == 10 and main.pool.size() == 10
+        assert req.pool.size() == POOL_SIZE and main.pool.size() == POOL_SIZE
     finally:
         asyncio.run(main.dispose())
         asyncio.run(req.dispose())
