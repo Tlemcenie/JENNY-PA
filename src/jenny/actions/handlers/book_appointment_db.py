@@ -368,7 +368,7 @@ class BookAppointmentDBAction(BaseAction):
             notif_body = f"{service_name} — {day_label} à {time_label}"
             notif_body += f" avec {staff_name}." if staff_name else "."
             if deposit:
-                notif_body += f" Acompte {deposit['amount_eur']:.0f}€ en attente."
+                notif_body += f" Acompte {deposit['amount_label']} en attente."
             db.add(
                 Notification(
                     business_id=bid,

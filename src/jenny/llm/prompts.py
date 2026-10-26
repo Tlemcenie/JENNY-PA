@@ -172,6 +172,16 @@ _SLOT_LABELS = {
 }
 
 
+def _eur_label(dep: dict) -> str:
+    """Montant exact, format fr."""
+    label = dep.get("amount_label")
+    if isinstance(label, str) and label:
+        return label
+    cents = round(float(dep["amount_eur"]) * 100)
+    euros, rest = divmod(cents, 100)
+    return f"{euros} €" if rest == 0 else f"{euros},{rest:02d} €"
+
+
 def slots_for_prompt(state: ConversationState) -> str:
     """slots connus, en français clair."""
     from jenny.engine.datetime_fr import format_fr_date, format_fr_time, today_in
@@ -284,7 +294,7 @@ class PromptBuilder:
                     if isinstance(dep, dict) and dep.get("amount_eur"):
                         link = dep.get("checkout_url")
                         base += (
-                            f"\nUn acompte de {dep['amount_eur']:.0f}€ est demandé pour "
+                            f"\nUn acompte de {_eur_label(dep)} est demandé pour "
                             "garantir le créneau (cela évite les oublis). Indique-le "
                             "gentiment, sans insister"
                             + (

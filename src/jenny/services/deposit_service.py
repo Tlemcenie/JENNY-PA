@@ -53,6 +53,12 @@ def compute_deposit_cents(
     return fixed or None
 
 
+def format_eur(cents: int) -> str:
+    """975 → « 9,75 € »."""
+    euros, rest = divmod(int(cents), 100)
+    return f"{euros} €" if rest == 0 else f"{euros},{rest:02d} €"
+
+
 async def create_deposit_for_appointment(
     db: AsyncSession,
     *,
@@ -119,6 +125,7 @@ async def create_deposit_for_appointment(
     return {
         "amount_cents": amount_cents,
         "amount_eur": round(amount_cents / 100, 2),
+        "amount_label": format_eur(amount_cents),
         "checkout_url": checkout_url,
         "payment_id": str(record.id),
         "mode": provider,

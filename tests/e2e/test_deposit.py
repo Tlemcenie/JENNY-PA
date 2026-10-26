@@ -228,3 +228,14 @@ class TestMarkPaid:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["deposit_status"] == "paid" and body["status"] == "confirmed"
+
+
+def test_montant_acompte_exact_au_client() -> None:
+    """9,75 € reste 9,75 €."""
+    from jenny.llm.prompts import _eur_label
+    from jenny.services.deposit_service import format_eur
+
+    assert format_eur(975) == "9,75 €"
+    assert format_eur(1000) == "10 €"
+    assert _eur_label({"amount_eur": 9.75}) == "9,75 €"
+    assert _eur_label({"amount_eur": 9.75, "amount_label": "9,75 €"}) == "9,75 €"

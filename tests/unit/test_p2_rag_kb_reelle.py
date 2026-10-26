@@ -100,7 +100,7 @@ def test_pas_d_horaires_pas_de_fiche(hours) -> None:
 def test_reel_depot_rappels_fidelite_equipe() -> None:
     by = {e["key"]: e for e in _real(staff=["Nora", " ", "Sami"])}
     assert "30 %" in by["acompte-montant"]["content"]
-    assert "minimum 15 €" in by["acompte-montant"]["content"]
+    assert "15 € si le prix" in by["acompte-montant"]["content"]
     assert "2 h avant" not in by["rappels"]["content"]
     assert "120 minutes avant" in by["rappels"]["content"]
     assert "8 rendez-vous" in by["fidelite"]["content"]

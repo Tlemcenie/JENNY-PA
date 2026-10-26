@@ -329,8 +329,9 @@ def _demo_entries(business: dict, prestations: list[dict]) -> list[dict]:
             "acompte-montant",
             "Acompte à la réservation",
             "politique",
-            f"Un acompte de {pct} % du prix de la prestation (minimum {mini}) est demandé pour "
-            "confirmer la réservation. Il est déduit du montant à régler le jour du rendez-vous.",
+            f"Un acompte de {pct} % du prix de la prestation ({mini} si le prix n'est pas "
+            "fixé) est demandé pour confirmer la réservation. Il est déduit du montant à "
+            "régler le jour du rendez-vous.",
         )
     else:
         add(
@@ -902,8 +903,9 @@ def _deposit_text(business: dict) -> str:
         pct = int(business.get("deposit_percent") or 0)
         mini = fmt_price(int(business.get("deposit_min_cents") or 0))
         return (
-            f"Un acompte de {pct} % du prix de la prestation (minimum {mini}) est demandé pour "
-            "confirmer la réservation. Il est déduit du montant à régler le jour du rendez-vous."
+            f"Un acompte de {pct} % du prix de la prestation ({mini} si le prix n'est pas "
+            "fixé) est demandé pour confirmer la réservation. Il est déduit du montant à "
+            "régler le jour du rendez-vous."
         )
     return "Aucun acompte n'est demandé à la réservation : vous réglez tout au salon."
 
