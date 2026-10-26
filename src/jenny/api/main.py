@@ -21,6 +21,7 @@ from jenny.api.routes import (
     audit,
     auth,
     business,
+    campaigns,
     canned_responses,
     channels,
     conversation,
@@ -190,6 +191,7 @@ def create_app() -> FastAPI:
     app.include_router(payment_webhooks.router, prefix="/api/v1", tags=["payments"])
     app.include_router(salon_stats.router, prefix="/api/v1", tags=["salon-stats"])
     app.include_router(salon_extras.router, prefix="/api/v1", tags=["salon-extras"])
+    app.include_router(campaigns.router, prefix="/api/v1", tags=["campaigns"])
 
     instrument_fastapi_if_configured(app)
 
