@@ -25,3 +25,15 @@ updates:
       - dependency-name: ruff
     commit-message:
       prefix: deps
+
+  # front (package-lock)
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      npm-minor:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: deps-front

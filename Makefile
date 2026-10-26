@@ -9,7 +9,7 @@ PYTHON ?= $(shell \
 	elif command -v python3 >/dev/null 2>&1; then command -v python3; \
 	else command -v python; fi)
 
-.PHONY: help install install-ml dev api worker test test-cov test-e2e test-services smoke test-connectors \
+.PHONY: help install install-ml dev api worker test test-cov test-e2e test-services test-migrations smoke test-connectors \
 	test-connectors-webhook lint format format-check typecheck ci migrate migrate-new up down logs \
 	build clean bootstrap seed reseed demo-up demo-down
 
@@ -21,7 +21,7 @@ help: ## Afficher l'aide
 install: ## Installer les dépendances Python (mode éditable, sans ML lourd)
 	$(PYTHON) -m pip install -e ".[dev]"
 
-install-ml: ## Ajouter l'extra ML (mlflow, datasets, groq, rich)
+install-ml: ## Ajouter l'extra ML (mlflow, datasets, groq, rich, scikit-learn)
 	$(PYTHON) -m pip install -e ".[ml]"
 
 dev: ## Setup complet dev (install + ML + pre-commit)
@@ -57,7 +57,21 @@ TEST_PG_URL ?= postgresql+asyncpg://jenny:jenny_secret@localhost:5432/jenny
 TEST_REDIS_URL ?= redis://localhost:6379/14
 test-services: ## Tests sur vrais Postgres/Redis (TEST_PG_URL=… TEST_REDIS_URL=…)
 	JENNY_TEST_POSTGRES_URL=$(TEST_PG_URL) JENNY_TEST_REDIS_URL=$(TEST_REDIS_URL) \
-		PYTHONPATH=src:. $(PYTHON) -m pytest tests/e2e/test_ci_services.py -v --tb=short -rs
+		PYTHONPATH=src:. $(PYTHON) -m pytest tests/ -m services -v --tb=short -rs
+
+# base jetable : créée puis supprimée
+MIG_PG ?= postgresql://jenny:jenny_secret@localhost:5432
+MIG_DB ?= jenny_migcheck
+test-migrations: ## Migrations sur base vierge jetable (MIG_PG=postgresql://user:mdp@hôte:port)
+	@case "$(MIG_DB)" in jenny|postgres|template*) echo "MIG_DB=$(MIG_DB) refusé" >&2; exit 2;; esac
+	psql "$(MIG_PG)/postgres" -v ON_ERROR_STOP=1 -q -c 'DROP DATABASE IF EXISTS "$(MIG_DB)"' -c 'CREATE DATABASE "$(MIG_DB)"'
+	@set -e; trap 'psql "$(MIG_PG)/postgres" -q -c "DROP DATABASE IF EXISTS \"$(MIG_DB)\""' EXIT; \
+	export JENNY_DATABASE_URL="$(subst postgresql:,postgresql+asyncpg:,$(MIG_PG))/$(MIG_DB)"; \
+	PYTHONPATH=src $(PYTHON) -m alembic upgrade head; \
+	PYTHONPATH=src $(PYTHON) -m alembic downgrade -1; \
+	PYTHONPATH=src $(PYTHON) -m alembic upgrade head; \
+	PYTHONPATH=src $(PYTHON) -m alembic check || echo "[make] dérive connue : alembic check informatif"; \
+	JENNY_TEST_POSTGRES_URL="$$JENNY_DATABASE_URL" PYTHONPATH=src:. $(PYTHON) -m pytest tests/ -m services -q -rs
 
 smoke: ## Smoke test contre un serveur live (BASE_URL=http://localhost:8000)
 	PYTHONPATH=src:. $(PYTHON) scripts/e2e_smoke.py
@@ -82,11 +96,12 @@ format-check: ## Vérifier le formatage sans modifier (CI)
 typecheck: ## Vérifier les types avec mypy
 	PYTHONPATH=src $(PYTHON) -m mypy src/jenny/
 
-ci: ## Même séquence que la CI GitHub (format et mypy informatifs)
+ci: ## Même séquence que la CI GitHub (format et mypy informatifs, sans Postgres)
 	$(PYTHON) -m ruff check src/ tests/ ml/ nanogpt/ pipelines/
 	-$(PYTHON) -m ruff format --check src/ tests/ ml/ nanogpt/ pipelines/
 	PYTHONPATH=src:. $(PYTHON) -m pytest tests/ -q --tb=short --cov --cov-report=term:skip-covered
 	-PYTHONPATH=src $(PYTHON) -m mypy src/jenny/
+	cd frontend && npx tsc --noEmit
 
 # ── Base de données ──
 migrate: ## Appliquer les migrations Alembic

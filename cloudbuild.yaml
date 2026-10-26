@@ -1,15 +1,18 @@
 # Cloud Build — construit et pousse les 3 images Jenny vers Artifact Registry.
 #
 #   gcloud builds submit --config cloudbuild.yaml \
-#     --substitutions=_REGION=europe-west9,_REPO=jenny,_API_URL=https://jenny-api-xxxx.run.app
+#     --substitutions=_REGION=europe-west9,_REPO=jenny,_API_URL=https://jenny-api-xxxx.run.app,_SITE_URL=https://jenny-frontend-xxxx.run.app
 #
-# _API_URL est l'URL publique de l'API (inlinée au build du frontend).
+# _API_URL  : URL publique de l'API (inlinée au build du frontend).
+# _SITE_URL : URL publique du frontend (metadataBase / og:image / sitemap).
+#             vide = déduite de la requête, mais og:image pointe sur localhost.
 # Région par défaut : europe-west9 (Paris) → données hébergées en France (RGPD).
 
 substitutions:
   _REGION: europe-west9
   _REPO: jenny
   _API_URL: https://CHANGE-ME.run.app
+  _SITE_URL: ""
 
 images:
   - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/api:latest"
@@ -17,7 +20,7 @@ images:
   - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/frontend:latest"
 
 steps:
-  # ── API (image PROD optimisée : torch CPU, $PORT, non-root) ──
+  # ── API (image PROD : torch CPU, mpnet hors ligne, $PORT, non-root) ──
   - id: build-api
     name: gcr.io/cloud-builders/docker
     args:
@@ -39,7 +42,7 @@ steps:
       - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/worker:latest"
       - .
 
-  # ── Frontend (Next standalone ; l'URL API est inlinée au build) ──
+  # ── Frontend (Next standalone ; URL API + URL site inlinées au build) ──
   - id: build-frontend
     name: gcr.io/cloud-builders/docker
     args:
@@ -48,6 +51,8 @@ steps:
       - frontend/Dockerfile
       - --build-arg
       - "NEXT_PUBLIC_API_URL=${_API_URL}"
+      - --build-arg
+      - "NEXT_PUBLIC_SITE_URL=${_SITE_URL}"
       - -t
       - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/frontend:latest"
       - frontend

@@ -1,19 +1,23 @@
-"""Config pytest globale : env hermétique, base isolée, réseau LLM coupé."""
+"""Config pytest globale : env hermétique, base isolée, réseau coupé."""
 
 from __future__ import annotations
 
 import contextlib
+import errno
+import functools
 import hashlib
-import importlib.util
+import ipaddress
 import math
 import os
 import shutil
 import signal
+import socket
 import sys
 import tempfile
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -89,13 +93,13 @@ os.environ.update(
     }
 )
 
-# modèle HF en cache : hors ligne
-_HF_HUB = Path(
-    os.environ.get("HF_HUB_CACHE")
-    or Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface") / "hub"
-)
-if (_HF_HUB / "models--sentence-transformers--paraphrase-multilingual-mpnet-base-v2").is_dir():
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+# réseau ouvert sur demande
+ALLOW_NETWORK = os.environ.get("JENNY_TEST_ALLOW_NETWORK") == "1"
+
+# HF : cache local seulement
+if not ALLOW_NETWORK:
+    for _key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"):
+        os.environ.setdefault(_key, "1")
 
 # .env jamais lu en test
 from jenny.core import config as _config  # noqa: E402
@@ -161,6 +165,154 @@ def _guarded_sync_send(self, request):  # type: ignore[no-untyped-def]
 httpx.AsyncHTTPTransport.handle_async_request = _guarded_async_send  # type: ignore[method-assign]
 httpx.HTTPTransport.handle_request = _guarded_sync_send  # type: ignore[method-assign]
 
+# ── coupe-circuit réseau global ──
+
+BLOCKED_NET_CALLS: list[str] = []
+# port 1 : redis mort voulu
+_DEAD_PORT = 1
+_NET_STATE = {"open": ALLOW_NETWORK}
+# serveurs lancés par le test
+_LOCAL_PORTS: set[int] = set()
+_orig_connect = socket.socket.connect
+_orig_connect_ex = socket.socket.connect_ex
+_orig_sendto = socket.socket.sendto
+_orig_bind = socket.socket.bind
+_orig_getaddrinfo = socket.getaddrinfo
+_orig_gethostbyname = socket.gethostbyname
+
+
+def _is_ip(host: str) -> bool:
+    """Adresse IP littérale ?"""
+    try:
+        ipaddress.ip_address(host.split("%")[0])
+    except ValueError:
+        return False
+    return True
+
+
+def _is_loopback(host: str) -> bool:
+    """Boucle locale ?"""
+    try:
+        return ipaddress.ip_address(host.split("%")[0]).is_loopback
+    except ValueError:
+        return host == "localhost" or host.endswith(".localhost")
+
+
+@functools.cache
+def _service_endpoints() -> frozenset[tuple[str, int]]:
+    """Postgres/Redis de test permis."""
+    allowed: set[tuple[str, int]] = set()
+    for var, port in (("JENNY_TEST_POSTGRES_URL", 5432), ("JENNY_TEST_REDIS_URL", 6379)):
+        raw = os.environ.get(var, "")
+        if not raw:
+            continue
+        url = urlsplit(raw)
+        if not url.hostname:
+            continue
+        p = url.port or port
+        allowed.add((url.hostname, p))
+        with contextlib.suppress(OSError):
+            for info in _orig_getaddrinfo(url.hostname, p, type=socket.SOCK_STREAM):
+                allowed.add((str(info[4][0]), p))
+    return frozenset(allowed)
+
+
+def _net_refused(address: object) -> str | None:
+    """Raison du refus, None = permis."""
+    if _NET_STATE["open"] or not isinstance(address, tuple) or len(address) < 2:
+        return None
+    host, port = str(address[0]), int(address[1])
+    if (host, port) in _service_endpoints():
+        return None
+    # local : port mort ou à nous
+    if _is_loopback(host) and (port == _DEAD_PORT or port in _LOCAL_PORTS):
+        return None
+    BLOCKED_NET_CALLS.append(f"{host}:{port}")
+    return f"réseau coupé en test : {host}:{port}"
+
+
+def _name_refused(host: object) -> str | None:
+    """Nom à résoudre interdit ?"""
+    name = host.decode() if isinstance(host, bytes) else str(host or "")
+    if (
+        _NET_STATE["open"]
+        or not name
+        or _is_ip(name)
+        or _is_loopback(name)
+        or any(name == h for h, _ in _service_endpoints())
+    ):
+        return None
+    BLOCKED_NET_CALLS.append(f"dns:{name}")
+    return f"DNS coupé en test : {name}"
+
+
+def _guarded_connect(self, address):  # type: ignore[no-untyped-def]
+    reason = _net_refused(address)
+    if reason:
+        raise ConnectionRefusedError(errno.ECONNREFUSED, reason)
+    return _orig_connect(self, address)
+
+
+def _guarded_connect_ex(self, address):  # type: ignore[no-untyped-def]
+    if _net_refused(address):
+        return errno.ECONNREFUSED
+    return _orig_connect_ex(self, address)
+
+
+def _guarded_sendto(self, data, *args):  # type: ignore[no-untyped-def]
+    # udp sans connect
+    reason = _net_refused(args[-1]) if args else None
+    if reason:
+        raise ConnectionRefusedError(errno.ECONNREFUSED, reason)
+    return _orig_sendto(self, data, *args)
+
+
+def _guarded_bind(self, address):  # type: ignore[no-untyped-def]
+    _orig_bind(self, address)
+    # serveur de test : permis
+    if self.family in (socket.AF_INET, socket.AF_INET6):
+        with contextlib.suppress(OSError):
+            _LOCAL_PORTS.add(int(self.getsockname()[1]))
+
+
+def _guarded_getaddrinfo(host, *args, **kwargs):  # type: ignore[no-untyped-def]
+    reason = _name_refused(host)
+    if reason:
+        raise socket.gaierror(socket.EAI_NONAME, reason)
+    return _orig_getaddrinfo(host, *args, **kwargs)
+
+
+def _guarded_gethostbyname(host):  # type: ignore[no-untyped-def]
+    reason = _name_refused(host)
+    if reason:
+        raise socket.gaierror(socket.EAI_NONAME, reason)
+    return _orig_gethostbyname(host)
+
+
+_NET_GUARDS = (
+    (socket.socket, "connect", _guarded_connect),
+    (socket.socket, "connect_ex", _guarded_connect_ex),
+    (socket.socket, "sendto", _guarded_sendto),
+    (socket.socket, "bind", _guarded_bind),
+    (socket, "getaddrinfo", _guarded_getaddrinfo),
+    (socket, "gethostbyname", _guarded_gethostbyname),
+)
+
+
+def install_net_guard() -> None:
+    """Pose le coupe-circuit (idempotent)."""
+    for owner, name, guard in _NET_GUARDS:
+        setattr(owner, name, guard)
+
+
+def net_guard_active() -> bool:
+    """Coupe-circuit toujours en place ?"""
+    return all(getattr(owner, name) is guard for owner, name, guard in _NET_GUARDS)
+
+
+# dès l'import : collecte comprise
+install_net_guard()
+
 import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 from pytest import MonkeyPatch  # noqa: E402
@@ -181,6 +333,7 @@ def _sqlite_fast(dbapi_conn, _record) -> None:  # type: ignore[no-untyped-def]
     cur = dbapi_conn.cursor()
     cur.execute("PRAGMA synchronous=OFF")
     cur.execute("PRAGMA journal_mode=MEMORY")
+    cur.execute("PRAGMA foreign_keys=ON")
     cur.close()
 
 
@@ -192,19 +345,21 @@ def _array_as_json_on_sqlite(element, compiler, **kw):  # type: ignore[no-untype
 
 # ── timeout par test ──
 
-_HAS_TIMEOUT_PLUGIN = importlib.util.find_spec("pytest_timeout") is not None
 _DEFAULT_TIMEOUT = 120.0
 
 
-def pytest_addoption(parser: pytest.Parser) -> None:
+def pytest_addoption(parser: pytest.Parser, pluginmanager: pytest.PytestPluginManager) -> None:
     """Rend l'option timeout connue."""
-    if not _HAS_TIMEOUT_PLUGIN:
+    # plugin absent ou coupé
+    if not pluginmanager.hasplugin("timeout"):
         parser.addini("timeout", "timeout par test (secours)", default=str(_DEFAULT_TIMEOUT))
 
 
 def pytest_configure(config: pytest.Config) -> None:
     """Déclare les marqueurs maison."""
     config.addinivalue_line("markers", "services: besoin de Postgres/Redis réels")
+    config.addinivalue_line("markers", "real_embedder: vrai embedder RAG, sans HashEmbedder")
+    config.addinivalue_line("markers", "allow_network: réseau sortant permis pour ce test")
     if not config.pluginmanager.hasplugin("timeout"):
         config.addinivalue_line("markers", "timeout(seconds): timeout du test")
 
@@ -220,10 +375,11 @@ def _fallback_timeout(item: pytest.Item) -> float:
     if config.getoption("usepdb", False) or config.getoption("trace", False):
         return 0.0
     marker = item.get_closest_marker("timeout")
-    raw = marker.args[0] if marker and marker.args else config.getini("timeout")
     try:
+        raw = marker.args[0] if marker and marker.args else config.getini("timeout")
         return max(float(raw or 0), 0.0)
     except (TypeError, ValueError):
+        # option inconnue : défaut
         return _DEFAULT_TIMEOUT
 
 
@@ -248,13 +404,26 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):  #
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:  # type: ignore[no-untyped-def]
-    """Signale les appels LLM bloqués."""
+    """Signale les appels réseau bloqués."""
     if BLOCKED_LLM_CALLS:
         hosts = sorted({httpx.URL(u).host for u in BLOCKED_LLM_CALLS})
         terminalreporter.write_line(
             f"jenny: {len(BLOCKED_LLM_CALLS)} appel(s) LLM bloqué(s) : {', '.join(hosts)}",
-            yellow=True,
+            red=True,
         )
+    if BLOCKED_NET_CALLS:
+        targets = sorted(set(BLOCKED_NET_CALLS))
+        terminalreporter.write_line(
+            f"jenny: {len(BLOCKED_NET_CALLS)} accès réseau bloqué(s) : {', '.join(targets)}",
+            red=True,
+        )
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Run rouge si réseau tenté."""
+    # même hors test (collecte)
+    if (BLOCKED_NET_CALLS or BLOCKED_LLM_CALLS) and exitstatus == pytest.ExitCode.OK:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -291,6 +460,61 @@ def blocked_llm_calls() -> Iterator[BlockedCalls]:
     yield view
     # voulus : hors résumé
     del BLOCKED_LLM_CALLS[view.start :]
+
+
+class BlockedNet:
+    """Vue sur les accès réseau bloqués."""
+
+    def __init__(self) -> None:
+        self.start = len(BLOCKED_NET_CALLS)
+
+    @property
+    def targets(self) -> list[str]:
+        return BLOCKED_NET_CALLS[self.start :]
+
+
+@pytest.fixture
+def blocked_network() -> Iterator[BlockedNet]:
+    """Accès réseau bloqués, voulus."""
+    view = BlockedNet()
+    yield view
+    del BLOCKED_NET_CALLS[view.start :]
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _network_guard() -> Iterator[None]:
+    """Réseau coupé toute la session."""
+    install_net_guard()
+    yield
+    # personne ne l'a retiré
+    if not net_guard_active():
+        raise RuntimeError("coupe-circuit réseau retiré pendant la session")
+
+
+@pytest.fixture(autouse=True)
+def _no_stray_network(request: pytest.FixtureRequest, _network_guard: None) -> Iterator[None]:
+    """Test en échec si réseau tenté."""
+    llm_start, net_start = len(BLOCKED_LLM_CALLS), len(BLOCKED_NET_CALLS)
+    opened = bool(request.node.get_closest_marker("allow_network")) and not _NET_STATE["open"]
+    if opened:
+        _NET_STATE["open"] = True
+    try:
+        yield
+    finally:
+        if opened:
+            _NET_STATE["open"] = False
+    if not net_guard_active():
+        install_net_guard()
+        pytest.fail("coupe-circuit réseau retiré par le test", pytrace=False)
+    # voulus déjà retirés
+    stray = BLOCKED_LLM_CALLS[llm_start:] + BLOCKED_NET_CALLS[net_start:]
+    if stray:
+        pytest.fail(
+            "réseau sortant en test : "
+            + ", ".join(sorted(set(stray)))
+            + " (fixture blocked_network/blocked_llm_calls si voulu)",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -363,29 +587,42 @@ class HashEmbedder(BaseEmbedder):
         return [await self.embed_text(t) for t in texts]
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _shared_embedder() -> Iterator[None]:
-    """Embedder RAG unique par session."""
+# vrai modèle sur demande
+REAL_EMBEDDER = os.environ.get("JENNY_TEST_REAL_EMBEDDER") == "1"
+
+
+def seed_hash_embedder() -> BaseEmbedder:
+    """HashEmbedder dans le vrai cache."""
     from jenny.rag import embeddings
 
-    original = embeddings.get_default_embedder
-    # vrai modèle sur demande
-    real = os.environ.get("JENNY_TEST_REAL_EMBEDDER") == "1"
-    cache: dict[tuple[str, str, str], BaseEmbedder] = {}
+    # vraie fonction, vrai cache
+    current = embeddings.get_default_embedder()
+    if isinstance(current, HashEmbedder):
+        return current
+    fake = HashEmbedder()
+    with embeddings._DEFAULT_LOCK:
+        for key, value in list(embeddings._DEFAULT_EMBEDDERS.items()):
+            if value is current:
+                embeddings._DEFAULT_EMBEDDERS[key] = fake
+    if embeddings.get_default_embedder() is not fake:
+        raise RuntimeError("cache embedder introuvable : adapter seed_hash_embedder")
+    return fake
 
-    def _cached() -> BaseEmbedder:
-        s = _config.get_settings()
-        key = (s.embeddings_backend, s.embeddings_model, s.llama_base_url)
-        if key not in cache:
-            cache[key] = original() if real else HashEmbedder()
-        return cache[key]
 
-    mp = MonkeyPatch()
-    for mod in _project_modules():
-        if getattr(mod, "get_default_embedder", None) is original:
-            mp.setattr(mod, "get_default_embedder", _cached)
+@pytest.fixture(autouse=True)
+def _hash_embedder(request: pytest.FixtureRequest) -> Iterator[None]:
+    """RAG léger, sauf marqueur real_embedder."""
+    from jenny.rag import embeddings
+
+    if request.node.get_closest_marker("real_embedder"):
+        # vrai embedder, cache vierge
+        embeddings.reset_default_embedder()
+        yield
+        embeddings.reset_default_embedder()
+        return
+    if not REAL_EMBEDDER:
+        seed_hash_embedder()
     yield
-    mp.undo()
 
 
 async def reset_schema(*, create: bool = True) -> None:

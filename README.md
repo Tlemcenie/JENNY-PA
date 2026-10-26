@@ -33,7 +33,7 @@ Infrastructure   →  Docker, Compose, MLflow, observabilité
 | Lint/Format | Ruff |
 | Typecheck | mypy |
 | Tests | pytest + httpx |
-| CI | GitHub Actions (PR + push sur `main`) |
+| CI | GitHub Actions (PR + push sur `main` / `integration/**`) |
 
 ## Démarrage rapide
 
@@ -158,6 +158,8 @@ make seed          # Insérer les données de démo (idempotent)
 make reseed        # Purger puis ré-insérer le seed
 make test          # Tests unitaires + intégration
 make test-e2e      # Pipelines e2e (auth/chat/rdv/devis/services)
+make test-services # Tests sur vrais Postgres/Redis (TEST_PG_URL=…)
+make test-migrations MIG_PG=postgresql://jenny:jenny_secret@localhost:5432  # base jetable
 make smoke         # Smoke test contre un serveur live (BASE_URL=...)
 make lint          # Ruff lint
 make format        # Ruff format + autofix
@@ -171,6 +173,28 @@ make up / make down
 
 - `make test-e2e` : pipelines e2e in-process (FastAPI ASGI, sans DB).
 - `make smoke` : exécute `scripts/e2e_smoke.py` contre `BASE_URL` (par défaut `http://localhost:8000`). Couvre `/health`, `/ready`, register/login/me sur la base réelle, chat multi-tour, escalade humaine. À utiliser après `make demo-up`.
+
+### Environnement de test (hermétique)
+
+`tests/conftest.py` isole chaque run, en local comme en CI :
+
+- **pas de `.env`**, variables `JENNY_*` héritées purgées, base SQLite propre au process
+  (clés étrangères actives, comme Postgres), Redis sur un port mort → état en mémoire ;
+- **réseau sortant coupé toute la session** (connect, DNS, UDP, httpx) : seul le local
+  ouvert par le test lui-même passe, plus les services déclarés dans
+  `JENNY_TEST_POSTGRES_URL` / `JENNY_TEST_REDIS_URL`. Le Postgres/Redis/Ollama de dev
+  ne sont **jamais** joints. Un accès tenté fait échouer le test (et le run, même à la
+  collecte) ; voulu → fixture `blocked_network` / `blocked_llm_calls` ou marqueur
+  `@pytest.mark.allow_network` ;
+- Hugging Face hors ligne (`HF_HUB_OFFLINE=1`) : mpnet doit être dans le cache local ;
+- RAG : un `HashEmbedder` léger est posé **dans le vrai cache** de `get_default_embedder`
+  (la fonction de prod n'est jamais remplacée) ; marqueur `@pytest.mark.real_embedder`
+  pour le vrai mpnet ;
+- timeout 120 s par test (pytest-timeout, sinon secours SIGALRM du conftest).
+
+Marqueur `services` : tests sur vrais Postgres/Redis (`make test-services`), dont la
+**dérive modèles ↔ migrations** (`tests/e2e/test_p3_ci_schema_drift.py`) : un modèle
+modifié sans révision Alembic fait échouer la CI.
 
 ### Intégrations externes
 
@@ -190,7 +214,11 @@ Sans clés, les modules basculent automatiquement en mode "templates" / dégrad�
 
 ## Git, PR et CI
 
-- **Workflow** : branches → Pull Requests vers `main` ; la CI exécute lint, format, mypy et pytest (voir `.github/workflows/ci.yml`).
+- **Workflow** : branches → Pull Requests vers `main` ; la CI (`.github/workflows/ci.yml`) exécute :
+  ruff ; migrations sur une base Postgres **vierge** (upgrade, aller-retour, `alembic check`
+  informatif tant que la dérive connue n'est pas résorbée) ; pytest réseau coupé avec les
+  vrais Postgres/Redis ; TypeScript + build Next ; sur `main`/`integration/**`, build des
+  images Docker (API vérifiée **sans réseau**). Format, mypy et ESLint restent informatifs.
 - **Guide contributeur** : [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Template de PR** : [`.github/pull_request_template.md`](.github/pull_request_template.md).
 
