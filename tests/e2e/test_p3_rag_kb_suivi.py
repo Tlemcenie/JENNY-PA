@@ -111,6 +111,27 @@ async def test_equipe_ajoutee_relance(
 
 
 @pytest.mark.asyncio
+async def test_prix_change_relance(client: AsyncClient, db_tables: None, calls: list[UUID]) -> None:
+    headers, bid = await _auth(client, "kb-suivi-prix@x.com")
+    r = await client.post(
+        "/api/v1/prestations",
+        headers=headers,
+        json={"name": "Coupe femme", "duration_minutes": 45, "price_cents": 3900},
+    )
+    assert r.status_code == 201, r.text
+    await kb_sync.wait_idle()
+    calls.clear()
+    pid = r.json()["id"]
+    r = await client.patch(
+        f"/api/v1/prestations/{pid}", headers=headers, json={"price_cents": 4500}
+    )
+    assert r.status_code == 200, r.text
+    await kb_sync.wait_idle()
+    # vieilles fiches prix retirées
+    assert calls == [bid]
+
+
+@pytest.mark.asyncio
 async def test_rollback_rien_et_commits_groupes(
     db_tables: None, calls: list[UUID], monkeypatch: pytest.MonkeyPatch
 ) -> None:

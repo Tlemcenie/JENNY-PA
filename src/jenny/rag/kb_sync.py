@@ -2,7 +2,8 @@
 
 Horaires, acompte, rappels, contact ou équipe modifiés : après le
 commit, les fiches générées (tag kb_coiffeur_reel) sont remises à jour
-en tâche de fond. Les fiches du gérant (écrites, retouchées ou
+en tâche de fond. Un changement de prestation retire les vieilles
+fiches prix (le catalogue est lu en direct). Les fiches du gérant (écrites, retouchées ou
 supprimées par lui) ne bougent pas. Rien si le salon n'a jamais été
 seedé, ou hors Postgres (tests SQLite).
 """
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from jenny.core.logging import get_logger
 from jenny.domain.models.business import Business
+from jenny.domain.models.prestation import Prestation
 from jenny.domain.models.staff import Staff
 
 logger = get_logger(__name__)
@@ -36,6 +38,7 @@ BUSINESS_FIELDS = (
     "description",
 )
 STAFF_FIELDS = ("display_name", "is_active", "business_id")
+PRESTATION_FIELDS = ("name", "price_cents", "duration_minutes", "is_active", "description")
 # regroupe les commits proches
 DELAY_S = 1.0
 
@@ -67,8 +70,10 @@ def touched_businesses(session: Session) -> set[UUID]:
             moved = _history(obj, "business_id")
             # ancien et nouveau salon
             out |= _ids([inspect(obj).dict.get("business_id"), *moved.deleted])
+        elif isinstance(obj, Prestation) and _changed(obj, PRESTATION_FIELDS):
+            out |= _ids([inspect(obj).dict.get("business_id")])
     for obj in [*session.new, *session.deleted]:
-        if isinstance(obj, Staff):
+        if isinstance(obj, (Staff, Prestation)):
             out |= _ids([inspect(obj).dict.get("business_id")])
     return out
 
