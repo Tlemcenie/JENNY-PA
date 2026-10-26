@@ -34,7 +34,7 @@ PUBLIC_PREFIXES: tuple[str, ...] = (
     "/api/v1/payments",
     "/api/v1/ingest/email/inbound",
     "/api/v1/public",
-    # chat public (widget), limité en débit
+    # chat public, limité en débit
     "/api/v1/conversation/chat",
 )
 
@@ -105,7 +105,7 @@ class AuthContextMiddleware(BaseHTTPMiddleware):
             if principal is None:
                 return JSONResponse({"detail": "Invalid API key"}, status_code=401)
             request.state.business_id = principal.business_id
-            # évite un 2e bcrypt en route
+            # pas de 2e bcrypt
             request.state.api_principal = principal
         else:
             try:

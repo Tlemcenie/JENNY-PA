@@ -268,7 +268,7 @@ async def add_member(
                 "Un compte existe déjà avec cet email : impossible de le rattacher à "
                 "votre salon. Utilisez une autre adresse pour ce membre.",
             )
-        # déjà membre : rien à faire
+        # déjà membre
         return MemberItem(
             user_id=str(user.id),
             email=user.email,

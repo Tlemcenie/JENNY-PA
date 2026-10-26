@@ -62,7 +62,7 @@ async def _guard_conversation(
     if conv is not None:
         if conv.business_id != body.business_id:
             raise HTTPException(403, _FORBIDDEN_CONV)
-        # anonyme : pas la conv d'un client connu
+        # anonyme : pas de client connu
         if principal is None and conv.customer_id not in (None, body.customer_id):
             raise HTTPException(403, _FORBIDDEN_CONV)
     if body.customer_id is not None and (cust is None or cust.business_id != body.business_id):
@@ -85,7 +85,7 @@ async def _prepare_public_chat(
     """Règles du chat public."""
     principal = await soft_principal(request, db)
     if principal is None and body.customer_id is not None:
-        # anonyme : pas de fiche client
+        # anonyme : sans fiche client
         body = body.model_copy(update={"customer_id": None})
     await _check_chat_access(db, body, request)
     # quota salon après les droits

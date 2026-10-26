@@ -353,7 +353,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: DbSession) -> JSONRes
 @router.post("/reset-password")
 async def reset_password(body: ResetPasswordRequest, db: DbSession) -> JSONResponse:
     """reset via code email."""
-    # code à 6 chiffres : peu d'essais
+    # peu d'essais permis
     if await _too_many("reset", body.email, limit=5):
         raise HTTPException(429, _TOO_MANY_TRIES)
     r = await db.execute(select(User).where(User.email == body.email))
@@ -545,7 +545,7 @@ async def google_callback(
     name = profile.get("name")
     if not sub or not email:
         raise HTTPException(400, "Profil Google incomplet")
-    # sinon vol de compte par email
+    # sinon vol de compte
     if str(profile.get("email_verified")).lower() != "true":
         raise HTTPException(400, "Email Google non vérifié")
 

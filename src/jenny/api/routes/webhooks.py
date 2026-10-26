@@ -740,7 +740,7 @@ async def twitter_webhook(
         if not verify_twitter_signature(body, sig, secret):
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
     elif settings.is_prod:
-        # jamais de DM non signé en prod
+        # prod : signature obligatoire
         raise HTTPException(status_code=503, detail="Webhook Twitter non configuré")
     else:
         logger.warning("webhook.twitter.unsigned_dev")

@@ -166,7 +166,7 @@ async def verify_paypal_signature(headers: dict[str, str], raw_body: bytes) -> b
 def _paypal_target(resource: dict[str, Any]) -> tuple[str | None, UUID | None]:
     """Id de commande + salon éventuel."""
     related = (resource.get("supplementary_data") or {}).get("related_ids") or {}
-    # capture : on remonte à la commande
+    # capture : id de commande
     order_id = related.get("order_id") or resource.get("id")
     custom = resource.get("custom_id")
     if not custom:

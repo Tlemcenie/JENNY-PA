@@ -84,7 +84,7 @@ async def sse_event_stream(
 async def stream_events(request: Request, principal: CurrentUser) -> StreamingResponse:
     """Ouvre un flux SSE filtré sur le business de l'utilisateur."""
     if principal.business_id is None:
-        # pas de salon : pas de flux
+        # sans salon, pas de flux
         raise HTTPException(403, "Aucun salon associé à ce compte")
     bid = str(principal.business_id)
 
