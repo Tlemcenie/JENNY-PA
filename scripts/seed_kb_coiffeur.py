@@ -287,11 +287,19 @@ async def main(args) -> None:
 
     async with async_session_factory() as session:
         if args.restore:
-            rep = await restore(session, args.slug, Path(args.restore))
+            rep = await restore(
+                session, args.slug, Path(args.restore), backup_dir=Path(args.backup_dir)
+            )
             print(f"Sauvegarde de l'état actuel : {rep['backup']}")
             print(f"Restauré : {rep['entries']} entrées ({rep['inserted']} fragments).")
             return
-        rep = await seed(session, args.slug, salon_reel=args.salon_reel, dry_run=args.dry_run)
+        rep = await seed(
+            session,
+            args.slug,
+            salon_reel=args.salon_reel,
+            dry_run=args.dry_run,
+            backup_dir=Path(args.backup_dir),
+        )
     entries = rep["entries"]
     mode = "démo (faits inventés)" if rep["demo"] else "salon réel (faits de la base)"
     print(f"{rep['business']} : {len(entries)} entrées, mode {mode}")
@@ -314,6 +322,7 @@ if __name__ == "__main__":
     parser.add_argument("--salon-reel", action="store_true", help="vrai salon : faits réels seuls")
     parser.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--restore", metavar="FICHIER", help="remet une sauvegarde JSON")
+    parser.add_argument("--backup-dir", default=str(BACKUP_DIR), help="dossier des sauvegardes")
     args = parser.parse_args()
     if not args.restore:
         check_target(args.slug, salon_reel=args.salon_reel, force=args.force, dry_run=args.dry_run)
