@@ -224,7 +224,7 @@ export default function BookingClient({ slug }: { slug: string }) {
 
   // rendu
   return (
-    <div
+    <main
       className="min-h-full w-full overflow-y-auto text-[#F4F1ED]"
       style={{ background: PAGE_BG, fontFamily: "var(--font-sans)" }}
     >
@@ -323,12 +323,12 @@ export default function BookingClient({ slug }: { slug: string }) {
           </AnimatePresence>
 
           {/* pied de page */}
-          <p className="mt-7 text-center font-mono text-[11px] tracking-[0.12em] text-[#F4F1ED]/35">
+          <p className="mt-7 text-center font-mono text-[11px] tracking-[0.12em] text-[#F4F1ED]/50">
             Réservation sécurisée · Propulsé par Jenny
           </p>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -352,7 +352,7 @@ function Header() {
         />
         <Image
           src="/jenny.png"
-          alt="Mascotte"
+          alt=""
           width={60}
           height={60}
           priority
@@ -389,7 +389,7 @@ function DatePicker({
 }) {
   const today = new Date();
   return (
-    <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1 snap-x">
+    <div role="group" aria-label="Choisir un jour" className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1 snap-x">
       {days.map((d) => {
         const active = d.iso === selectedIso;
         const isToday = isSameDay(d.date, today);
@@ -399,6 +399,7 @@ function DatePicker({
             type="button"
             onClick={() => onSelect(d.iso)}
             aria-pressed={active}
+            aria-label={cap(format(d.date, "EEEE d MMMM", { locale: fr }))}
             className={cn(
               "snap-start shrink-0 w-[60px] flex flex-col items-center gap-0.5 rounded-2xl py-2.5 transition-all duration-150",
               "focus:outline-none focus-visible:ring-2 focus-visible:ring-jenny-coral/40",
@@ -451,7 +452,7 @@ function SlotGrid({
 }) {
   if (loading) {
     return (
-      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+      <div role="status" aria-label="Chargement des créneaux" className="grid grid-cols-3 sm:grid-cols-4 gap-2">
         {Array.from({ length: 8 }).map((_, i) => (
           <div
             key={i}
@@ -466,6 +467,7 @@ function SlotGrid({
   if (error) {
     return (
       <div
+        role="alert"
         className="flex items-start gap-2.5 rounded-xl px-4 py-3 text-[13px] leading-relaxed text-jenny-coral"
         style={{ background: "rgba(255,127,106,0.10)", border: "1px solid rgba(255,127,106,0.22)" }}
       >
@@ -496,12 +498,13 @@ function SlotGrid({
   }
 
   return (
-    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+    <div role="group" aria-label="Créneaux disponibles" className="grid grid-cols-3 sm:grid-cols-4 gap-2">
       {slots.map((slot) => (
         <button
           key={slot.start_at}
           type="button"
           onClick={() => onPick(slot)}
+          aria-label={`Choisir ${slot.label}`}
           className={cn(
             "h-11 rounded-xl text-[14px] font-semibold tabular-nums transition-all duration-150",
             "text-[#F4F1ED]/90 hover:text-white hover:border-jenny-coral/60 hover:bg-jenny-coral/15",
@@ -638,7 +641,7 @@ function BookingForm({
             htmlFor="bk-phone"
             className="block font-mono text-[11px] font-semibold tracking-[0.06em] uppercase text-[#F4F1ED]/55 mb-1.5"
           >
-            Téléphone <span className="text-[#F4F1ED]/35 normal-case font-normal tracking-normal">(optionnel)</span>
+            Téléphone <span className="text-[#F4F1ED]/50 normal-case font-normal tracking-normal">(optionnel)</span>
           </label>
           <input
             id="bk-phone"
@@ -657,7 +660,7 @@ function BookingForm({
             htmlFor="bk-notes"
             className="block font-mono text-[11px] font-semibold tracking-[0.06em] uppercase text-[#F4F1ED]/55 mb-1.5"
           >
-            Note <span className="text-[#F4F1ED]/35 normal-case font-normal tracking-normal">(optionnel)</span>
+            Note <span className="text-[#F4F1ED]/50 normal-case font-normal tracking-normal">(optionnel)</span>
           </label>
           <textarea
             id="bk-notes"
@@ -672,6 +675,7 @@ function BookingForm({
 
         {error && (
           <motion.div
+            role="alert"
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             className="flex items-start gap-2.5 rounded-xl px-3.5 py-3 text-[13px] leading-relaxed text-jenny-coral"
@@ -777,6 +781,7 @@ function LoadingCard() {
   return (
     <motion.div
       key="loading"
+      role="status"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
