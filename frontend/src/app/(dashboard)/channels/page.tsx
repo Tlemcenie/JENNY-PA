@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
+  AlertTriangle,
   AtSign,
   Camera,
   Check,
@@ -18,6 +19,7 @@ import {
   disconnectChannel,
   getChannelFields,
   getChannelWebhookInfo,
+  humanError,
   listChannels,
   testChannel,
   type ChannelFieldSpec,
@@ -177,6 +179,8 @@ function ChannelDialog({
   onSaved: () => void;
 }) {
   const [fields, setFields] = useState<ChannelFieldSpec[] | null>(null);
+  const [fieldsError, setFieldsError] = useState<string | null>(null);
+  const [fieldsReload, setFieldsReload] = useState(0);
   const [webhook, setWebhook] = useState<ChannelWebhookInfo | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [displayName, setDisplayName] = useState(channel.account ?? "");
@@ -185,11 +189,24 @@ function ChannelDialog({
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   useEffect(() => {
-    getChannelFields(channel.channel).then(setFields).catch(() => setFields([]));
+    let alive = true;
+    getChannelFields(channel.channel)
+      .then((f) => {
+        if (!alive) return;
+        setFields(f);
+        setFieldsError(null);
+      })
+      .catch((err) => alive && setFieldsError(humanError(err, "Impossible de charger les champs du canal.")));
     getChannelWebhookInfo(channel.channel)
-      .then(setWebhook)
-      .catch(() => setWebhook(null));
-  }, [channel.channel]);
+      .then((w) => alive && setWebhook(w))
+      .catch(() => alive && setWebhook(null)); // optionnel selon le canal
+    return () => {
+      alive = false;
+    };
+  }, [channel.channel, fieldsReload]);
+
+  // champs requis remplis ?
+  const missingRequired = (fields ?? []).some((f) => f.required && !(values[f.key] ?? "").trim());
 
   async function handleSave() {
     setSaving(true);
@@ -306,7 +323,14 @@ function ChannelDialog({
         />
 
         {/* Champs d'identifiants par canal */}
-        {fields === null ? (
+        {fieldsError && fields === null ? (
+          <div role="alert" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 13, color: "var(--text-2)" }}>
+            <span style={{ flex: 1 }}>{fieldsError}</span>
+            <button type="button" className="jpill" onClick={() => setFieldsReload((n) => n + 1)}>
+              Réessayer
+            </button>
+          </div>
+        ) : fields === null ? (
           <div style={{ fontSize: 13, color: "var(--text-2)" }}>Chargement…</div>
         ) : (
           fields.map((f) => (
@@ -349,7 +373,14 @@ function ChannelDialog({
         )}
 
         <div style={{ display: "flex", gap: 10, marginTop: 20, flexWrap: "wrap" }}>
-          <button type="button" className="jlift" style={primaryBtn} disabled={saving} onClick={handleSave}>
+          <button
+            type="button"
+            className="jlift"
+            style={{ ...primaryBtn, opacity: saving || fields === null || missingRequired ? 0.55 : 1 }}
+            disabled={saving || fields === null || missingRequired}
+            title={missingRequired ? "Remplissez les champs obligatoires" : undefined}
+            onClick={handleSave}
+          >
             {saving ? "Enregistrement…" : "Enregistrer"}
           </button>
           <button type="button" className="jlift" style={ghostBtn} disabled={testing} onClick={handleTest}>
@@ -436,6 +467,14 @@ function IntegrationCard({
         <div style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5, marginBottom: 14 }}>
           {preset.desc}
         </div>
+        {channel.last_error && (
+          <div
+            role="status"
+            style={{ fontSize: 12, color: "var(--error)", lineHeight: 1.45, marginTop: -6, marginBottom: 12 }}
+          >
+            Dernière erreur : {channel.last_error}
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {configurable ? (
             <button
@@ -487,39 +526,63 @@ function CardSkeleton() {
 }
 
 export default function ChannelsPage() {
-  const [channels, setChannels] = useState<ChannelStatus[]>([]);
+  const [channels, setChannels] = useState<ChannelStatus[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ChannelStatus | null>(null);
 
-  const refresh = useCallback(() => {
-    return listChannels()
-      .then(setChannels)
-      .catch(() => {});
+  const refresh = useCallback(async () => {
+    try {
+      setChannels(await listChannels());
+      setError(null);
+    } catch (err) {
+      // backend mort ≠ zéro canal
+      setError(humanError(err, "Impossible de lire l'état de vos canaux."));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    refresh().finally(() => setLoading(false));
+    // synchro avec l'api
+    void refresh();
   }, [refresh]);
 
-  const connectedCount = channels.filter((c) => c.connected).length;
+  const retry = () => {
+    setLoading(true);
+    void refresh();
+  };
+
+  const connectedCount = (channels ?? []).filter((c) => c.connected).length;
 
   return (
-    <div className="jx h-full overflow-y-auto" style={{ background: "var(--bg)", padding: "28px 32px" }}>
+    <div className="jx h-full overflow-y-auto px-4 py-6 md:px-8 md:py-7" style={{ background: "var(--bg)" }}>
       <h1
         className="jserif"
-        style={{ fontSize: 40, lineHeight: 1, letterSpacing: "-0.02em", color: "var(--text)", margin: 0, marginBottom: 8 }}
+        style={{ fontSize: "clamp(30px, 5vw, 40px)", lineHeight: 1, letterSpacing: "-0.02em", color: "var(--text)", margin: 0, marginBottom: 8 }}
       >
         Là où <span style={{ fontStyle: "italic", color: "var(--coral)" }}>Jenny travaille.</span>
       </h1>
       <p style={{ fontSize: 14, color: "var(--text-2)", marginBottom: 28, maxWidth: 560 }}>
-        {connectedCount} intégration{connectedCount > 1 ? "s" : ""} active{connectedCount > 1 ? "s" : ""}.
-        Connectez d&apos;autres canaux pour centraliser tous vos messages.
+        {channels === null
+          ? "Connectez vos canaux pour centraliser tous vos messages."
+          : `${connectedCount} intégration${connectedCount > 1 ? "s" : ""} active${connectedCount > 1 ? "s" : ""}. Connectez d'autres canaux pour centraliser tous vos messages.`}
       </p>
+
+      {error && !loading ? (
+        <div className="jcard" style={{ padding: 22, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
+          <AlertTriangle style={{ width: 20, height: 20, color: "var(--error)", flexShrink: 0 }} />
+          <p style={{ fontSize: 14, color: "var(--text)", margin: 0, flex: 1, minWidth: 200 }}>{error}</p>
+          <button type="button" className="jpill" onClick={retry}>
+            Réessayer
+          </button>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
         {loading
           ? Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)
-          : channels.map((c) => (
+          : (channels ?? []).map((c) => (
               <IntegrationCard key={c.channel} channel={c} onConfigure={setEditing} />
             ))}
       </div>
