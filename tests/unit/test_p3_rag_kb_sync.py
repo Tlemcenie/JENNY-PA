@@ -272,3 +272,29 @@ async def test_route_retire_les_fiches_prix_du_script(monkeypatch: pytest.Monkey
 
     await route._seed_knowledge(_Db(), uuid4())
     assert not any(k.startswith(("presta-", "tarifs-")) for k in kb.by_key())
+
+
+class _LockDb:
+    def __init__(self, dialect: str) -> None:
+        self.dialect = SimpleNamespace(name=dialect)
+        self.sql: list[tuple[str, dict]] = []
+
+    def get_bind(self):
+        return self
+
+    async def execute(self, stmt, params=None):
+        self.sql.append((str(stmt), params or {}))
+        return SimpleNamespace()
+
+
+@pytest.mark.asyncio
+async def test_seed_un_a_la_fois_par_salon() -> None:
+    bid = uuid4()
+    pg = _LockDb("postgresql")
+    assert await route._lock_seed(pg, bid)
+    sql, params = pg.sql[0]
+    assert "pg_advisory_xact_lock" in sql
+    assert params["key"] == f"jenny:seed-coiffeur:{bid}"
+    lite = _LockDb("sqlite")
+    assert not await route._lock_seed(lite, bid)
+    assert lite.sql == []

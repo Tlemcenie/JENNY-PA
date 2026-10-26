@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from jenny.api.dependencies import CurrentUser, DbSession
 from jenny.core.logging import get_logger
@@ -205,6 +205,18 @@ class SeedCoiffeurResponse(BaseModel):
     knowledge: int
 
 
+async def _lock_seed(db, bid: UUID) -> bool:
+    """Un seed à la fois par salon."""
+    if db.get_bind().dialect.name != "postgresql":
+        return False
+    # libéré au prochain commit
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"jenny:seed-coiffeur:{bid}"},
+    )
+    return True
+
+
 async def _seed_knowledge(db: DbSession, bid: UUID) -> int:
     """Fiches tirées du salon réel."""
     if db.get_bind().dialect.name != "postgresql":
@@ -248,6 +260,8 @@ async def seed_coiffeur(db: DbSession, principal: CurrentUser) -> SeedCoiffeurRe
     if bid is None:
         raise HTTPException(400, "Aucun business associé")
 
+    # deux onglets : pas de catalogue en double
+    await _lock_seed(db, bid)
     existing = int(
         (
             await db.execute(
