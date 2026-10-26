@@ -234,7 +234,7 @@ def _word_set(text: str) -> frozenset[str]:
     return frozenset(text.split())
 
 
-# majuscules qui ne sont pas des prénoms
+# majuscules, pas des prénoms
 _NOT_NAMES = _word_set(
     "bloque bloquer bloques bloquez bloquee indisponible indispo dispo disponible"
     " pas je tu il elle on nous vous ils elles le la les un une des du de ce cet"
@@ -377,7 +377,7 @@ async def _handle_block(db: AsyncSession, bid: UUID, actor: str, message: str) -
             db, bid, start_utc, end_utc, staff_id=member.id, pool=pool, check_hours=False
         )
     ).free:
-        # un RDV sans coiffeur compte sur lui
+        # RDV sans coiffeur : sa place
         return {
             "response": f"Si je bloque {member.display_name} le {day_label} {label}, un "
             "rendez-vous sans coiffeur n'aurait plus personne. "

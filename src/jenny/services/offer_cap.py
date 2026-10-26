@@ -221,17 +221,12 @@ def _denies_stop(words: list[str], i: int) -> bool:
     if nxt in _STOP_WORDS:
         # « pas arrêter », « pas me désinscrire »
         return True
-    # « stop pas » seul ; « stop pas de pub » ok
+    # « stop pas » tout seul
     return prev in _STOP_WORDS and nxt not in _STOP_TARGETS | _STOP_VERBS
 
 
 def is_stop_reply(text: str | None) -> bool:
-    """STOP seul ou poli ; sinon ambigu.
-
-    Une négation ne casse le STOP que si elle porte dessus
-    (« n'arrêtez pas », « pas me désinscrire »). Ailleurs, elle
-    renforce le refus (« stop, pas de pub »).
-    """
+    """STOP seul ou poli ; la négation doit viser le STOP."""
     if not text:
         return False
     words = _stop_tokens(text)

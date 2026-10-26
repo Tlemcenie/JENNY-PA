@@ -226,7 +226,7 @@ async def _after_free(db: AsyncSession, freed: dict[str, Any]) -> bool:
         tz = business_tz(await db.get(Business, bid))
         cur = start.astimezone(tz)
         when = f"{_WD[cur.weekday()]} {cur.day:02d}/{cur.month:02d} à {cur.strftime('%Hh%M')}"
-        # créneau exact : la trace saute au commit
+        # créneau exact, perdu au commit
         await notify_waitlist_for_freed_slot(
             db,
             business_id=bid,
@@ -427,7 +427,7 @@ async def update_appointment(
         await _ensure_room(
             db, appt.business_id, new_start, new_end, staff_id=new_staff, exclude_id=appt.id
         )
-    # annulé ou parti ailleurs : place libérée
+    # annulé ou déplacé : place libre
     away = new_end <= _utc(appt.start_at) or new_start >= _utc(appt.end_at)
     frees = new_status == "cancelled" or (away and new_status not in ("completed", "no_show"))
     freed = _snapshot(appt) if frees and _frees_slot(appt) else None
