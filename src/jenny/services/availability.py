@@ -13,7 +13,7 @@ from __future__ import annotations
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -169,7 +169,9 @@ def match_staff(pool: StaffPool, text: str | None) -> Staff | None:
     return None
 
 
-def _window(hours: dict | None, day: date) -> tuple[tuple[int, int], tuple[int, int]] | None:
+def _window(
+    hours: dict[str, Any] | None, day: date
+) -> tuple[tuple[int, int], tuple[int, int]] | None:
     """Ouverture / fermeture d'un jour."""
     if not isinstance(hours, dict):
         return None
@@ -262,7 +264,7 @@ def _free_members(
     booked: list[tuple[datetime, datetime, UUID | None, str]],
     prestation_ids: Iterable[UUID] | None,
     only: UUID | None,
-    cache: dict,
+    cache: dict[tuple[UUID, date], tuple[datetime, datetime] | None],
     check_hours: bool = True,
 ) -> list[Staff]:
     """Coiffeurs libres et compétents sur [start, end)."""
@@ -457,7 +459,7 @@ async def free_slots_with_staff(
     dur = timedelta(minutes=duration_min)
     booked = await _load_booked(db, business_id, candidates[0], candidates[-1] + dur)
     ids = list(prestation_ids or [])
-    cache: dict = {}
+    cache: dict[tuple[UUID, date], tuple[datetime, datetime] | None] = {}
     out: list[tuple[datetime, list[Staff]]] = []
     for s in candidates:
         free = _free_members(pool, business, s, s + dur, booked, ids, staff_id, cache)

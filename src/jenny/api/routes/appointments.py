@@ -5,7 +5,7 @@ alimenté par l'agent de planification de Jenny (création automatique de RDV).
 """
 
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
@@ -425,7 +425,7 @@ async def export_ics(db: DbSession, principal: CurrentUser) -> Response:
     OAuth : un vrai standard interopérable.
     """
     bid = principal.business_id
-    rows: list = []
+    rows: list[Any] = []
     if bid is not None:
         rows = list(
             (
