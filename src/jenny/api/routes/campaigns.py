@@ -65,6 +65,8 @@ class SampleCustomer(BaseModel):
     no_shows: int = 0
     reachable: bool
     eligible: bool
+    # a répondu STOP
+    opt_out: bool = False
 
 
 class SegmentPreview(SegmentOut):
@@ -159,6 +161,17 @@ class OptOutOut(BaseModel):
     opt_out_at: datetime | None = None
 
 
+class OptOutItem(BaseModel):
+    id: UUID
+    name: str
+    opt_out_at: datetime
+
+
+class OptOutList(BaseModel):
+    total: int
+    customers: list[OptOutItem]
+
+
 # ── segments ──
 
 
@@ -212,6 +225,7 @@ async def preview_segment(
                 no_shows=m.no_shows,
                 reachable=reach,
                 eligible=reach and svc.can_offer(m.customer, now),
+                opt_out=m.customer.marketing_opt_out_at is not None,
             )
         )
     return SegmentPreview(**_seg_out(seg, counts), sample=sample)
@@ -339,7 +353,9 @@ async def gaps_preview(db: DbSession, principal: CurrentUser) -> GapsOut:
 async def gaps_run(db: DbSession, principal: CurrentUser) -> GapRunOut:
     """Le gérant lance le remplissage tout de suite."""
     biz = await _business(db, _bid(principal))
-    rep = await gap_filler.fill_gaps_for_business(db, biz, reason="manuel")
+    # jamais 2 passes ensemble
+    async with gap_filler.business_lock(biz.id):
+        rep = await gap_filler.fill_gaps_for_business(db, biz, reason="manuel")
     return GapRunOut(
         sent=rep.sent, failed=rep.failed, planned=len(rep.planned), skipped=rep.skipped
     )
@@ -348,17 +364,67 @@ async def gaps_run(db: DbSession, principal: CurrentUser) -> GapRunOut:
 # ── désinscription ──
 
 
+async def _own_customer(db, bid: UUID, customer_id: UUID) -> Customer:
+    """Client du salon, sinon 404."""
+    cust = await db.get(Customer, customer_id)
+    if cust is None or cust.business_id != bid:
+        raise HTTPException(status_code=404, detail="Client introuvable.")
+    return cust
+
+
+@router.get("/opt-outs", response_model=OptOutList)
+async def list_opt_outs(
+    db: DbSession,
+    principal: CurrentUser,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> OptOutList:
+    """Clientes qui refusent les offres."""
+    bid = _bid(principal)
+    where = (
+        Customer.business_id == bid,
+        Customer.anonymized_at.is_(None),
+        Customer.marketing_opt_out_at.is_not(None),
+    )
+    total = int((await db.execute(select(func.count(Customer.id)).where(*where))).scalar_one() or 0)
+    rows = (
+        await db.execute(
+            select(Customer.id, Customer.full_name, Customer.marketing_opt_out_at)
+            .where(*where)
+            .order_by(Customer.marketing_opt_out_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    items = [
+        OptOutItem(id=cid, name=name or "Client", opt_out_at=_utc(at)) for cid, name, at in rows
+    ]
+    return OptOutList(total=total, customers=items)
+
+
+def _utc(dt: datetime) -> datetime:
+    """Naïve -> UTC."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+@router.get("/opt-out/{customer_id}", response_model=OptOutOut)
+async def get_opt_out(customer_id: UUID, db: DbSession, principal: CurrentUser) -> OptOutOut:
+    """Refus des offres d'un client."""
+    cust = await _own_customer(db, _bid(principal), customer_id)
+    at = cust.marketing_opt_out_at
+    return OptOutOut(
+        customer_id=cust.id, opt_out=at is not None, opt_out_at=_utc(at) if at else None
+    )
+
+
 @router.put("/opt-out/{customer_id}", response_model=OptOutOut)
 async def opt_out(
     customer_id: UUID, body: OptOutIn, db: DbSession, principal: CurrentUser
 ) -> OptOutOut:
     """Coche ou décoche le refus des offres."""
-    bid = _bid(principal)
-    cust = await db.get(Customer, customer_id)
-    if cust is None or cust.business_id != bid:
-        raise HTTPException(status_code=404, detail="Client introuvable.")
-    set_opt_out(cust, body.opt_out)
+    cust = await _own_customer(db, _bid(principal), customer_id)
+    # déjà coché : date gardée
+    if body.opt_out != (cust.marketing_opt_out_at is not None):
+        set_opt_out(cust, body.opt_out)
+        logger.info("campaigns.opt_out_set", customer_id=str(cust.id), opt_out=body.opt_out)
     await db.flush()
-    return OptOutOut(
-        customer_id=cust.id, opt_out=body.opt_out, opt_out_at=cust.marketing_opt_out_at
-    )
+    at = cust.marketing_opt_out_at
+    return OptOutOut(customer_id=cust.id, opt_out=body.opt_out, opt_out_at=_utc(at) if at else None)

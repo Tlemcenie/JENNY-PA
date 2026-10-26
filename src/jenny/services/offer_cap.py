@@ -3,11 +3,17 @@
 Par défaut : une offre (créneau libre, campagne) par client et par
 semaine. Les rappels de RDV et les confirmations n'y passent pas.
 Un client qui répond STOP ne reçoit plus rien de commercial.
+
+Règle STOP : tous les mots du message doivent venir du vocabulaire
+STOP (mot d'arrêt, « ne ... plus recevoir », « plus de pub »,
+politesse). Un autre mot, ou un « pas » qui nie, et c'est ambigu :
+on laisse la conversation répondre.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -138,15 +144,69 @@ async def release_offer(
 
 # ── désinscription ──
 
-_STOP_RE = re.compile(
-    r"^\s*(stop|arr[eê]t|arr[eê]te[rz]?|d[ée]sinscri\w*|unsubscribe|stop\s+pub)\s*[.!]*\s*$",
-    re.I,
+
+def _words(text: str) -> frozenset[str]:
+    """Liste de mots -> ensemble."""
+    return frozenset(text.split())
+
+
+# mots qui veulent dire STOP
+_STOP_WORDS = _words(
+    "stop stopp stoppez arret arrete arreter arretez desinscription desinscrire"
+    " desinscris desinscrivez desinscrit desinscrite desabonner desabonnez"
+    " desabonnement desabonne unsubscribe optout"
+)
+# « ne ... plus recevoir »
+_STOP_VERBS = _words("recevoir envoyer envoyez contacter contactez ecrire ecrivez")
+# ce qu'on refuse
+_STOP_TARGETS = _words(
+    "pub pubs publicite publicites sms offre offres message messages relance"
+    " relances promo promos mail mails email emails notification notifications"
+    " newsletter"
+)
+# politesse et petits mots
+_STOP_FILLERS = _words(
+    "svp stp svpl s il vous plait merci please pls beaucoup bcp ok oui non bon"
+    " bonjour bonsoir hello salut coucou je j veux voudrais souhaite pouvez"
+    " pourriez me moi m ne n plus jamais rien pas de d des du le la les l a au"
+    " aux vos votre tout tous toutes pour et maintenant definitivement liste"
+    " diffusion cette ce ces en y"
+)
+_STOP_ALLOWED = _STOP_WORDS | _STOP_VERBS | _STOP_TARGETS | _STOP_FILLERS
+_MAX_STOP_WORDS = 14
+
+STOP_ACK = (
+    "C'est noté, vous ne recevrez plus d'offres de notre part. "
+    "Vos rappels de rendez-vous continuent normalement."
 )
 
 
+def _stop_tokens(text: str) -> list[str]:
+    """Minuscules, sans accents, mots seuls."""
+    t = unicodedata.normalize("NFKD", text.lower())
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    return re.findall(r"[a-z0-9]+", t)
+
+
 def is_stop_reply(text: str | None) -> bool:
-    """Le client a répondu STOP ?"""
-    return bool(text) and bool(_STOP_RE.match(text))
+    """STOP seul ou poli ; sinon ambigu."""
+    if not text:
+        return False
+    words = _stop_tokens(text)
+    if not words or len(words) > _MAX_STOP_WORDS:
+        return False
+    if any(w not in _STOP_ALLOWED for w in words):
+        # « stop je voulais dire jeudi »
+        return False
+    has = set(words)
+    if has & _STOP_WORDS:
+        # « n'arrêtez pas » : non
+        return "pas" not in has
+    if has & _STOP_VERBS:
+        # « ne m'envoyez plus » oui
+        return "plus" in has and bool(has & {"ne", "n"}) and "pas" not in has
+    # « plus de pub », « pas de sms »
+    return bool(has & _STOP_TARGETS) and bool(has & {"plus", "pas"})
 
 
 def set_opt_out(customer: Customer, opt_out: bool, now: datetime | None = None) -> None:
@@ -155,15 +215,47 @@ def set_opt_out(customer: Customer, opt_out: bool, now: datetime | None = None) 
 
 
 async def apply_stop_reply(
-    db: AsyncSession, *, business_id: UUID, customer_id: UUID | None, text: str | None
+    db: AsyncSession,
+    *,
+    business_id: UUID,
+    customer_id: UUID | None,
+    text: str | None,
+    conversation_id: UUID | None = None,
 ) -> bool:
-    """Désinscrit si le message est un STOP."""
-    if customer_id is None or not is_stop_reply(text):
+    """Désinscrit si c'est un STOP (sans commit)."""
+    if not is_stop_reply(text):
         return False
-    cust = await db.get(Customer, customer_id)
-    if cust is None or cust.business_id != business_id:
+    from jenny.domain.models.conversation import Conversation
+    from jenny.domain.models.waitlist_entry import WaitlistEntry
+
+    conv = None
+    if conversation_id is not None:
+        conv = await db.get(Conversation, conversation_id)
+        if conv is not None and conv.business_id != business_id:
+            conv = None
+    cid = customer_id or (conv.customer_id if conv is not None else None)
+    if cid is not None:
+        cust = await db.get(Customer, cid)
+        if cust is None or cust.business_id != business_id:
+            return False
+        if cust.marketing_opt_out_at is None:
+            set_opt_out(cust, True)
+            await db.flush()
+            logger.info("offer_cap.opt_out", customer_id=str(cid))
+        return True
+    if conv is None:
         return False
-    if cust.marketing_opt_out_at is None:
-        set_opt_out(cust, True)
-        logger.info("offer_cap.opt_out", customer_id=str(customer_id))
+    # anonyme : on vide son attente
+    res = await db.execute(
+        update(WaitlistEntry)
+        .where(
+            WaitlistEntry.business_id == business_id,
+            WaitlistEntry.conversation_id == conv.id,
+            WaitlistEntry.customer_id.is_(None),
+            WaitlistEntry.status == "waiting",
+        )
+        .values(status="cancelled")
+        .execution_options(synchronize_session=False)
+    )
+    logger.info("offer_cap.opt_out_anonyme", conversation_id=str(conv.id), entries=res.rowcount)
     return True

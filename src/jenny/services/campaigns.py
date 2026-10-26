@@ -278,6 +278,8 @@ _GSM7 = set(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
 )
 _GSM7_EXT = set("^{}\\[~]|€")
+# tiret, apostrophes, point
+_NAME_PUNCT = "-'." + chr(0x2019)
 
 
 def first_name(full_name: str | None) -> str:
@@ -286,7 +288,10 @@ def first_name(full_name: str | None) -> str:
     if not parts:
         return ""
     tok = parts[0]
-    if "@" in tok or any(ch.isdigit() for ch in tok) or len(tok) > 30:
+    if len(tok) > 30 or not all(ch.isalpha() or ch in _NAME_PUNCT for ch in tok):
+        # pas un vrai prénom
+        return ""
+    if not any(ch.isalpha() for ch in tok):
         return ""
     return tok[:1].upper() + tok[1:]
 
@@ -301,7 +306,9 @@ def footer(salon: str) -> str:
 
 def render_message(template: str, *, name: str, salon: str) -> str:
     """Remplace {prenom} et ajoute la signature."""
-    body = _PRENOM_RE.sub(f" {name}" if name else "", template.strip())
+    repl = f" {name}" if name else ""
+    # fonction : pas de \1 interprété
+    body = _PRENOM_RE.sub(lambda _m: repl, template.strip())
     body = re.sub(r"^[\s,;:]+", "", body)
     body = body[:1].upper() + body[1:]
     return body + footer(salon)
@@ -380,10 +387,9 @@ async def deliver_campaign(
 ) -> dict[str, int]:
     """Envoie à chaque client du segment, plafond respecté.
 
-    Rejouable : un client déjà traité n'est jamais relancé.
+    Rejouable : un client déjà traité n'est jamais relancé. Une cliente
+    qui plante (nom bizarre, canal HS) ne bloque pas les suivantes.
     """
-    from jenny.notifications.outbound import notify_customer
-
     camp = await db.get(Campaign, campaign_id)
     if camp is None:
         return {"sent": 0, "skipped": 0}
@@ -402,41 +408,83 @@ async def deliver_campaign(
         ).scalars()
     )
     convs = await direct_conversations(db, bid, [m.customer.id for m in members])
-
-    for m in members:
-        cust = m.customer
-        if cust.id in done:
-            continue
-        sent_at = now or datetime.now(UTC)
-        if not is_reachable(cust, convs) or not can_offer(cust, sent_at):
-            continue
-        # trace avant envoi
-        key = {"campaign_id": camp.id, "customer_id": cust.id}
-        if not await insert_once(db, CampaignRecipient, {**key, "sent_at": sent_at}, list(key)):
-            continue
-        await db.commit()
-        text = render_message(camp.message, name=first_name(cust.full_name), salon=salon)
-        canal = await notify_customer(
-            db,
-            business_id=bid,
-            customer_id=cust.id,
-            conversation_id=convs.get(cust.id),
-            text=text,
-            subject=f"{salon} pense à vous",
-            commercial=True,
-        )
-        if canal:
-            await db.execute(
-                update(CampaignRecipient)
-                .where(
-                    CampaignRecipient.campaign_id == camp.id,
-                    CampaignRecipient.customer_id == cust.id,
-                )
-                .values(channel=canal)
-                .execution_options(synchronize_session=False)
+    camp_id, message = camp.id, camp.message
+    # données figées : survit au rollback
+    targets = [
+        (m.customer.id, m.customer.full_name, convs.get(m.customer.id))
+        for m in members
+        if m.customer.id not in done
+        # STOP, plafond, injoignable : non
+        and is_reachable(m.customer, convs)
+        and can_offer(m.customer, ref)
+    ]
+    for cid, full_name, conv_id in targets:
+        try:
+            await _deliver_one(
+                db,
+                camp_id=camp_id,
+                bid=bid,
+                cid=cid,
+                text=render_message(message, name=first_name(full_name), salon=salon),
+                salon=salon,
+                conv_id=conv_id,
+                sent_at=now or datetime.now(UTC),
             )
-        await db.commit()
+        except Exception as exc:  # une cliente ratée, on continue
+            await db.rollback()
+            logger.error("campaign.recipient_failed", campaign_id=str(camp_id), error=str(exc))
 
+    return await _close_campaign(db, camp_id, len(members))
+
+
+async def _deliver_one(
+    db: AsyncSession,
+    *,
+    camp_id: UUID,
+    bid: UUID,
+    cid: UUID,
+    text: str,
+    salon: str,
+    conv_id: UUID | None,
+    sent_at: datetime,
+) -> None:
+    """Trace puis envoie à une cliente."""
+    from jenny.notifications.outbound import notify_customer
+
+    # trace avant envoi
+    key = {"campaign_id": camp_id, "customer_id": cid}
+    if not await insert_once(db, CampaignRecipient, {**key, "sent_at": sent_at}, list(key)):
+        return
+    await db.commit()
+    canal = await notify_customer(
+        db,
+        business_id=bid,
+        customer_id=cid,
+        conversation_id=conv_id,
+        text=text,
+        subject=f"{salon} pense à vous",
+        commercial=True,
+    )
+    if canal:
+        await db.execute(
+            update(CampaignRecipient)
+            .where(
+                CampaignRecipient.campaign_id == camp_id,
+                CampaignRecipient.customer_id == cid,
+            )
+            .values(channel=canal)
+            .execution_options(synchronize_session=False)
+        )
+    await db.commit()
+
+
+async def _close_campaign(
+    db: AsyncSession, camp_id: UUID, members: int, *, status: str = "sent"
+) -> dict[str, int]:
+    """Compteurs + statut final."""
+    camp = await db.get(Campaign, camp_id)
+    if camp is None:
+        return {"sent": 0, "skipped": 0}
     sent = int(
         (
             await db.execute(
@@ -447,12 +495,18 @@ async def deliver_campaign(
             )
         ).scalar_one()
     )
-    camp.target_count = max(camp.target_count, len(members))
+    camp.target_count = max(camp.target_count, members)
     camp.sent_count = sent
     camp.skipped_count = max(0, camp.target_count - sent)
-    camp.status = "sent"
+    camp.status = status
     await db.commit()
-    logger.info("campaign.sent", campaign_id=str(camp.id), sent=sent, target=camp.target_count)
+    logger.info(
+        "campaign.closed",
+        campaign_id=str(camp.id),
+        sent=sent,
+        target=camp.target_count,
+        status=status,
+    )
     return {"sent": sent, "skipped": camp.skipped_count}
 
 
@@ -465,6 +519,47 @@ async def deliver_campaign_job(campaign_id: UUID) -> None:
             await deliver_campaign(db, campaign_id)
     except Exception as exc:  # jamais bloquant
         logger.error("campaign.deliver_failed", campaign_id=str(campaign_id), error=str(exc))
+        try:
+            # plus jamais « en cours »
+            async with async_session_factory() as db:
+                await _close_campaign(db, campaign_id, 0, status="failed")
+        except Exception as exc2:  # base HS
+            logger.error("campaign.mark_failed_failed", error=str(exc2))
+
+
+# envoi coupé net (redémarrage)
+STALE_SENDING = timedelta(minutes=15)
+RESUME_MAX_AGE = timedelta(hours=24)
+
+
+async def resume_stale_campaigns(now: datetime | None = None, *, limit: int = 5) -> int:
+    """Reprend les envois restés « en cours »."""
+    from jenny.db.session import async_session_factory
+    from jenny.services.gap_filler import in_send_hours
+
+    now = now or datetime.now(UTC)
+    async with async_session_factory() as db:
+        rows = (
+            await db.execute(
+                select(Campaign.id, Campaign.created_at, Campaign.business_id)
+                .where(Campaign.status == "sending", Campaign.created_at <= now - STALE_SENDING)
+                .order_by(Campaign.created_at.asc())
+                .limit(limit)
+            )
+        ).all()
+        todo: list[UUID] = []
+        for cid, created, bid in rows:
+            if (_aware(created) or now) < now - RESUME_MAX_AGE:
+                # trop vieux pour envoyer
+                await _close_campaign(db, cid, 0, status="failed")
+                continue
+            biz = await db.get(Business, bid)
+            if biz is not None and in_send_hours(biz, now):
+                todo.append(cid)
+    for cid in todo:
+        logger.info("campaign.resume", campaign_id=str(cid))
+        await deliver_campaign_job(cid)
+    return len(todo)
 
 
 # ── attribution ──

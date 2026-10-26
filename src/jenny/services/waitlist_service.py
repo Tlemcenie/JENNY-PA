@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from jenny.core.logging import get_logger
 from jenny.domain.models.notification import Notification
 from jenny.domain.models.waitlist_entry import WaitlistEntry
+from jenny.services.freed_slots import take_freed_slot
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -116,12 +117,78 @@ async def waitlist_position(db: AsyncSession, entry: WaitlistEntry) -> int:
     return max(1, int(count or 1))
 
 
+async def _recipient(
+    db: AsyncSession, business_id: UUID, entry: WaitlistEntry
+) -> tuple[UUID | None, str | None, str | None]:
+    """(fiche, clé d'offre, nom) de l'inscrit."""
+    from jenny.domain.models.conversation import Conversation
+    from jenny.domain.models.customer import Customer
+    from jenny.services.gap_filler import recipient_key
+
+    cid = entry.customer_id
+    conv = None
+    if entry.conversation_id is not None:
+        conv = await db.get(Conversation, entry.conversation_id)
+        if conv is not None and conv.business_id != business_id:
+            conv = None
+    if cid is None and conv is not None:
+        cid = conv.customer_id
+    if cid is not None:
+        cust = await db.get(Customer, cid)
+        if cust is None or cust.business_id != business_id:
+            return None, None, None
+        return cid, recipient_key(cid, None), cust.full_name
+    if conv is None:
+        # personne à joindre
+        return None, None, None
+    return None, recipient_key(None, conv.id), None
+
+
+async def _trace_offer(
+    db: AsyncSession,
+    *,
+    business_id: UUID,
+    entry: WaitlistEntry,
+    customer_id: UUID | None,
+    key: str,
+    slot_start: datetime,
+    minutes: int,
+    label: str | None,
+) -> UUID | None:
+    """Note l'offre (une fois), sinon None."""
+    from uuid import uuid4
+
+    from jenny.domain.models.campaign import SlotOffer
+    from jenny.services.campaigns import insert_once
+
+    offer_id = uuid4()
+    values = {
+        "id": offer_id,
+        "business_id": business_id,
+        "customer_id": customer_id,
+        "conversation_id": entry.conversation_id,
+        "waitlist_entry_id": entry.id,
+        "recipient_key": key,
+        "slot_start": slot_start if slot_start.tzinfo else slot_start.replace(tzinfo=UTC),
+        "duration_minutes": max(5, min(480, int(minutes))),
+        "service": label[:120] if label else None,
+        "source": "waitlist",
+        "reason": "annulation",
+    }
+    keys = ["business_id", "recipient_key", "slot_start"]
+    if not await insert_once(db, SlotOffer, values, keys):
+        return None
+    return offer_id
+
+
 async def notify_waitlist_for_freed_slot(
     db: AsyncSession,
     *,
     business_id: UUID,
     service: str | None = None,
     when_label: str | None = None,
+    slot_start: datetime | None = None,
+    duration_minutes: int | None = None,
 ) -> WaitlistEntry | None:
     """Un créneau s'est libéré : signale le 1er inscrit compatible au salon.
 
@@ -129,9 +196,18 @@ async def notify_waitlist_for_freed_slot(
     le contact du client et la prestation, pour un rappel prioritaire. Renvoie
     l'entrée prévenue, ou None si la file est vide / aucune entrée compatible.
 
-    Le client reçoit aussi un message (offre : plafond anti-spam). Si
+    Le client reçoit aussi un message (offre : plafond anti-spam), tracé dans
+    slot_offers pour que le gap filler ne repropose pas la place. Si
     personne n'attend, une passe de remplissage d'agenda est lancée.
+    ``service`` peut être le titre libre du RDV : il n'est jamais envoyé
+    tel quel au client.
     """
+    if slot_start is None:
+        # lu avant tout flush
+        freed = take_freed_slot(db, business_id)
+        if freed is not None:
+            slot_start, duration_minutes = freed[0], duration_minutes or freed[1]
+
     waiting = (
         await db.execute(
             select(WaitlistEntry)
@@ -148,38 +224,85 @@ async def notify_waitlist_for_freed_slot(
         # personne n'attend : passe agenda
         from jenny.services.gap_filler import schedule_after_change
 
-        schedule_after_change(db, business_id)
+        await schedule_after_change(db, business_id)
         return None
 
     match.status = "notified"
     match.notified_at = datetime.now(UTC)
 
-    who = match.customer_name or "un client"
     contact = f" ({match.customer_contact})" if match.customer_contact else ""
+    # pour le gérant seulement
     svc_label = match.service or service or "une prestation"
     slot_txt = f" du {when_label}" if when_label else ""
 
-    # message client, plafond compris
+    from jenny.domain.models.business import Business
     from jenny.notifications.outbound import notify_customer
+    from jenny.services.prestation_service import find_prestation, load_active_prestations
 
-    canal = await notify_customer(
-        db,
-        business_id=business_id,
-        customer_id=match.customer_id,
-        conversation_id=match.conversation_id,
-        text=(
-            f"Ici Jenny, l'assistante virtuelle du salon. "
-            f"Bonne nouvelle : un créneau{slot_txt} vient de se libérer "
-            f"pour « {svc_label} ». Ça vous intéresse ? Répondez-moi et je vous le bloque."
-        ),
-        subject="Un créneau s'est libéré",
-        commercial=True,
-    )
-    auto = (
-        f" Jenny l'a déjà prévenu par {canal}."
-        if canal
-        else " Pas de message auto (déjà sollicité cette semaine, STOP ou injoignable)."
-    )
+    prestations = await load_active_prestations(db, business_id)
+    # ses propres mots
+    own = (match.service or "").strip()[:60] or None
+    hit = find_prestation(prestations, own or service or "") if prestations else None
+    # jamais le titre libre
+    client_label = own or (hit.name[:60] if hit is not None and hit.name else None)
+    if duration_minutes is None:
+        duration_minutes = int(hit.duration_minutes) if hit and hit.duration_minutes else 30
+
+    cid, key, fiche_name = await _recipient(db, business_id, match)
+    who = match.customer_name or fiche_name or "un client"
+    offer_id = None
+    already = False
+    if slot_start is not None and key is not None:
+        offer_id = await _trace_offer(
+            db,
+            business_id=business_id,
+            entry=match,
+            customer_id=cid,
+            key=key,
+            slot_start=slot_start,
+            minutes=duration_minutes,
+            label=client_label,
+        )
+        # déjà proposé à elle
+        already = offer_id is None
+
+    canal = None
+    if not already:
+        biz = await db.get(Business, business_id)
+        salon_txt = f"de {biz.name}" if biz is not None and biz.name else "du salon"
+        svc_txt = f" pour « {client_label} »" if client_label else ""
+        # message client, plafond compris
+        canal = await notify_customer(
+            db,
+            business_id=business_id,
+            customer_id=cid,
+            conversation_id=match.conversation_id,
+            text=(
+                f"Ici Jenny, l'assistante virtuelle {salon_txt}. "
+                f"Bonne nouvelle : un créneau{slot_txt} vient de se libérer{svc_txt}. "
+                "Ça vous intéresse ? Répondez-moi et je vous le bloque. "
+                "STOP pour ne plus recevoir d'offres."
+            ),
+            subject="Un créneau s'est libéré",
+            commercial=True,
+        )
+    if canal and offer_id is not None:
+        from sqlalchemy import update
+
+        from jenny.domain.models.campaign import SlotOffer
+
+        await db.execute(
+            update(SlotOffer)
+            .where(SlotOffer.id == offer_id)
+            .values(channel=canal, sent_at=datetime.now(UTC))
+            .execution_options(synchronize_session=False)
+        )
+    if canal:
+        auto = f" Jenny l'a déjà prévenu par {canal}."
+    elif already:
+        auto = " Pas de message auto (ce créneau lui a déjà été proposé)."
+    else:
+        auto = " Pas de message auto (déjà sollicité cette semaine, STOP ou injoignable)."
     db.add(
         Notification(
             business_id=business_id,

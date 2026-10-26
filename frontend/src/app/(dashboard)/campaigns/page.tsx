@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import {
+  BellOff,
+  BellRing,
   CalendarClock,
   Crown,
   Hourglass,
@@ -21,14 +23,17 @@ import { ApiError } from "@/lib/api";
 import {
   getCampaignHistory,
   getGaps,
+  listOptOuts,
   listSegments,
   previewSegment,
   renderCampaignMessage,
   runGapFiller,
   sendCampaign,
+  setMarketingOptOut,
   type Campaign,
   type CampaignHistory,
   type GapsOverview,
+  type OptOutList,
   type RenderedMessage,
   type Segment,
   type SegmentKey,
@@ -317,6 +322,72 @@ function SegmentCard({
   );
 }
 
+// ── refus des offres (STOP) ──
+
+function OptOutCard({
+  data,
+  busyId,
+  onRestore,
+}: {
+  data: OptOutList | null;
+  busyId: string | null;
+  onRestore: (id: string, name: string) => void;
+}) {
+  return (
+    <Card className="p-5 md:p-6">
+      <div className="flex items-center gap-2 mb-1">
+        <BellOff className="w-4 h-4 text-jenny-coral" />
+        <h2 className="font-semibold text-jenny-text">Refus des offres (STOP)</h2>
+        {data && data.total > 0 && (
+          <span className="text-[11px] bg-jenny-bg-tint text-jenny-text-secondary rounded-full px-2 py-0.5 tabular-nums">
+            {data.total}
+          </span>
+        )}
+      </div>
+      <p className="text-[13px] text-jenny-text-secondary leading-relaxed max-w-2xl">
+        Une cliente qui répond STOP (ou que vous excluez) ne reçoit plus aucune offre ni
+        relance. Ses rappels de rendez-vous continuent.
+      </p>
+      {!data ? (
+        <Skeleton className="h-10 w-full mt-4" />
+      ) : data.customers.length === 0 ? (
+        <p className="text-[13px] text-jenny-text-secondary mt-4">
+          Personne n&apos;a refusé les offres pour l&apos;instant.
+        </p>
+      ) : (
+        <ul className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          {data.customers.map((c) => (
+            <li
+              key={c.id}
+              className="flex items-center justify-between gap-2 text-[13px] rounded-xl border border-jenny-divider px-3 py-2"
+            >
+              <span className="min-w-0">
+                <span className="font-medium text-jenny-text truncate block">{c.name}</span>
+                <span className="text-[11px] text-jenny-text-secondary">
+                  depuis le {shortDate(c.opt_out_at)}
+                </span>
+              </span>
+              <button
+                onClick={() => onRestore(c.id, c.name)}
+                disabled={busyId === c.id}
+                className="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-lg text-jenny-text-secondary hover:text-jenny-coral hover:bg-jenny-coral/10 disabled:opacity-50 transition-colors"
+              >
+                <BellRing className="w-3.5 h-3.5" />
+                Réactiver
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {data && data.total > data.customers.length && (
+        <p className="text-[11px] text-jenny-text-secondary mt-2">
+          + {data.total - data.customers.length} autre(s) · visibles sur leur fiche client
+        </p>
+      )}
+    </Card>
+  );
+}
+
 // ── ligne d'historique ──
 
 function HistoryRow({ c }: { c: Campaign }) {
@@ -331,6 +402,10 @@ function HistoryRow({ c }: { c: Campaign }) {
             {c.status === "sending" ? (
               <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 bg-jenny-warning/15 text-jenny-warning">
                 envoi en cours
+              </span>
+            ) : c.status === "failed" ? (
+              <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 bg-jenny-error/12 text-jenny-error">
+                envoi interrompu
               </span>
             ) : c.window_open ? (
               <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 bg-jenny-mint text-jenny-text">
@@ -386,6 +461,8 @@ export default function CampaignsPage() {
   const [rendered, setRendered] = useState<RenderedMessage | null>(null);
   const [sending, setSending] = useState(false);
   const [running, setRunning] = useState(false);
+  const [optOuts, setOptOuts] = useState<OptOutList | null>(null);
+  const [optBusy, setOptBusy] = useState<string | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   const loadAll = useCallback(async () => {
@@ -412,10 +489,52 @@ export default function CampaignsPage() {
     }
   }, []);
 
+  const loadOptOuts = useCallback(async () => {
+    try {
+      setOptOuts(await listOptOuts());
+    } catch {
+      setOptOuts({ total: 0, customers: [] });
+    }
+  }, []);
+
   useEffect(() => {
     loadAll();
     loadGaps();
-  }, [loadAll, loadGaps]);
+    loadOptOuts();
+  }, [loadAll, loadGaps, loadOptOuts]);
+
+  // bascule du refus des offres
+  const toggleOptOut = useCallback(
+    async (id: string, name: string, optOut: boolean) => {
+      if (!optOut) {
+        const ok = await confirm({
+          title: `Réactiver les offres pour ${name} ?`,
+          message:
+            "Elle a refusé les offres. Ne les réactivez que si elle vous l'a demandé.",
+          confirmLabel: "Elle est d'accord",
+        });
+        if (!ok) return;
+      }
+      setOptBusy(id);
+      try {
+        await setMarketingOptOut(id, optOut);
+        toast.success(optOut ? `${name} ne recevra plus d'offres.` : "Offres réactivées.");
+        // compteurs et trous à jour
+        const jobs: Promise<unknown>[] = [
+          loadOptOuts(),
+          loadGaps(),
+          listSegments().then(setSegments),
+        ];
+        if (selected) jobs.push(previewSegment(selected).then(setPreview));
+        await Promise.all(jobs);
+      } catch (err) {
+        toast.error(errorText(err, "Modification impossible."));
+      } finally {
+        setOptBusy(null);
+      }
+    },
+    [confirm, toast, loadOptOuts, loadGaps, selected]
+  );
 
   // suivi d'un envoi en cours
   const sendingNow = history?.campaigns.some((c) => c.status === "sending");
@@ -552,6 +671,7 @@ export default function CampaignsPage() {
             onClick={() => {
               loadAll();
               loadGaps();
+              loadOptOuts();
             }}
             title="Rafraîchir"
             aria-label="Rafraîchir"
@@ -729,19 +849,42 @@ export default function CampaignsPage() {
                                     {s.no_shows > 0 && ` · ${s.no_shows} manqué(s)`}
                                   </span>
                                 </span>
-                                {!s.reachable ? (
-                                  <span className="shrink-0 text-[10px] rounded-full px-2 py-0.5 bg-jenny-bg-tint text-jenny-text-secondary">
-                                    injoignable
-                                  </span>
-                                ) : !s.eligible ? (
-                                  <span className="shrink-0 text-[10px] rounded-full px-2 py-0.5 bg-jenny-warning/15 text-jenny-warning">
-                                    déjà sollicitée
-                                  </span>
-                                ) : (
-                                  <span className="shrink-0 text-[10px] rounded-full px-2 py-0.5 bg-jenny-mint text-jenny-text">
-                                    ok
-                                  </span>
-                                )}
+                                <span className="shrink-0 flex items-center gap-1">
+                                  {s.opt_out ? (
+                                    <span className="text-[10px] rounded-full px-2 py-0.5 bg-jenny-error/12 text-jenny-error">
+                                      STOP
+                                    </span>
+                                  ) : !s.reachable ? (
+                                    <span className="text-[10px] rounded-full px-2 py-0.5 bg-jenny-bg-tint text-jenny-text-secondary">
+                                      injoignable
+                                    </span>
+                                  ) : !s.eligible ? (
+                                    <span className="text-[10px] rounded-full px-2 py-0.5 bg-jenny-warning/15 text-jenny-warning">
+                                      déjà sollicitée
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] rounded-full px-2 py-0.5 bg-jenny-mint text-jenny-text">
+                                      ok
+                                    </span>
+                                  )}
+                                  <button
+                                    onClick={() => toggleOptOut(s.id, s.name, !s.opt_out)}
+                                    disabled={optBusy === s.id}
+                                    title={s.opt_out ? "Réactiver les offres" : "Ne plus lui envoyer d'offres"}
+                                    aria-label={
+                                      s.opt_out
+                                        ? `Réactiver les offres pour ${s.name}`
+                                        : `Ne plus envoyer d'offres à ${s.name}`
+                                    }
+                                    className="p-1 rounded-md text-jenny-text-secondary hover:text-jenny-coral hover:bg-jenny-coral/10 disabled:opacity-50 transition-colors"
+                                  >
+                                    {s.opt_out ? (
+                                      <BellRing className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <BellOff className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                </span>
                               </li>
                             ))}
                           </ul>
@@ -752,6 +895,13 @@ export default function CampaignsPage() {
                 </motion.div>
               )}
             </section>
+
+            {/* refus des offres */}
+            <OptOutCard
+              data={optOuts}
+              busyId={optBusy}
+              onRestore={(id, name) => toggleOptOut(id, name, false)}
+            />
 
             {/* historique */}
             <section className="space-y-3">

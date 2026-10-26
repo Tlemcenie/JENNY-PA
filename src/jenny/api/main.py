@@ -74,6 +74,8 @@ async def _warmup_models() -> None:
     - embedder RAG : le sentence-transformer (défaut, in-process) met plusieurs
       secondes à charger torch + poids → à chauffer QUEL QUE SOIT le provider
       LLM, notamment en prod Cloud Run (Groq). Best-effort : n'interrompt jamais.
+    - moteur de conversation (tête d'intention mpnet) : construit dans un
+      thread pour ne pas geler la première requête.
     """
     settings = get_settings()
     try:
@@ -86,6 +88,10 @@ async def _warmup_models() -> None:
         from jenny.rag.embeddings import get_default_embedder
 
         await get_default_embedder().embed_text("ping")
+        # tête d'intention mpnet
+        from jenny.engine.factory import get_engine
+
+        await asyncio.to_thread(get_engine)
         logger.info("jenny.llm_warmup.done", model=settings.llm_model)
     except Exception as exc:
         logger.warning("jenny.llm_warmup_failed", error=str(exc))
@@ -117,7 +123,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Préchauffage des modèles en tâche de fond (ne bloque pas le démarrage).
     # Référence gardée sur app.state pour éviter un GC prématuré de la tâche.
     app.state.warmup_task = asyncio.create_task(_warmup_models())
+    # relances sans worker
+    from jenny.services.relances_loop import start_relances_loop, stop_relances_loop
+
+    app.state.relances_task = start_relances_loop(settings)
     yield
+    await stop_relances_loop(app.state.relances_task)
     await close_arq_pool()
     await close_rate_limit_redis()
     logger.info("jenny.shutdown")
