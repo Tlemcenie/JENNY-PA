@@ -54,6 +54,7 @@ export function channelLabel(channel: string): string {
     snapchat: "Snapchat",
     form: "Formulaire",
     api: "API",
+    widget: "Site web",
   };
   return labels[channel] || channel;
 }
@@ -67,6 +68,7 @@ export function channelColor(channel: string): string {
     snapchat: "bg-yellow-400",
     form: "bg-jenny-slate",
     api: "bg-jenny-coral",
+    widget: "bg-jenny-slate",
   };
   return colors[channel] || "bg-jenny-slate";
 }
@@ -143,6 +145,12 @@ export function intentLabel(intent: string): string {
     payment_question: "Moyens de paiement",
   };
   return labels[intent] || capitalize(intent);
+}
+
+/** peut régler le salon ? */
+export function canManageSalon(role?: string | null): boolean {
+  // rôle inconnu : l'api tranche
+  return !role || role === "owner" || role === "admin";
 }
 
 // Rôle d'un membre dans l'entreprise (cf. business_member.role).

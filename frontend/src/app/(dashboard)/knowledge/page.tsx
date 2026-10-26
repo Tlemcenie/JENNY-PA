@@ -1,6 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, type FormEvent, type CSSProperties } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type FormEvent,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BookOpen,
@@ -28,7 +36,7 @@ import {
   getKnowledgeStats,
   type KnowledgeEntry,
   type KnowledgeSearchHit,
-  ApiError,
+  humanError,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { categoryLabel, sourceLabel, truncate } from "@/lib/utils";
@@ -93,6 +101,9 @@ export default function KnowledgePage() {
   const [searching, setSearching] = useState(false);
   // menu par ligne
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  // bouton qui a ouvert le menu
+  const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   // ouvre le sélecteur de fichiers
   const filesInputRef = useRef<HTMLInputElement | null>(null);
   // focus gardé dans la modale
@@ -111,11 +122,7 @@ export default function KnowledgePage() {
       setEntries(entriesData || []);
       setStats(statsData);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(`Erreur ${err.status}: ${(err.data as { detail?: string })?.detail || err.statusText}`);
-      } else {
-        setError("Impossible de charger la base de connaissances.");
-      }
+      setError(humanError(err, "Impossible de charger la base de connaissances."));
     } finally {
       setIsLoading(false);
     }
@@ -144,17 +151,47 @@ export default function KnowledgePage() {
   useEffect(() => {
     if (!menuOpenId) return;
     const close = () => setMenuOpenId(null);
-    // échap ferme aussi
+    // échap rend le focus
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape") {
+        close();
+        menuTriggerRef.current?.focus();
+      }
     };
+    // focus sur le 1er choix
+    const t = setTimeout(() => {
+      menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    }, 0);
     window.addEventListener("click", close);
     window.addEventListener("keydown", onKey);
     return () => {
+      clearTimeout(t);
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", onKey);
     };
   }, [menuOpenId]);
+
+  // flèches dans le menu
+  const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+    if (items.length === 0) return;
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      items[(i + 1) % items.length].focus();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      items[(i - 1 + items.length) % items.length].focus();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      items[0].focus();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      items[items.length - 1].focus();
+    } else if (e.key === "Tab") {
+      setMenuOpenId(null);
+    }
+  };
 
   const resetForm = () => {
     setShowAddForm(false);
@@ -179,7 +216,8 @@ export default function KnowledgePage() {
     setEditingId(entry.id);
     setFormMode("text");
     setTitle(entry.title || "");
-    setContent(entry.content_preview || "");
+    // texte complet si dispo
+    setContent(entry.content ?? entry.content_preview ?? "");
     setCategory(entry.category || "general");
     setFile(null);
     setFiles([]);
@@ -235,10 +273,10 @@ export default function KnowledgePage() {
       resetForm();
       fetchData();
     } catch (err) {
-      const msg =
-        err instanceof ApiError
-          ? (err.data as { detail?: string })?.detail || "Erreur lors de l'ajout"
-          : "Impossible d'ajouter l'entrée.";
+      const msg = humanError(
+        err,
+        editingId ? "Impossible d'enregistrer l'entrée." : "Impossible d'ajouter l'entrée."
+      );
       setFormError(msg);
       toast.error(msg);
     } finally {
@@ -907,7 +945,7 @@ export default function KnowledgePage() {
                         borderRadius: 9,
                         flexShrink: 0,
                         background: isPdf ? "#FEE2E2" : "var(--mint)",
-                        color: isPdf ? "#991B1B" : "#1F6A47",
+                        color: isPdf ? "#991B1B" : "var(--mint-ink)",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -983,8 +1021,10 @@ export default function KnowledgePage() {
                         aria-label={`Actions pour ${entry.title || "cette source"}`}
                         aria-haspopup="menu"
                         aria-expanded={menuOpenId === entry.id}
+                        aria-controls={menuOpenId === entry.id ? `kb-menu-${entry.id}` : undefined}
                         onClick={(e) => {
                           e.stopPropagation();
+                          menuTriggerRef.current = e.currentTarget;
                           setMenuOpenId((cur) => (cur === entry.id ? null : entry.id));
                         }}
                         style={{
@@ -1002,7 +1042,12 @@ export default function KnowledgePage() {
                     )}
                     {menuOpenId === entry.id && (
                       <div
+                        ref={menuRef}
+                        id={`kb-menu-${entry.id}`}
+                        role="menu"
+                        aria-label={`Actions pour ${entry.title || "cette source"}`}
                         onClick={(e) => e.stopPropagation()}
+                        onKeyDown={onMenuKey}
                         style={{
                           position: "absolute",
                           top: "100%",
@@ -1020,7 +1065,10 @@ export default function KnowledgePage() {
                         {isEditable && (
                           <button
                             type="button"
+                            role="menuitem"
                             onClick={() => {
+                              // focus rendu à la fermeture
+                              menuTriggerRef.current?.focus();
                               setMenuOpenId(null);
                               openEdit(entry);
                             }}
@@ -1045,7 +1093,11 @@ export default function KnowledgePage() {
                         )}
                         <button
                           type="button"
-                          onClick={() => handleDelete(entry.id)}
+                          role="menuitem"
+                          onClick={() => {
+                            menuTriggerRef.current?.focus();
+                            void handleDelete(entry.id);
+                          }}
                           style={{
                             width: "100%",
                             display: "flex",

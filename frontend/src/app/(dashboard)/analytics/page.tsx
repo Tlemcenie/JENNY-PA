@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
@@ -137,8 +137,9 @@ function AnalyticsSkeleton() {
 
 // carte rdv du salon
 function SalonCard({ days }: { days: number }) {
-  const [stats, setStats] = useState<SalonStats | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // chiffres liés à leur période
+  const [loaded, setLoaded] = useState<{ days: number; stats: SalonStats } | null>(null);
+  const [failed, setFailed] = useState<{ days: number; msg: string } | null>(null);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
@@ -146,14 +147,21 @@ function SalonCard({ days }: { days: number }) {
     getSalonStats(days)
       .then((s) => {
         if (!alive) return;
-        setStats(s);
-        setError(null);
+        setLoaded({ days, stats: s });
+        setFailed(null);
       })
-      .catch((err) => alive && setError(humanError(err, "Statistiques du salon indisponibles.")));
+      .catch(
+        (err) =>
+          alive && setFailed({ days, msg: humanError(err, "Statistiques du salon indisponibles.") })
+      );
     return () => {
       alive = false;
     };
   }, [days, reload]);
+
+  // jamais l'ancienne période
+  const stats = loaded && loaded.days === days ? loaded.stats : null;
+  const error = failed && failed.days === days ? failed.msg : null;
 
   return (
     <Card className="p-[22px] h-full flex flex-col">
@@ -202,24 +210,33 @@ function SalonCard({ days }: { days: number }) {
 }
 
 export default function AnalyticsPage() {
-  const [insights, setInsights] = useState<Insights | null>(null);
+  // données + période réelle
+  const [result, setResult] = useState<{ days: number; data: Insights } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [periodIdx, setPeriodIdx] = useState(1); // 30j par défaut
+  // ignore les réponses en retard
+  const lastReq = useRef(0);
 
   const days = PERIODS[periodIdx].days;
 
   const fetchInsights = useCallback(async () => {
+    const req = ++lastReq.current;
     setIsLoading(true);
     setError(null);
     try {
-      setInsights(await getInsights(days));
+      const data = await getInsights(days);
+      if (req === lastReq.current) setResult({ days, data });
     } catch (err) {
-      setError(humanError(err, "Impossible de charger les analytics."));
+      if (req === lastReq.current) setError(humanError(err, "Impossible de charger les analytics."));
     } finally {
-      setIsLoading(false);
+      if (req === lastReq.current) setIsLoading(false);
     }
   }, [days]);
+
+  const insights = result?.data ?? null;
+  // libellé = période affichée
+  const shownDays = result?.days ?? days;
 
   useEffect(() => {
     void fetchInsights();
@@ -295,7 +312,7 @@ export default function AnalyticsPage() {
           <Card className={cn("p-6 mb-[18px] transition-opacity", isLoading && "opacity-60")}>
             <div className="flex flex-wrap items-end gap-4 mb-4">
               <div>
-                <MonoLabel className="mb-2.5">messages échangés · {days} jours</MonoLabel>
+                <MonoLabel className="mb-2.5">messages échangés · {shownDays} jours</MonoLabel>
                 <div className="flex items-baseline gap-3.5 flex-wrap">
                   <span className="font-display text-[clamp(40px,8vw,60px)] leading-[1] tracking-[-0.02em] text-jenny-text tabular-nums">
                     <AnimatedNumber value={totalMessages} />
@@ -338,7 +355,7 @@ export default function AnalyticsPage() {
                 Aucun message sur cette période.
               </div>
             ) : (
-              <MessageVolumeChart data={daily} days={days} />
+              <MessageVolumeChart data={daily} days={shownDays} />
             )}
 
             {insights.by_channel.length > 0 && (

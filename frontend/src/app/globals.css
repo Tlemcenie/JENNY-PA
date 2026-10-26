@@ -49,6 +49,9 @@
   --color-jenny-divider: #282C34;
   --color-jenny-mint: #15241D;
   --color-jenny-mint-dark: #25453686;
+  /* teintes de fond en sombre */
+  --color-jenny-bg-tint: #1F232B;
+  --color-jenny-coral-tint: #2E2327;
   /* coral, success, error, warning et les couleurs de canaux restent vives */
 }
 
@@ -352,6 +355,7 @@ html {
   --bg: var(--color-jenny-bg);
   --bg-tint: var(--color-jenny-bg-tint);
   --mint: var(--color-jenny-mint);
+  --mint-ink: #1f6a47;
   --text: var(--color-jenny-text);
   --text-2: var(--color-jenny-text-secondary);
   --text-3: color-mix(in srgb, var(--color-jenny-text-secondary) 70%, transparent);
@@ -397,11 +401,13 @@ html {
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
-.jx .jbadge--mint { background: var(--mint); color: #1f6a47; }
+.jx .jbadge--mint { background: var(--mint); color: var(--mint-ink); }
 .jx .jbadge--coral { background: var(--coral-tint); color: var(--coral-dark); }
 .jx .jbadge--slate { background: color-mix(in srgb, var(--slate) 14%, transparent); color: var(--slate); }
 .jx .jbadge--warn { background: #fef3c7; color: #92400e; }
 .jx .jbadge--urgent { background: #fee2e2; color: #991b1b; }
+/* texte vert lisible en sombre */
+.dark .jx { --mint-ink: #6ee7b7; }
 .dark .jx .jbadge--warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
 .dark .jx .jbadge--urgent { background: color-mix(in srgb, var(--error) 18%, transparent); color: var(--error); }
 
@@ -427,6 +433,8 @@ html {
 .jx .jchip--em .dot { background: var(--email); }
 .jx .jchip--tw { background: color-mix(in srgb, var(--twitter) 12%, transparent); color: var(--twitter); }
 .jx .jchip--tw .dot { background: var(--twitter); }
+.jx .jchip--web { background: color-mix(in srgb, var(--slate) 14%, transparent); color: var(--slate); }
+.jx .jchip--web .dot { background: var(--slate); }
 .dark .jx .jchip--wa { color: var(--whatsapp); }
 
 /* Bulles de message */

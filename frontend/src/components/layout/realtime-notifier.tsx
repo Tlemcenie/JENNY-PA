@@ -7,6 +7,12 @@ import { channelLabel } from "@/lib/utils";
 import { playNotificationSound } from "@/lib/sound";
 import { useRealtimeEvent } from "@/components/providers/realtime-provider";
 
+/** vrai message client ? */
+function isCustomerMessage(event: RealtimeEvent): boolean {
+  // simple refresh = pas d'alerte
+  return event.kind === "inbound" && event.event !== "notification.new";
+}
+
 /** notificateur temps réel global. */
 export function RealtimeNotifier() {
   const pathname = usePathname();
@@ -46,10 +52,10 @@ export function RealtimeNotifier() {
 
   // flux partagé du layout
   useRealtimeEvent((event: RealtimeEvent) => {
-    if (event.kind !== "inbound") return; // seuls les entrants alertent
-    const path = pathnameRef.current;
+    // vrais clients seulement
+    if (!isCustomerMessage(event)) return;
     // déjà sous les yeux
-    if (!document.hidden && (path === "/conversations" || path === "/chat")) return;
+    if (!document.hidden && pathnameRef.current === "/conversations") return;
     countRef.current += 1;
     applyTitle();
     playNotificationSound(); // bip discret

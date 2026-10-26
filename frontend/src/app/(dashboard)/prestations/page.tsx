@@ -27,7 +27,7 @@ import {
   updatePrestation,
   deletePrestation,
   seedCoiffeurTemplate,
-  ApiError,
+  humanError,
   type Prestation,
   type PrestationPayload,
 } from "@/lib/api";
@@ -67,13 +67,6 @@ function categoryMeta(category: string) {
       className: "bg-jenny-divider/60 text-jenny-text-secondary",
     }
   );
-}
-
-function extractError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return (err.data as { detail?: string })?.detail || `Erreur ${err.status}`;
-  }
-  return fallback;
 }
 
 // Prix entier → "39 €", prix décimal → "39,50 €".
@@ -154,12 +147,7 @@ export default function PrestationsPage() {
       );
       setPrestations(sorted);
     } catch (err) {
-      setError(
-        extractError(
-          err,
-          "Impossible de charger les prestations. Vérifiez que le backend est démarré."
-        )
-      );
+      setError(humanError(err, "Impossible de charger les prestations."));
     } finally {
       setIsLoading(false);
     }
@@ -178,7 +166,7 @@ export default function PrestationsPage() {
       toast.success(`Catalogue créé · ${res.prestations} prestation(s) ajoutée(s).`);
       await fetchPrestations();
     } catch (err) {
-      toast.error(extractError(err, "Échec de la création du catalogue."));
+      toast.error(humanError(err, "Échec de la création du catalogue."));
     } finally {
       setSeeding(false);
     }
@@ -244,7 +232,7 @@ export default function PrestationsPage() {
       setFormOpen(false);
       await fetchPrestations();
     } catch (err) {
-      toast.error(extractError(err, "Échec de l'enregistrement de la prestation."));
+      toast.error(humanError(err, "Échec de l'enregistrement de la prestation."));
     } finally {
       setSaving(false);
     }
@@ -261,7 +249,7 @@ export default function PrestationsPage() {
       setConfirmDelete(null);
       toast.success("Prestation supprimée.");
     } catch (err) {
-      toast.error(extractError(err, "Échec de la suppression."));
+      toast.error(humanError(err, "Échec de la suppression."));
     } finally {
       setDeletingId(null);
     }

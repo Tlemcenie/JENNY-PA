@@ -73,7 +73,7 @@ import {
   type TeamMember,
   type CopilotSuggestion,
   type PendingQuestion,
-  ApiError,
+  humanError,
 } from "@/lib/api";
 import { formatDate, channelLabel, intentLabel, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -183,13 +183,9 @@ function shortTime(dateStr: string | null): string {
   return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 }
 
+// message lisible, sans code
 function extractError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return `Erreur ${err.status}: ${
-      (err.data as { detail?: string })?.detail || err.statusText
-    }`;
-  }
-  return fallback;
+  return humanError(err, fallback);
 }
 
 export default function ConversationsPage() {

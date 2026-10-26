@@ -15,6 +15,7 @@ import {
   BookOpen,
   MessageCircleQuestion,
   AlertCircle,
+  RotateCcw,
 } from "lucide-react";
 import {
   listKnowledgeGaps,
@@ -37,6 +38,8 @@ import { ErrorState } from "@/components/shared/error-state";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { staggerContainer, staggerItem, fadeInUp, springSnappy } from "@/lib/motion";
+
+const NOT_IN_KB = "Réponse enregistrée, mais pas encore dans la base. Réessayez.";
 
 // ── Filtre de statut (onglets) ──
 type StatusFilter = "open" | "answered" | "dismissed";
@@ -81,8 +84,9 @@ export default function LearningPage() {
   const [saveToKb, setSaveToKb] = useState(true);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [dismissingId, setDismissingId] = useState<string | null>(null);
-  // Avertissement discret si la KB n'était pas dispo au moment de l'ajout.
+  // base indispo à l'ajout
   const [kbWarningId, setKbWarningId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   // ── Chargement des lacunes (selon le filtre) + stats ──
   const fetchData = useCallback(async () => {
@@ -155,22 +159,18 @@ export default function LearningPage() {
     setKbWarningId(null);
     try {
       const res = await answerKnowledgeGap(gap.id, answer, saveToKb);
-      // base indispo : on prévient
-      if (saveToKb && !res.saved_to_kb) {
-        if (filter === "open") {
-          // la carte va disparaître
-          toast.warning("Réponse enregistrée. L'ajout à la base se fera plus tard.");
-        } else {
-          setKbWarningId(gap.id);
-          toast.success("Réponse enregistrée.");
-        }
+      // base indispo : carte gardée
+      const kbFailed = saveToKb && !res.saved_to_kb;
+      if (kbFailed) {
+        setKbWarningId(gap.id);
+        toast.warning(NOT_IN_KB);
       } else if (res.saved_to_kb) {
         toast.success("Réponse enregistrée et ajoutée à la base.");
       } else {
         toast.success("Réponse enregistrée.");
       }
-      // Sur l'onglet « En attente », la lacune répondue quitte la liste.
-      if (filter === "open") {
+      // répondue : quitte « En attente »
+      if (filter === "open" && !kbFailed) {
         setGaps((prev) => prev.filter((g) => g.id !== gap.id));
       } else {
         setGaps((prev) => prev.map((g) => (g.id === gap.id ? res.gap : g)));
@@ -183,6 +183,32 @@ export default function LearningPage() {
       toast.error(humanError(err, "Impossible d'enregistrer la réponse."));
     } finally {
       setSubmittingId(null);
+    }
+  };
+
+  // relance l'ajout à la base
+  const retryKb = async (gap: KnowledgeGap) => {
+    if (!gap.answer) return;
+    setRetryingId(gap.id);
+    try {
+      const res = await answerKnowledgeGap(gap.id, gap.answer, true);
+      if (!res.saved_to_kb) {
+        setKbWarningId(gap.id);
+        toast.warning(NOT_IN_KB);
+        return;
+      }
+      setKbWarningId(null);
+      toast.success("Réponse ajoutée à la base : Jenny saura répondre.");
+      if (filter === "open") {
+        setGaps((prev) => prev.filter((g) => g.id !== gap.id));
+      } else {
+        setGaps((prev) => prev.map((g) => (g.id === gap.id ? res.gap : g)));
+      }
+      void refreshStats();
+    } catch (err) {
+      toast.error(humanError(err, "Impossible d'ajouter la réponse à la base."));
+    } finally {
+      setRetryingId(null);
     }
   };
 
@@ -352,6 +378,8 @@ export default function LearningPage() {
                 const isAnswering = answeringId === gap.id;
                 const isSubmitting = submittingId === gap.id;
                 const isDismissing = dismissingId === gap.id;
+                // répondue mais hors base
+                const missingKb = gap.status === "answered" && !!gap.answer && !gap.saved_to_kb;
                 return (
                   <motion.div
                     key={gap.id}
@@ -403,7 +431,7 @@ export default function LearningPage() {
                         </div>
 
                         {/* Actions (cachées pendant la saisie). */}
-                        {filter === "open" && !isAnswering && (
+                        {gap.status === "open" && !isAnswering && (
                           <div className="flex items-center gap-1 flex-shrink-0">
                             <Button size="sm" onClick={() => openAnswer(gap)}>
                               <Send className="w-3.5 h-3.5" />
@@ -472,14 +500,37 @@ export default function LearningPage() {
                         )}
                       </AnimatePresence>
 
-                      {/* ── Avertissement KB indisponible ── */}
-                      {kbWarningId === gap.id && (
-                        <div className="mt-3 p-2.5 rounded-xl bg-jenny-warning/10 text-jenny-warning text-[12.5px] flex items-start gap-2">
-                          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-px" />
-                          <span>
-                            Réponse enregistrée. L&apos;ajout à la base se fera quand le service de
-                            connaissances sera disponible.
+                      {/* réponse hors de la base */}
+                      {missingKb && !isAnswering && (
+                        <div
+                          role="status"
+                          className={cn(
+                            "mt-3 p-2.5 rounded-xl text-[12.5px] flex items-center gap-2 flex-wrap",
+                            kbWarningId === gap.id
+                              ? "bg-jenny-warning/10 text-jenny-text"
+                              : "bg-jenny-divider/40 text-jenny-text-secondary"
+                          )}
+                        >
+                          <AlertCircle
+                            className={cn(
+                              "w-4 h-4 flex-shrink-0",
+                              kbWarningId === gap.id && "text-jenny-warning"
+                            )}
+                          />
+                          <span className="flex-1 min-w-[180px]">
+                            {kbWarningId === gap.id
+                              ? NOT_IN_KB
+                              : "Cette réponse n'est pas dans la base : Jenny ne s'en sert pas encore."}
                           </span>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => void retryKb(gap)}
+                            isLoading={retryingId === gap.id}
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            {kbWarningId === gap.id ? "Réessayer" : "Ajouter à la base"}
+                          </Button>
                         </div>
                       )}
                     </Card>

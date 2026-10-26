@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, AlertCircle, RotateCcw, CalendarPlus } from "lucide-react";
-import { sendMessage, streamChat, type ConversationResponse, ApiError } from "@/lib/api";
+import { sendMessage, streamChat, humanError, type ConversationResponse, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { generateUUID } from "@/lib/utils";
 import { MessageBubble } from "./message-bubble";
@@ -258,14 +258,12 @@ export function ChatInterface() {
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
 
-        let errorMessage = "Impossible d'obtenir une réponse. Vérifiez que le backend est lancé.";
-        if (err instanceof ApiError) {
-          const detail = (err.data as { detail?: string })?.detail;
-          errorMessage = detail || `Erreur ${err.status}: ${err.statusText}`;
-        } else if (streamErr instanceof ApiError) {
-          const detail = (streamErr.data as { detail?: string })?.detail;
-          errorMessage = detail || `Erreur ${streamErr.status}: ${streamErr.statusText}`;
-        }
+        // erreur la plus parlante
+        const source = err instanceof ApiError ? err : streamErr instanceof ApiError ? streamErr : err;
+        const errorMessage = humanError(
+          source,
+          "Impossible d'obtenir une réponse de Jenny. Réessayez dans un instant."
+        );
 
         setError(errorMessage);
 
@@ -537,7 +535,7 @@ export function ChatInterface() {
                 }}
               >
                 <AlertCircle style={{ width: 15, height: 15, flexShrink: 0 }} />
-                Connexion au backend instable
+                Connexion au serveur instable
               </motion.div>
             )}
 

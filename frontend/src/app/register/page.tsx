@@ -6,7 +6,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useAuth } from "@/lib/auth-context";
-import { ApiError } from "@/lib/api";
+import { humanError } from "@/lib/api";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { BrandedLoader } from "@/components/ui/branded-loader";
 import { PressableButton } from "@/components/ui/pressable-button";
@@ -38,14 +38,7 @@ export default function RegisterPage() {
       // Compte créé : on redirige vers la saisie du code de confirmation.
       router.push(`/verify?email=${encodeURIComponent(email)}`);
     } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = (err.data as { detail?: string })?.detail;
-        setError(detail || "Impossible de créer le compte.");
-      } else {
-        setError(
-          "Impossible de se connecter au serveur. Vérifiez que le backend est lancé sur localhost:8000."
-        );
-      }
+      setError(humanError(err, "Impossible de créer le compte."));
     } finally {
       setIsLoading(false);
     }

@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
-import { ApiError, resendCode } from "@/lib/api";
+import { ApiError, humanError, resendCode } from "@/lib/api";
 import { fadeInUp, springSnappy, staggerContainer, staggerItem } from "@/lib/motion";
 
 const CODE_LENGTH = 6;
@@ -85,16 +85,7 @@ export function VerifyForm({ initialEmail }: { initialEmail: string }) {
         // Nouveau compte → parcours d'accueil (business → canaux → ton de Jenny).
         setTimeout(() => router.push("/onboarding"), SUCCESS_INTERSTITIAL_MS);
       } catch (err) {
-        const detail =
-          err instanceof ApiError
-            ? (err.data as { detail?: string })?.detail
-            : undefined;
-        setError(
-          detail ||
-            (err instanceof ApiError
-              ? "Code invalide ou expiré."
-              : "Connexion au serveur impossible (localhost:8000).")
-        );
+        setError(humanError(err, "Code invalide ou expiré."));
         setDigits(EMPTY);
         inputsRef.current[0]?.focus();
       } finally {
@@ -170,14 +161,10 @@ export function VerifyForm({ initialEmail }: { initialEmail: string }) {
       inputsRef.current[0]?.focus();
       toast.success("Un nouveau code vous a été envoyé.");
     } catch (err) {
-      const detail =
-        err instanceof ApiError
-          ? (err.data as { detail?: string })?.detail
-          : undefined;
       if (err instanceof ApiError && err.status === 429) {
         setCooldown(RESEND_COOLDOWN);
       }
-      toast.error(detail || "Impossible de renvoyer le code pour le moment.");
+      toast.error(humanError(err, "Impossible de renvoyer le code pour le moment."));
     } finally {
       setIsResending(false);
     }
@@ -356,7 +343,7 @@ export function VerifyForm({ initialEmail }: { initialEmail: string }) {
                       e.target.select();
                     }}
                     onBlur={() => setActiveIndex((cur) => (cur === i ? null : cur))}
-                    className={`w-12 h-14 sm:w-[52px] sm:h-16 text-center text-2xl font-bold rounded-2xl bg-white border-2 text-jenny-text transition-all duration-150 focus:outline-none focus:ring-4 focus:ring-jenny-coral/15 focus:border-jenny-coral disabled:opacity-50 ${
+                    className={`w-12 h-14 sm:w-[52px] sm:h-16 text-center text-2xl font-bold rounded-2xl bg-jenny-surface border-2 text-jenny-text transition-all duration-150 focus:outline-none focus:ring-4 focus:ring-jenny-coral/15 focus:border-jenny-coral disabled:opacity-50 ${
                       d ? "border-jenny-coral/60 bg-jenny-coral/[0.04]" : "border-jenny-divider"
                     } ${error ? "border-jenny-error/50" : ""}`}
                   />

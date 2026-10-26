@@ -18,15 +18,26 @@ class ApiError extends Error {
   }
 }
 
+// détails anglais par défaut
+const GENERIC_DETAILS = new Set([
+  "Not Found",
+  "Forbidden",
+  "Not authenticated",
+  "Unauthorized",
+  "Method Not Allowed",
+]);
+
 /** message d'erreur lisible */
 export function humanError(err: unknown, fallback = "Impossible de charger ces données."): string {
   if (err instanceof ApiError) {
     const detail = (err.data as { detail?: unknown } | undefined)?.detail;
     if (err.status === 401) return "Votre session a expiré. Reconnectez-vous.";
+    if (err.status >= 500) return "Le service est momentanément indisponible. Réessayez dans un instant.";
+    // detail de l'api en priorité
+    const text = typeof detail === "string" ? detail.trim() : "";
+    if (text && !GENERIC_DETAILS.has(text)) return text;
     if (err.status === 403) return "Vous n'avez pas accès à cette information.";
     if (err.status === 404) return "Cette information est introuvable.";
-    if (err.status >= 500) return "Le service est momentanément indisponible. Réessayez dans un instant.";
-    if (typeof detail === "string" && detail.trim()) return detail;
     return fallback;
   }
   // fetch coupé, pas de réseau
@@ -34,6 +45,14 @@ export function humanError(err: unknown, fallback = "Impossible de charger ces d
     return "Connexion au serveur impossible. Vérifiez votre connexion puis réessayez.";
   }
   return fallback;
+}
+
+/** detail texte de l'api, sinon null */
+export function apiDetail(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  const detail = (err.data as { detail?: unknown } | undefined)?.detail;
+  // 422 = liste, pas du texte
+  return typeof detail === "string" && detail.trim() ? detail.trim() : null;
 }
 
 function getToken(): string | null {
@@ -352,6 +371,8 @@ export interface KnowledgeEntry {
   id: string;
   business_id: string;
   title: string;
+  // texte complet
+  content?: string;
   content_preview?: string;
   category: string;
   source: string;

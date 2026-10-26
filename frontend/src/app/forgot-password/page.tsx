@@ -6,7 +6,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, Check } from "lucide-react";
-import { forgotPassword, resetPassword, ApiError } from "@/lib/api";
+import { forgotPassword, resetPassword, ApiError, apiDetail, humanError } from "@/lib/api";
 import { PressableButton } from "@/components/ui/pressable-button";
 import { slideInLeft, slideInRight, staggerContainer, staggerItem } from "@/lib/motion";
 
@@ -53,12 +53,7 @@ export default function ForgotPasswordPage() {
       if (res.debug_code) setCode(res.debug_code);
       setStep("reset");
     } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = (err.data as { detail?: string })?.detail;
-        setError(detail || "Impossible d'envoyer le code. Réessayez dans un instant.");
-      } else {
-        setError("Impossible de joindre le serveur. Réessayez dans un instant.");
-      }
+      setError(humanError(err, "Impossible d'envoyer le code. Réessayez dans un instant."));
     } finally {
       setIsLoading(false);
     }
@@ -90,15 +85,11 @@ export default function ForgotPasswordPage() {
       // Bref écran de confirmation, puis retour à la connexion.
       setTimeout(() => router.push("/login"), 1800);
     } catch (err) {
-      if (err instanceof ApiError) {
-        const detail = (err.data as { detail?: string })?.detail;
-        if (err.status === 400 || err.status === 404 || err.status === 422) {
-          setError(detail || "Code invalide ou expiré, redemandez-en un.");
-        } else {
-          setError(detail || "La réinitialisation a échoué. Réessayez.");
-        }
+      // code faux ou expiré
+      if (err instanceof ApiError && [400, 404, 422].includes(err.status)) {
+        setError(apiDetail(err) || "Code invalide ou expiré, redemandez-en un.");
       } else {
-        setError("Impossible de joindre le serveur. Réessayez dans un instant.");
+        setError(humanError(err, "La réinitialisation a échoué. Réessayez."));
       }
     } finally {
       setIsLoading(false);

@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  apiDetail,
   connectChannel,
   disconnectChannel,
   getChannelFields,
@@ -26,6 +27,7 @@ import {
   type ChannelStatus,
   type ChannelWebhookInfo,
 } from "@/lib/api";
+import { WidgetSnippet } from "@/components/widget-snippet";
 
 /**
  * Page « Intégrations » — état RÉEL des canaux + connexion/déconnexion réelle.
@@ -219,9 +221,8 @@ function ChannelDialog({
       onSaved();
       onClose();
     } catch (e) {
-      const detail =
-        (e as { data?: { detail?: string } })?.data?.detail || "Échec de l'enregistrement.";
-      setMsg({ kind: "err", text: detail });
+      // 409/503 : message du serveur
+      setMsg({ kind: "err", text: apiDetail(e) || humanError(e, "Échec de l'enregistrement.") });
     } finally {
       setSaving(false);
     }
@@ -233,8 +234,11 @@ function ChannelDialog({
     try {
       const r = await testChannel(channel.channel);
       setMsg({ kind: r.ok ? "ok" : "err", text: r.detail });
-    } catch {
-      setMsg({ kind: "err", text: "Test impossible (enregistrez d'abord les identifiants)." });
+    } catch (e) {
+      setMsg({
+        kind: "err",
+        text: apiDetail(e) || humanError(e, "Test impossible (enregistrez d'abord les identifiants)."),
+      });
     } finally {
       setTesting(false);
     }
@@ -247,8 +251,8 @@ function ChannelDialog({
       await disconnectChannel(channel.channel);
       onSaved();
       onClose();
-    } catch {
-      setMsg({ kind: "err", text: "Échec de la déconnexion." });
+    } catch (e) {
+      setMsg({ kind: "err", text: humanError(e, "Échec de la déconnexion.") });
     } finally {
       setSaving(false);
     }
@@ -586,6 +590,21 @@ export default function ChannelsPage() {
               <IntegrationCard key={c.channel} channel={c} onConfigure={setEditing} />
             ))}
       </div>
+
+      {/* carte site web */}
+      <section aria-labelledby="site-web-title" style={{ marginTop: 28 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+          <Globe style={{ width: 20, height: 20, color: "var(--slate)" }} aria-hidden="true" />
+          <h2 id="site-web-title" style={{ fontSize: 17, fontWeight: 600, color: "var(--text)", margin: 0 }}>
+            Site web
+          </h2>
+          <span className="jbadge jbadge--slate">WIDGET</span>
+        </div>
+        <p style={{ fontSize: 13, color: "var(--text-2)", marginBottom: 14, maxWidth: 560, lineHeight: 1.5 }}>
+          Les messages laissés sur votre site arrivent dans vos conversations, comme les autres canaux.
+        </p>
+        <WidgetSnippet />
+      </section>
 
       {editing && (
         <ChannelDialog channel={editing} onClose={() => setEditing(null)} onSaved={refresh} />
