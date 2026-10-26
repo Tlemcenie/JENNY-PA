@@ -1104,6 +1104,9 @@ async def _sync(kb, entries: list[dict], families: tuple[str, ...]) -> dict:
             legacy.append(e)
         else:
             owner_titles.add(_norm_title(e.title))
+    for key in edited & ours.keys():
+        # la version du gérant gagne
+        dupes.append(ours.pop(key))
     tombs_fn = getattr(kb, "tombstones", None)
     deleted = await tombs_fn() if tombs_fn is not None else set()
     if legacy and "horaires-semaine" not in ours and "horaires-semaine" not in edited:

@@ -298,3 +298,20 @@ async def test_seed_un_a_la_fois_par_salon() -> None:
     lite = _LockDb("sqlite")
     assert not await route._lock_seed(lite, bid)
     assert lite.sql == []
+
+
+@pytest.mark.asyncio
+async def test_doublon_retouche_gagne() -> None:
+    kb = await _seeded()
+    rdv = kb.by_key()["gerer-rdv"]
+    # copie d'un seed parallèle, retouchée
+    copy_id = kb.put(
+        title=rdv.title,
+        content=rdv.content + " Sauf le samedi.",
+        category=rdv.category,
+        metadata=dict(rdv.metadata),
+    )
+    await kc.sync_real_entries(kb, _real(), families=FAMS)
+    same_key = [e for e in kb.entries.values() if e.metadata.get("kb_key") == "gerer-rdv"]
+    assert [e.id for e in same_key] == [copy_id]
+    assert kb.tombs == set()
