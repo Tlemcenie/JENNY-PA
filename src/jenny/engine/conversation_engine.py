@@ -52,6 +52,9 @@ def _ml_call(fn: Callable[[str], object], text: str) -> object:
 # seuil de confiance ML
 ML_CONFIDENCE_FLOOR = 0.5
 
+# réponse fixe au STOP
+STOP_REPLY_TEXT = "C'est noté, vous ne recevrez plus nos offres. Je reste là pour vos rendez-vous."
+
 # intentions de politesse
 GREETING_INTENTS = frozenset({"greeting", "small_talk"})
 # messages d'attente (« je regarde »)
@@ -624,6 +627,12 @@ class ConversationEngine:
             state.business_hours_text = request.hours_text
         if request.timezone:
             state.business_timezone = request.timezone
+
+        # STOP : désinscription, sans LLM
+        stopped = await self._handle_stop(request, state)
+        if stopped is not None:
+            return stopped
+
         # consignes du tour d'avant
         state.clarification_instruction = None
         state.knowledge_gap = False
@@ -1092,6 +1101,54 @@ class ConversationEngine:
             knowledge_gap=state.knowledge_gap,
             gap_question=gap_question,
             extracted_facts=extracted_facts or None,
+        )
+
+    async def _handle_stop(
+        self, request: EngineRequest, state: ConversationState
+    ) -> EngineResponse | None:
+        """STOP : plus d'offres, réponse fixe."""
+        from jenny.services.offer_cap import apply_stop_reply, is_stop_reply
+
+        customer_id = request.customer_id or state.customer_id
+        if customer_id is None or not is_stop_reply(request.message_text):
+            return None
+        try:
+            from jenny.db.session import async_session_factory
+
+            async with async_session_factory() as db:
+                done = await apply_stop_reply(
+                    db,
+                    business_id=request.business_id,
+                    customer_id=customer_id,
+                    text=request.message_text,
+                )
+                if done:
+                    await db.commit()
+        except Exception as e:
+            logger.error("engine.stop_reply_error", error=str(e))
+            return None
+        if not done:
+            return None
+
+        logger.info("engine.stop_reply", customer_id=str(customer_id))
+        state.set_intent("opt_out", 1.0)
+        state.pending_intent = None
+        state.agent_used = "opt_out"
+        state.action_result = {"success": True, "opted_out": True}
+        state.retrieved_documents = []
+        state.phase = ConversationPhase.CLOSING
+        state.suggested_response = STOP_REPLY_TEXT
+        state.add_assistant_message(STOP_REPLY_TEXT)
+        await self.state_manager.asave(state)
+        return EngineResponse(
+            response_text=STOP_REPLY_TEXT,
+            intent="opt_out",
+            intent_confidence=1.0,
+            detected_intents=[{"intent": "opt_out", "confidence": 1.0}],
+            agent_used="opt_out",
+            action_result=dict(state.action_result),
+            conversation_phase=state.phase.value,
+            detected_language=state.detected_language,
         )
 
     async def _detect_intent(self, text: str, state: ConversationState) -> dict:
