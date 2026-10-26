@@ -33,9 +33,9 @@ WHOLE_UNIT_FACTOR = 2.3
 MAX_HEADER_CHARS = 120
 
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*#*$")
-_BULLET_RE = re.compile(r"^\s*(?:[-*•·]|\d+[.)])\s+")
 _SENTENCE_RE = re.compile(r"(?<=[.!?…])\s+")
-_CLAUSE_RE = re.compile(r"(?<=[;•])\s*|\s+(?=•)")
+# après ";" ou avant "•"
+_CLAUSE_RE = re.compile(r"(?<=;)\s*|\s+(?=[•·])")
 _COMMA_RE = re.compile(r"(?<=,)\s+")
 
 # libellés de catégorie
@@ -241,7 +241,6 @@ class DocumentIngester:
 
             units: list[_Unit] = []
             for line in lines:
-                line = _BULLET_RE.sub("- ", line) if _BULLET_RE.match(line) else line
                 for i, part in enumerate(self._split_long(line, room_tok, room_chars, count)):
                     units.append(_Unit(part, count(part), new_line=i == 0))
 
