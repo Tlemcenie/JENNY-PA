@@ -7,6 +7,7 @@ import unicodedata
 from dataclasses import dataclass
 
 from jenny.core.logging import get_logger
+from jenny.rag.lexique import STOPWORDS, coverage, doc_pool, is_covered, is_sujet, query_terms
 
 logger = get_logger(__name__)
 
@@ -162,165 +163,78 @@ KNOWLEDGE_SEEKING_INTENTS = frozenset(
     {"faq", "general", "pricing", "payment_question", "planning", "quote"}
 )
 
-# seuil RAG de vraie réponse
-GAP_SCORE_HARD_FLOOR = 0.30
-GAP_SCORE_STRONG = 0.60
+# seuils mesurés (rag_eval.py)
+# sous le plancher : lacune
+GAP_SCORE_HARD_FLOOR = 0.40
+# au-dessus : réponse fondée
+GAP_SCORE_STRONG = 0.55
 # rétrocompat, ancienne borne
 GAP_SCORE_FLOOR = GAP_SCORE_HARD_FLOOR
+# part du sujet à couvrir
+SUBJECT_MIN_COVERAGE = 0.67
+# même au-dessus du fort
+SUBJECT_MIN_COVERAGE_STRONG = 0.34
 
-# mots non discriminants (veto sujet)
-_SUBJECT_STOPWORDS = frozenset(
-    {
-        # politesses
-        "bonjour",
-        "bonsoir",
-        "salut",
-        "coucou",
-        "hello",
-        "merci",
-        "super",
-        "genial",
-        "génial",
-        "parfait",
-        "nickel",
-        "cool",
-        "svp",
-        "stp",
-        "plait",
-        "plaît",
-        "hey",
-        "voila",
-        "voilà",
-        "alors",
-        "donc",
-        "juste",
-        "aussi",
-        "vraiment",
-        "peut-etre",
-        "peutetre",
-        "vous",
-        "nous",
-        "votre",
-        "notre",
-        "vos",
-        "leurs",
-        "elle",
-        "elles",
-        "avec",
-        "pour",
-        "dans",
-        "chez",
-        "cette",
-        "cela",
-        "quoi",
-        "quel",
-        "quelle",
-        "quels",
-        "quelles",
-        "comment",
-        "combien",
-        "quand",
-        "est",
-        "sont",
-        "etes",
-        "êtes",
-        "avez",
-        "bien",
-        "tout",
-        "toute",
-        "faites",
-        "faire",
-        "posez",
-        "poser",
-        "proposez",
-        "proposer",
-        "vendez",
-        "vendre",
-        "utilisez",
-        "utiliser",
-        "prenez",
-        "prendre",
-        "peut",
-        "peux",
-        "pouvez",
-        "possible",
-        "besoin",
-        "savoir",
-        "voudrais",
-        # fillers de suivi
-        "fais",
-        "fait",
-        "faut",
-        "coup",
-        "veux",
-        "veut",
-        "dois",
-        "doit",
-        "sais",
-        "sait",
-        "vais",
-        "dire",
-        "dis",
-        "chose",
-        "truc",
-        "fois",
-        "quelque",
-        "quelqu",
-        "plutot",
-        "plutôt",
-        "genre",
-        "sinon",
-        "enfin",
-        "matin",
-        "soir",
-        "midi",
-        "apres",
-        "après",
-        "week",
-        "weekend",
-        "aujourd",
-        "demain",
-        "semaine",
-        "heure",
-        "heures",
-        "jour",
-        "jours",
-        "prix",
-        "tarif",
-        "tarifs",
-        "coute",
-        "coûte",
-        "jusqu",
-        "jusque",
-        "depuis",
-        "entre",
-        "pendant",
-        "chaque",
-        "encore",
-        "servez",
-        "servons",
-        "ouvrez",
-        "fermez",
-        "restez",
-        "ouvert",
-        "ouverts",
-        "ouverte",
-        "ouvertes",
-    }
-)
+# une seule liste de mots vides
+_SUBJECT_STOPWORDS = STOPWORDS
+
+
+def subject_check(message: str, docs: list[dict]) -> tuple[float | None, bool]:
+    """(part couverte, sujet précis absent)."""
+    terms = query_terms(message or "")
+    if not terms:
+        return None, False
+    pool: set[str] = set()
+    for d in docs[:3]:
+        meta = d.get("metadata") if isinstance(d.get("metadata"), dict) else {}
+        pool |= doc_pool(f"{meta.get('title') or ''}\n{d.get('content') or ''}")
+    missing = any(is_sujet(t) and not is_covered(t, pool) for t in terms)
+    return coverage(terms, pool), missing
+
+
+def subject_coverage(message: str, docs: list[dict]) -> float | None:
+    """Part du sujet trouvée dans les docs."""
+    return subject_check(message, docs)[0]
 
 
 def _subject_uncovered(message: str, docs: list[dict]) -> bool:
     """Sujet absent des documents ?"""
-    tokens = {
-        t
-        for t in re.findall(r"[a-zà-ÿ0-9]+", (message or "").lower())
-        if len(t) >= 4 and t not in _SUBJECT_STOPWORDS
-    }
-    if not tokens:
+    cov, missing = subject_check(message, docs)
+    if cov is None:
         return False
-    blob = " ".join((d.get("content") or "").lower() for d in docs[:3])
-    return any(t[:4] not in blob for t in tokens)
+    return missing or cov < SUBJECT_MIN_COVERAGE
+
+
+def gap_verdict(
+    documents: list[dict] | None,
+    message: str,
+    *,
+    floor: float | None = None,
+    strong: float | None = None,
+    min_coverage: float | None = None,
+    strong_coverage: float | None = None,
+) -> tuple[bool, str, float]:
+    """(fondé, raison, meilleur score)."""
+    floor = GAP_SCORE_HARD_FLOOR if floor is None else floor
+    strong = GAP_SCORE_STRONG if strong is None else strong
+    min_coverage = SUBJECT_MIN_COVERAGE if min_coverage is None else min_coverage
+    if strong_coverage is None:
+        strong_coverage = SUBJECT_MIN_COVERAGE_STRONG
+    docs = documents or []
+    if not docs:
+        return False, "no_docs", 0.0
+    top = max((d.get("score") or 0.0) for d in docs)
+    if top < floor:
+        return False, "below_floor", top
+    cov, missing = subject_check(message, docs)
+    # service absent = lacune
+    if missing:
+        return False, "topic_missing", top
+    if top >= strong and (cov is None or cov >= strong_coverage):
+        return True, "strong", top
+    if cov is None or cov >= min_coverage:
+        return True, "subject_covered", top
+    return False, "subject_uncovered", top
 
 
 def _action_has_concrete_result(action_result: dict | None) -> bool:
@@ -339,13 +253,7 @@ def _action_has_concrete_result(action_result: dict | None) -> bool:
 
 def _retrieval_has_answer(documents: list[dict] | None, message: str) -> bool:
     """La récupération fonde-t-elle une réponse ?"""
-    docs = documents or []
-    if not docs:
-        return False
-    top_score = max((d.get("score") or 0.0) for d in docs)
-    if top_score < GAP_SCORE_HARD_FLOOR:
-        return False
-    return top_score >= GAP_SCORE_STRONG or not _subject_uncovered(message, docs)
+    return gap_verdict(documents, message)[0]
 
 
 def is_knowledge_gap(
@@ -360,7 +268,17 @@ def is_knowledge_gap(
         return False
     if _action_has_concrete_result(action_result):
         return False
-    return not _retrieval_has_answer(documents, message)
+    grounded, reason, top = gap_verdict(documents, message)
+    # trace de la décision
+    logger.info(
+        "intelligence.gap_decision",
+        intent=intent,
+        gap=not grounded,
+        reason=reason,
+        top_score=round(top, 3),
+        docs=len(documents or []),
+    )
+    return not grounded
 
 
 # formules « je vérifie »
