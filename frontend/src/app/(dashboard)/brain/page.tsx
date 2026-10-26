@@ -19,6 +19,7 @@ import {
   Trash,
   CloudCheck,
   CloudAlert,
+  Lock,
 } from "lucide-react";
 import {
   getBusiness,
@@ -30,12 +31,13 @@ import {
   type BusinessConfig,
   type JennyPersona,
   type Closure,
-  ApiError,
+  humanError,
 } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { ErrorState } from "@/components/shared/error-state";
 import { useToast } from "@/components/ui/toast";
 import { JennyAvatar } from "@/components/ui/jenny-avatar";
-import { cn } from "@/lib/utils";
+import { canManageSalon, cn } from "@/lib/utils";
 
 // page config de la personnalité
 
@@ -137,13 +139,6 @@ function SaveStatus({
   );
 }
 
-function extractError(err: unknown, fallback: string): string {
-  if (err instanceof ApiError) {
-    return (err.data as { detail?: string })?.detail || `Erreur ${err.status}`;
-  }
-  return fallback;
-}
-
 // lit sector en extra
 function readSector(persona: JennyPersona | null): string {
   if (!persona) return "";
@@ -153,6 +148,9 @@ function readSector(persona: JennyPersona | null): string {
 
 export default function BrainPage() {
   const toast = useToast();
+  const { user } = useAuth();
+  // membre / agent : lecture seule
+  const readOnly = !canManageSalon(user?.role);
 
   // état de chargement
   const [loading, setLoading] = useState(true);
@@ -214,11 +212,18 @@ export default function BrainPage() {
   // modifs pas encore envoyées
   const dirty = useRef(false);
   const inFlight = useRef(false);
+  // empreinte en cours d'envoi
+  const inFlightSnap = useRef<string | null>(null);
+  // envoi à relancer après
+  const queued = useRef<{ silent: boolean } | null>(null);
+  // persona serveur, clés en plus
+  const basePersona = useRef<JennyPersona>({});
 
   const applyBusiness = useCallback((b: BusinessConfig) => {
     setName(b.name || "");
     setDescription(b.description || "");
     const p = b.persona;
+    basePersona.current = p ?? {};
     setSector(readSector(p));
     if (p?.tone && TONES.some((t) => t.id === p.tone)) {
       setTone(p.tone as ToneId);
@@ -247,7 +252,7 @@ export default function BrainPage() {
     try {
       applyBusiness(await getBusiness());
     } catch (err) {
-      setLoadError(extractError(err, "Impossible de charger la configuration de Jenny."));
+      setLoadError(humanError(err, "Impossible de charger la configuration de Jenny."));
     } finally {
       setLoading(false);
     }
@@ -262,7 +267,9 @@ export default function BrainPage() {
     () => ({
       name: name.trim(),
       description: description.trim() || null,
+      // fusion : le patch remplace tout
       persona: {
+        ...basePersona.current,
         tone,
         sliders,
         tutoiement,
@@ -295,55 +302,82 @@ export default function BrainPage() {
     ]
   );
 
+  // dernière version de persist
+  const persistRef = useRef<(opts?: { silent?: boolean }) => Promise<void>>(async () => {});
+
   const persist = useCallback(
     async (opts: { silent?: boolean } = {}) => {
-      const payload = buildPayload();
+      if (readOnly) return;
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      const silent = Boolean(opts.silent);
+      // une requête à la fois
+      if (inFlight.current) {
+        queued.current = { silent: (queued.current?.silent ?? true) && silent };
+        return;
+      }
+      const payload = buildPayload();
+      const snap = JSON.stringify(payload);
+      // rien de neuf à envoyer
+      if (silent && snap === lastSaved.current) {
+        dirty.current = false;
+        return;
+      }
       dirty.current = false;
       inFlight.current = true;
+      inFlightSnap.current = snap;
       setSaving(true);
       setSaveState("saving");
       try {
         const updated = await updateBusiness(payload);
-        // fige l'empreinte avant de réappliquer
-        lastSaved.current = JSON.stringify(payload);
+        // fige ce qui est parti
+        lastSaved.current = snap;
         // garde la saisie en cours
         if (!dirty.current) applyBusiness(updated);
         setSavedAt(new Date());
         setSaveState(dirty.current ? "pending" : "saved");
-        if (!opts.silent) toast.success("Personnalité de Jenny enregistrée.");
+        if (!silent) toast.success("Personnalité de Jenny enregistrée.");
       } catch (err) {
         dirty.current = true;
         setSaveState("error");
-        toast.error(extractError(err, "Échec de l'enregistrement."));
+        toast.error(humanError(err, "Échec de l'enregistrement."));
       } finally {
         inFlight.current = false;
+        inFlightSnap.current = null;
         setSaving(false);
+        // relance demandée pendant l'envoi
+        const next = queued.current;
+        queued.current = null;
+        if (next) void persistRef.current(next);
       }
     },
-    [buildPayload, applyBusiness, toast]
+    [buildPayload, applyBusiness, toast, readOnly]
   );
 
   // autosave débouncé
   useEffect(() => {
-    if (loading || loadError) return;
+    if (loading || loadError || readOnly) return;
     const snapshot = JSON.stringify(buildPayload());
     if (!hydrated.current) {
       hydrated.current = true;
       lastSaved.current = snapshot; // déjà sauvé
       return;
     }
-    if (snapshot === lastSaved.current) {
-      // revenu à l'état sauvé
-      if (dirty.current && !inFlight.current) {
+    // compare à ce qui part
+    const reference = inFlightSnap.current ?? lastSaved.current;
+    if (snapshot === reference) {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      // revenu à l'état envoyé
+      if (dirty.current) {
         dirty.current = false;
-        setSaveState((s) => (s === "pending" || s === "error" ? (savedAt ? "saved" : "idle") : s));
+        if (!inFlight.current) {
+          setSaveState((s) => (s === "pending" || s === "error" ? (savedAt ? "saved" : "idle") : s));
+        }
       }
       return; // écho serveur, on ignore
     }
     if (saveTimer.current) clearTimeout(saveTimer.current);
     dirty.current = true;
-    setSaveState("pending");
+    if (!inFlight.current) setSaveState("pending");
     saveTimer.current = setTimeout(() => {
       void persist({ silent: true });
     }, 1200);
@@ -369,8 +403,6 @@ export default function BrainPage() {
     loyaltyThreshold,
   ]);
 
-  // dernière version de persist
-  const persistRef = useRef(persist);
   useEffect(() => {
     persistRef.current = persist;
   }, [persist]);
@@ -386,6 +418,7 @@ export default function BrainPage() {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && hydrated.current) {
         e.preventDefault();
+        // en vol : mis en file
         void persistRef.current();
       }
     };
@@ -404,7 +437,7 @@ export default function BrainPage() {
     try {
       setClosures(await listClosures());
     } catch (err) {
-      toast.error(extractError(err, "Impossible de charger les fermetures."));
+      toast.error(humanError(err, "Impossible de charger les fermetures."));
     } finally {
       setClosuresLoading(false);
     }
@@ -459,7 +492,7 @@ export default function BrainPage() {
       await loadClosures();
       toast.success("Fermeture ajoutée.");
     } catch (err) {
-      toast.error(extractError(err, "Échec de l'ajout de la fermeture."));
+      toast.error(humanError(err, "Échec de l'ajout de la fermeture."));
     } finally {
       setClosureSubmitting(false);
     }
@@ -471,7 +504,7 @@ export default function BrainPage() {
       await loadClosures();
       toast.success("Fermeture supprimée.");
     } catch (err) {
-      toast.error(extractError(err, "Échec de la suppression."));
+      toast.error(humanError(err, "Échec de la suppression."));
     }
   };
 
@@ -565,7 +598,9 @@ export default function BrainPage() {
               <div className="font-mono text-[11px] tracking-[0.22em] uppercase text-jenny-coral">
                 — le cerveau de jenny —
               </div>
-              <SaveStatus state={saveState} savedAt={savedAt} onRetry={() => void persist()} />
+              {!readOnly && (
+                <SaveStatus state={saveState} savedAt={savedAt} onRetry={() => void persist()} />
+              )}
             </div>
             <h1 className="font-display font-normal text-[clamp(34px,5vw,48px)] leading-[1.05] tracking-[-0.02em] mb-3.5">
               Apprenez-lui à <span className="italic text-jenny-coral">vous ressembler.</span>
@@ -575,456 +610,469 @@ export default function BrainPage() {
               sauvegarde automatiquement.
             </p>
 
-            {/* identité */}
-            <motion.section
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.05 }}
-              className="bg-jenny-surface rounded-2xl border border-jenny-divider p-6 mb-[18px]"
-            >
-              <div className={cn(eyebrowClass, "mb-[18px]")}>01 · Identité</div>
-              <div className="grid sm:grid-cols-2 gap-3.5 mb-3.5">
-                <div>
-                  <label htmlFor="biz-name" className="block text-xs font-semibold text-jenny-text mb-1.5">
-                    Nom du business
-                  </label>
-                  <input
-                    id="biz-name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Maison Lila"
-                    className={fieldClass}
-                  />
+            {readOnly && (
+              <p
+                role="note"
+                className="mb-[18px] p-3.5 rounded-xl text-[13px] bg-jenny-divider/40 text-jenny-text-secondary flex items-center gap-2"
+              >
+                <Lock className="w-4 h-4 shrink-0" />
+                Lecture seule : seuls le propriétaire et les admins du salon modifient Jenny.
+              </p>
+            )}
+
+            {/* réglages salon */}
+            <fieldset disabled={readOnly} className="min-w-0 border-0 p-0 m-0">
+              {/* identité */}
+              <motion.section
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.05 }}
+                className="bg-jenny-surface rounded-2xl border border-jenny-divider p-6 mb-[18px]"
+              >
+                <div className={cn(eyebrowClass, "mb-[18px]")}>01 · Identité</div>
+                <div className="grid sm:grid-cols-2 gap-3.5 mb-3.5">
+                  <div>
+                    <label htmlFor="biz-name" className="block text-xs font-semibold text-jenny-text mb-1.5">
+                      Nom du business
+                    </label>
+                    <input
+                      id="biz-name"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Maison Lila"
+                      className={fieldClass}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="biz-sector" className="block text-xs font-semibold text-jenny-text mb-1.5">
+                      Secteur
+                    </label>
+                    <input
+                      id="biz-sector"
+                      value={sector}
+                      onChange={(e) => setSector(e.target.value)}
+                      placeholder="Maroquinerie artisanale"
+                      className={fieldClass}
+                    />
+                  </div>
                 </div>
                 <div>
-                  <label htmlFor="biz-sector" className="block text-xs font-semibold text-jenny-text mb-1.5">
-                    Secteur
+                  <label htmlFor="biz-desc" className="block text-xs font-semibold text-jenny-text mb-1.5">
+                    Description courte (Jenny l&apos;utilise pour se présenter)
                   </label>
-                  <input
-                    id="biz-sector"
-                    value={sector}
-                    onChange={(e) => setSector(e.target.value)}
-                    placeholder="Maroquinerie artisanale"
-                    className={fieldClass}
+                  <textarea
+                    id="biz-desc"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Présentez votre activité en quelques mots…"
+                    rows={3}
+                    className="w-full px-3.5 py-3 rounded-[10px] bg-jenny-bg border border-jenny-divider text-[13.5px] text-jenny-text leading-[1.5] placeholder:text-jenny-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral transition-all resize-y min-h-[72px]"
                   />
                 </div>
-              </div>
-              <div>
-                <label htmlFor="biz-desc" className="block text-xs font-semibold text-jenny-text mb-1.5">
-                  Description courte (Jenny l&apos;utilise pour se présenter)
-                </label>
-                <textarea
-                  id="biz-desc"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Présentez votre activité en quelques mots…"
-                  rows={3}
-                  className="w-full px-3.5 py-3 rounded-[10px] bg-jenny-bg border border-jenny-divider text-[13.5px] text-jenny-text leading-[1.5] placeholder:text-jenny-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral transition-all resize-y min-h-[72px]"
-                />
-              </div>
-            </motion.section>
+              </motion.section>
 
-            {/* ton de voix */}
-            <motion.section
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 }}
-              className="bg-jenny-surface rounded-2xl border border-jenny-divider p-6 mb-[18px]"
-            >
-              <div className={cn(eyebrowClass, "mb-1.5")}>02 · Ton de voix</div>
-              <div className="text-[13px] text-jenny-text-secondary mb-[18px]">
-                Choisissez la base, puis affinez.
-              </div>
+              {/* ton de voix */}
+              <motion.section
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 }}
+                className="bg-jenny-surface rounded-2xl border border-jenny-divider p-6 mb-[18px]"
+              >
+                <div className={cn(eyebrowClass, "mb-1.5")}>02 · Ton de voix</div>
+                <div className="text-[13px] text-jenny-text-secondary mb-[18px]">
+                  Choisissez la base, puis affinez.
+                </div>
 
-              {/* cartes de ton */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-5">
-                {TONES.map((t) => {
-                  const active = t.id === tone;
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => setTone(t.id)}
-                      aria-pressed={active}
-                      className={cn(
-                        "text-left p-3.5 rounded-xl transition-all",
-                        active
-                          ? "bg-jenny-coral/10 border-2 border-jenny-coral"
-                          : "bg-jenny-surface border border-jenny-divider hover:border-jenny-coral/40"
-                      )}
-                    >
-                      <div className="text-sm font-semibold mb-0.5 text-jenny-text">{t.name}</div>
-                      <div className="text-[11.5px] text-jenny-text-secondary leading-snug">{t.desc}</div>
-                    </button>
-                  );
-                })}
-              </div>
+                {/* cartes de ton */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-5">
+                  {TONES.map((t) => {
+                    const active = t.id === tone;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setTone(t.id)}
+                        aria-pressed={active}
+                        className={cn(
+                          "text-left p-3.5 rounded-xl transition-all",
+                          active
+                            ? "bg-jenny-coral/10 border-2 border-jenny-coral"
+                            : "bg-jenny-surface border border-jenny-divider hover:border-jenny-coral/40"
+                        )}
+                      >
+                        <div className="text-sm font-semibold mb-0.5 text-jenny-text">{t.name}</div>
+                        <div className="text-[11.5px] text-jenny-text-secondary leading-snug">{t.desc}</div>
+                      </button>
+                    );
+                  })}
+                </div>
 
-              {/* curseurs */}
-              {SLIDER_DEFS.map((s) => (
-                <div key={s.key} className="mb-3.5">
-                  <div className="flex justify-between mb-[7px]">
-                    <span className="text-[12.5px] text-jenny-text font-medium">{s.label}</span>
+                {/* curseurs */}
+                {SLIDER_DEFS.map((s) => (
+                  <div key={s.key} className="mb-3.5">
+                    <div className="flex justify-between mb-[7px]">
+                      <span className="text-[12.5px] text-jenny-text font-medium">{s.label}</span>
+                      <span className="text-[11px] font-mono text-jenny-text-secondary">
+                        {sliders[s.key]}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={sliders[s.key]}
+                      onChange={(e) =>
+                        setSliders((prev) => ({ ...prev, [s.key]: Number(e.target.value) }))
+                      }
+                      aria-label={s.label}
+                      className="jenny-range w-full"
+                      style={{ ["--pct" as string]: `${sliders[s.key]}%` }}
+                    />
+                  </div>
+                ))}
+
+                {/* tutoiement */}
+                <div className="mb-5">
+                  <div className="flex justify-between items-center mb-[7px]">
+                    <span className="text-[12.5px] text-jenny-text font-medium">Tutoiement</span>
                     <span className="text-[11px] font-mono text-jenny-text-secondary">
-                      {sliders[s.key]}%
+                      {tutoiement ? "OUI" : "NON"}
                     </span>
                   </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={sliders[s.key]}
-                    onChange={(e) =>
-                      setSliders((prev) => ({ ...prev, [s.key]: Number(e.target.value) }))
-                    }
-                    aria-label={s.label}
-                    className="jenny-range w-full"
-                    style={{ ["--pct" as string]: `${sliders[s.key]}%` }}
-                  />
-                </div>
-              ))}
-
-              {/* tutoiement */}
-              <div className="mb-5">
-                <div className="flex justify-between items-center mb-[7px]">
-                  <span className="text-[12.5px] text-jenny-text font-medium">Tutoiement</span>
-                  <span className="text-[11px] font-mono text-jenny-text-secondary">
-                    {tutoiement ? "OUI" : "NON"}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={tutoiement}
-                  aria-label="Tutoiement"
-                  onClick={() => setTutoiement((v) => !v)}
-                  className={cn(
-                    "relative w-9 h-5 rounded-full transition-colors",
-                    tutoiement ? "bg-jenny-coral" : "bg-jenny-divider"
-                  )}
-                >
-                  <span
-                    className="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all"
-                    style={{ left: tutoiement ? 18 : 2 }}
-                  />
-                </button>
-              </div>
-
-              {/* vocabulaire */}
-              <div>
-                <label className="block text-xs font-semibold text-jenny-text mb-1.5">
-                  Mots et expressions à utiliser
-                </label>
-                <div className="flex flex-wrap gap-1.5 p-2.5 bg-jenny-bg border border-jenny-divider rounded-[10px] min-h-[46px]">
-                  {vocab.map((w) => (
-                    <span
-                      key={w}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-jenny-surface border border-jenny-divider rounded-full text-[12.5px] text-jenny-text"
-                    >
-                      {w}
-                      <button
-                        type="button"
-                        onClick={() => removeVocab(w)}
-                        aria-label={`Retirer ${w}`}
-                        className="text-jenny-text-secondary/60 hover:text-jenny-coral transition-colors"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </span>
-                  ))}
-                  <input
-                    value={vocabDraft}
-                    onChange={(e) => setVocabDraft(e.target.value)}
-                    onKeyDown={onVocabKey}
-                    onBlur={addVocab}
-                    placeholder="+ ajouter…"
-                    aria-label="Ajouter un mot ou une expression"
-                    className="flex-1 min-w-[100px] bg-transparent text-[12.5px] text-jenny-text placeholder:text-jenny-text-secondary/60 outline-none px-1.5"
-                  />
-                </div>
-              </div>
-            </motion.section>
-
-            {/* règles d'or */}
-            <motion.section
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.15 }}
-              className="bg-jenny-surface rounded-2xl border border-jenny-divider p-6"
-            >
-              <div className={cn(eyebrowClass, "mb-[18px]")}>03 · Règles d&apos;or</div>
-              {rules.length === 0 && (
-                <p className="text-[13px] text-jenny-text-secondary py-2">
-                  Aucune règle pour le moment. Ajoutez-en une pour cadrer Jenny.
-                </p>
-              )}
-              {rules.map((r, i) => (
-                <div
-                  key={`${r.label}-${i}`}
-                  className={cn(
-                    "group flex items-center gap-3 py-3",
-                    i < rules.length - 1 && "border-b border-jenny-divider/60"
-                  )}
-                >
-                  <span className="flex-1 text-[13.5px] text-jenny-text">{r.label}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeRule(i)}
-                    aria-label={`Supprimer la règle : ${r.label}`}
-                    className="opacity-0 group-hover:opacity-100 text-jenny-text-secondary/50 hover:text-jenny-error transition-all"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
                   <button
                     type="button"
                     role="switch"
-                    aria-checked={r.on}
-                    aria-label={`Activer la règle : ${r.label}`}
-                    onClick={() => toggleRule(i)}
+                    aria-checked={tutoiement}
+                    aria-label="Tutoiement"
+                    onClick={() => setTutoiement((v) => !v)}
                     className={cn(
-                      "relative w-9 h-5 rounded-full shrink-0 transition-colors",
-                      r.on ? "bg-jenny-coral" : "bg-jenny-divider"
+                      "relative w-9 h-5 rounded-full transition-colors",
+                      tutoiement ? "bg-jenny-coral" : "bg-jenny-divider"
                     )}
                   >
                     <span
                       className="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all"
-                      style={{ left: r.on ? 18 : 2 }}
+                      style={{ left: tutoiement ? 18 : 2 }}
                     />
                   </button>
                 </div>
-              ))}
 
-              {addingRule ? (
-                <div className="flex items-center gap-2 mt-3">
-                  <input
-                    autoFocus
-                    value={ruleDraft}
-                    onChange={(e) => setRuleDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        addRule();
-                      } else if (e.key === "Escape") {
-                        setRuleDraft("");
-                        setAddingRule(false);
-                      }
-                    }}
-                    onBlur={addRule}
-                    placeholder="Décrivez la règle…"
-                    aria-label="Nouvelle règle"
-                    className={fieldClass}
-                  />
+                {/* vocabulaire */}
+                <div>
+                  <label className="block text-xs font-semibold text-jenny-text mb-1.5">
+                    Mots et expressions à utiliser
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 p-2.5 bg-jenny-bg border border-jenny-divider rounded-[10px] min-h-[46px]">
+                    {vocab.map((w) => (
+                      <span
+                        key={w}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-jenny-surface border border-jenny-divider rounded-full text-[12.5px] text-jenny-text"
+                      >
+                        {w}
+                        <button
+                          type="button"
+                          onClick={() => removeVocab(w)}
+                          aria-label={`Retirer ${w}`}
+                          className="text-jenny-text-secondary/60 hover:text-jenny-coral transition-colors"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                    <input
+                      value={vocabDraft}
+                      onChange={(e) => setVocabDraft(e.target.value)}
+                      onKeyDown={onVocabKey}
+                      onBlur={addVocab}
+                      placeholder="+ ajouter…"
+                      aria-label="Ajouter un mot ou une expression"
+                      className="flex-1 min-w-[100px] bg-transparent text-[12.5px] text-jenny-text placeholder:text-jenny-text-secondary/60 outline-none px-1.5"
+                    />
+                  </div>
+                </div>
+              </motion.section>
+
+              {/* règles d'or */}
+              <motion.section
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.15 }}
+                className="bg-jenny-surface rounded-2xl border border-jenny-divider p-6"
+              >
+                <div className={cn(eyebrowClass, "mb-[18px]")}>03 · Règles d&apos;or</div>
+                {rules.length === 0 && (
+                  <p className="text-[13px] text-jenny-text-secondary py-2">
+                    Aucune règle pour le moment. Ajoutez-en une pour cadrer Jenny.
+                  </p>
+                )}
+                {rules.map((r, i) => (
+                  <div
+                    key={`${r.label}-${i}`}
+                    className={cn(
+                      "group flex items-center gap-3 py-3",
+                      i < rules.length - 1 && "border-b border-jenny-divider/60"
+                    )}
+                  >
+                    <span className="flex-1 text-[13.5px] text-jenny-text">{r.label}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeRule(i)}
+                      aria-label={`Supprimer la règle : ${r.label}`}
+                      className="opacity-0 group-hover:opacity-100 text-jenny-text-secondary/50 hover:text-jenny-error transition-all"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={r.on}
+                      aria-label={`Activer la règle : ${r.label}`}
+                      onClick={() => toggleRule(i)}
+                      className={cn(
+                        "relative w-9 h-5 rounded-full shrink-0 transition-colors",
+                        r.on ? "bg-jenny-coral" : "bg-jenny-divider"
+                      )}
+                    >
+                      <span
+                        className="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all"
+                        style={{ left: r.on ? 18 : 2 }}
+                      />
+                    </button>
+                  </div>
+                ))}
+
+                {addingRule ? (
+                  <div className="flex items-center gap-2 mt-3">
+                    <input
+                      autoFocus
+                      value={ruleDraft}
+                      onChange={(e) => setRuleDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          addRule();
+                        } else if (e.key === "Escape") {
+                          setRuleDraft("");
+                          setAddingRule(false);
+                        }
+                      }}
+                      onBlur={addRule}
+                      placeholder="Décrivez la règle…"
+                      aria-label="Nouvelle règle"
+                      className={fieldClass}
+                    />
+                    <button
+                      type="button"
+                      onClick={addRule}
+                      aria-label="Valider la règle"
+                      className="h-[42px] px-3 rounded-[10px] bg-jenny-coral text-white inline-flex items-center justify-center hover:bg-jenny-coral-dark transition-colors shrink-0"
+                    >
+                      <Check className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    onClick={addRule}
-                    aria-label="Valider la règle"
-                    className="h-[42px] px-3 rounded-[10px] bg-jenny-coral text-white inline-flex items-center justify-center hover:bg-jenny-coral-dark transition-colors shrink-0"
+                    onClick={() => setAddingRule(true)}
+                    className="inline-flex items-center gap-1.5 mt-3 h-9 px-3.5 rounded-xl text-[0.8125rem] font-semibold text-jenny-text-secondary hover:text-jenny-text hover:bg-jenny-divider/40 transition-all"
                   >
-                    <Check className="w-4 h-4" />
+                    <Plus className="w-[13px] h-[13px]" />
+                    Ajouter une règle
+                  </button>
+                )}
+              </motion.section>
+
+              {/* acompte anti no-show */}
+              <motion.section
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+                className="bg-jenny-surface rounded-2xl border border-jenny-divider p-6 mt-[18px]"
+              >
+                <div className={cn(eyebrowClass, "mb-1.5")}>04 · Acompte anti-no-show</div>
+                <div className="text-[13px] text-jenny-text-secondary mb-[18px]">
+                  Demander un acompte réduit fortement les rendez-vous manqués.
+                </div>
+
+                {/* activation toggle */}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="block text-[13.5px] text-jenny-text font-medium">
+                      Demander un acompte
+                    </span>
+                    <span className="block text-[12px] text-jenny-text-secondary">
+                      Jenny réclame un acompte avant de confirmer le rendez-vous.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={depositEnabled}
+                    aria-label="Demander un acompte"
+                    onClick={() => setDepositEnabled((v) => !v)}
+                    className={cn(
+                      "relative w-9 h-5 rounded-full shrink-0 transition-colors",
+                      depositEnabled ? "bg-jenny-coral" : "bg-jenny-divider"
+                    )}
+                  >
+                    <span
+                      className="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all"
+                      style={{ left: depositEnabled ? 18 : 2 }}
+                    />
                   </button>
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setAddingRule(true)}
-                  className="inline-flex items-center gap-1.5 mt-3 h-9 px-3.5 rounded-xl text-[0.8125rem] font-semibold text-jenny-text-secondary hover:text-jenny-text hover:bg-jenny-divider/40 transition-all"
-                >
-                  <Plus className="w-[13px] h-[13px]" />
-                  Ajouter une règle
-                </button>
-              )}
-            </motion.section>
 
-            {/* acompte anti no-show */}
-            <motion.section
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="bg-jenny-surface rounded-2xl border border-jenny-divider p-6 mt-[18px]"
-            >
-              <div className={cn(eyebrowClass, "mb-1.5")}>04 · Acompte anti-no-show</div>
-              <div className="text-[13px] text-jenny-text-secondary mb-[18px]">
-                Demander un acompte réduit fortement les rendez-vous manqués.
-              </div>
-
-              {/* activation toggle */}
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <span className="block text-[13.5px] text-jenny-text font-medium">
-                    Demander un acompte
-                  </span>
-                  <span className="block text-[12px] text-jenny-text-secondary">
-                    Jenny réclame un acompte avant de confirmer le rendez-vous.
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={depositEnabled}
-                  aria-label="Demander un acompte"
-                  onClick={() => setDepositEnabled((v) => !v)}
-                  className={cn(
-                    "relative w-9 h-5 rounded-full shrink-0 transition-colors",
-                    depositEnabled ? "bg-jenny-coral" : "bg-jenny-divider"
-                  )}
-                >
-                  <span
-                    className="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all"
-                    style={{ left: depositEnabled ? 18 : 2 }}
-                  />
-                </button>
-              </div>
-
-              {depositEnabled && (
-                <div className="grid sm:grid-cols-2 gap-3.5 mt-[18px]">
-                  <div>
-                    <label
-                      htmlFor="deposit-percent"
-                      className="block text-xs font-semibold text-jenny-text mb-1.5"
-                    >
-                      Pourcentage du prix demandé en acompte
-                    </label>
-                    <div className="relative">
+                {depositEnabled && (
+                  <div className="grid sm:grid-cols-2 gap-3.5 mt-[18px]">
+                    <div>
+                      <label
+                        htmlFor="deposit-percent"
+                        className="block text-xs font-semibold text-jenny-text mb-1.5"
+                      >
+                        Pourcentage du prix demandé en acompte
+                      </label>
+                      <div className="relative">
+                        <input
+                          id="deposit-percent"
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={depositPercent}
+                          onChange={(e) => {
+                            const n = Number(e.target.value);
+                            setDepositPercent(
+                              Number.isNaN(n) ? 0 : Math.min(100, Math.max(0, n))
+                            );
+                          }}
+                          className={cn(fieldClass, "pr-9")}
+                        />
+                        <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[13px] text-jenny-text-secondary">
+                          %
+                        </span>
+                      </div>
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="deposit-forfait"
+                        className="block text-xs font-semibold text-jenny-text mb-1.5"
+                      >
+                        Acompte forfaitaire si prix inconnu (€)
+                      </label>
                       <input
-                        id="deposit-percent"
+                        id="deposit-forfait"
                         type="number"
                         min={0}
-                        max={100}
-                        value={depositPercent}
+                        step="0.01"
+                        value={depositMinCents / 100}
                         onChange={(e) => {
-                          const n = Number(e.target.value);
-                          setDepositPercent(
-                            Number.isNaN(n) ? 0 : Math.min(100, Math.max(0, n))
+                          const euros = Number(e.target.value);
+                          setDepositMinCents(
+                            Number.isNaN(euros) ? 0 : Math.max(0, Math.round(euros * 100))
                           );
                         }}
-                        className={cn(fieldClass, "pr-9")}
+                        className={fieldClass}
                       />
-                      <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[13px] text-jenny-text-secondary">
-                        %
-                      </span>
                     </div>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-1.5 mt-4 text-[12px] text-jenny-text-secondary">
+                  <Wallet className="w-3.5 h-3.5 text-jenny-coral shrink-0" />
+                  Demander un acompte réduit fortement les rendez-vous manqués.
+                </div>
+              </motion.section>
+
+              {/* rappels & fidélité */}
+              <motion.section
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.22 }}
+                className="bg-jenny-surface rounded-2xl border border-jenny-divider p-6 mt-[18px]"
+              >
+                <div className={cn(eyebrowClass, "mb-1.5")}>05 · Rappels &amp; fidélité</div>
+                <div className="text-[13px] text-jenny-text-secondary mb-[18px]">
+                  Quand Jenny relance vos clients et à partir de combien de visites elle les récompense.
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-3.5">
+                  <div>
+                    <label
+                      htmlFor="reminder-lead"
+                      className="block text-xs font-semibold text-jenny-text mb-1.5"
+                    >
+                      Rappel imminent (minutes avant le RDV)
+                    </label>
+                    <input
+                      id="reminder-lead"
+                      type="number"
+                      min={5}
+                      max={1440}
+                      value={reminderLeadMinutes}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        setReminderLeadMinutes(
+                          Number.isNaN(n) ? 5 : Math.min(1440, Math.max(5, n))
+                        );
+                      }}
+                      className={fieldClass}
+                    />
                   </div>
                   <div>
                     <label
-                      htmlFor="deposit-forfait"
+                      htmlFor="day-reminder-lead"
                       className="block text-xs font-semibold text-jenny-text mb-1.5"
                     >
-                      Acompte forfaitaire si prix inconnu (€)
+                      Rappel la veille (heures avant le RDV)
                     </label>
                     <input
-                      id="deposit-forfait"
+                      id="day-reminder-lead"
                       type="number"
-                      min={0}
-                      step="0.01"
-                      value={depositMinCents / 100}
+                      min={1}
+                      max={168}
+                      value={dayReminderLeadHours}
                       onChange={(e) => {
-                        const euros = Number(e.target.value);
-                        setDepositMinCents(
-                          Number.isNaN(euros) ? 0 : Math.max(0, Math.round(euros * 100))
+                        const n = Number(e.target.value);
+                        setDayReminderLeadHours(
+                          Number.isNaN(n) ? 1 : Math.min(168, Math.max(1, n))
                         );
                       }}
                       className={fieldClass}
                     />
                   </div>
                 </div>
-              )}
 
-              <div className="flex items-center gap-1.5 mt-4 text-[12px] text-jenny-text-secondary">
-                <Wallet className="w-3.5 h-3.5 text-jenny-coral shrink-0" />
-                Demander un acompte réduit fortement les rendez-vous manqués.
-              </div>
-            </motion.section>
-
-            {/* rappels & fidélité */}
-            <motion.section
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.22 }}
-              className="bg-jenny-surface rounded-2xl border border-jenny-divider p-6 mt-[18px]"
-            >
-              <div className={cn(eyebrowClass, "mb-1.5")}>05 · Rappels &amp; fidélité</div>
-              <div className="text-[13px] text-jenny-text-secondary mb-[18px]">
-                Quand Jenny relance vos clients et à partir de combien de visites elle les récompense.
-              </div>
-
-              <div className="grid sm:grid-cols-2 gap-3.5">
-                <div>
+                <div className="mt-3.5">
                   <label
-                    htmlFor="reminder-lead"
+                    htmlFor="loyalty-threshold"
                     className="block text-xs font-semibold text-jenny-text mb-1.5"
                   >
-                    Rappel imminent (minutes avant le RDV)
+                    Récompense fidélité après N rendez-vous
                   </label>
                   <input
-                    id="reminder-lead"
+                    id="loyalty-threshold"
                     type="number"
-                    min={5}
-                    max={1440}
-                    value={reminderLeadMinutes}
+                    min={0}
+                    max={100}
+                    value={loyaltyThreshold}
                     onChange={(e) => {
                       const n = Number(e.target.value);
-                      setReminderLeadMinutes(
-                        Number.isNaN(n) ? 5 : Math.min(1440, Math.max(5, n))
+                      setLoyaltyThreshold(
+                        Number.isNaN(n) ? 0 : Math.min(100, Math.max(0, n))
                       );
                     }}
                     className={fieldClass}
                   />
+                  <p className="mt-1.5 text-[11.5px] text-jenny-text-secondary/80">
+                    0 = récompense fidélité désactivée.
+                  </p>
                 </div>
-                <div>
-                  <label
-                    htmlFor="day-reminder-lead"
-                    className="block text-xs font-semibold text-jenny-text mb-1.5"
-                  >
-                    Rappel la veille (heures avant le RDV)
-                  </label>
-                  <input
-                    id="day-reminder-lead"
-                    type="number"
-                    min={1}
-                    max={168}
-                    value={dayReminderLeadHours}
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      setDayReminderLeadHours(
-                        Number.isNaN(n) ? 1 : Math.min(168, Math.max(1, n))
-                      );
-                    }}
-                    className={fieldClass}
-                  />
+
+                <div className="flex items-center gap-1.5 mt-4 text-[12px] text-jenny-text-secondary">
+                  <BellRing className="w-3.5 h-3.5 text-jenny-coral shrink-0" />
+                  Des rappels bien placés réduisent les oublis ; la récompense fidélise vos habitués.
                 </div>
-              </div>
-
-              <div className="mt-3.5">
-                <label
-                  htmlFor="loyalty-threshold"
-                  className="block text-xs font-semibold text-jenny-text mb-1.5"
-                >
-                  Récompense fidélité après N rendez-vous
-                </label>
-                <input
-                  id="loyalty-threshold"
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={loyaltyThreshold}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    setLoyaltyThreshold(
-                      Number.isNaN(n) ? 0 : Math.min(100, Math.max(0, n))
-                    );
-                  }}
-                  className={fieldClass}
-                />
-                <p className="mt-1.5 text-[11.5px] text-jenny-text-secondary/80">
-                  0 = récompense fidélité désactivée.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-1.5 mt-4 text-[12px] text-jenny-text-secondary">
-                <BellRing className="w-3.5 h-3.5 text-jenny-coral shrink-0" />
-                Des rappels bien placés réduisent les oublis ; la récompense fidélise vos habitués.
-              </div>
-            </motion.section>
+              </motion.section>
+            </fieldset>
 
             {/* fermetures exceptionnelles */}
             <motion.section
@@ -1151,28 +1199,30 @@ export default function BrainPage() {
             </motion.section>
 
             {/* bouton enregistrer */}
-            <div className="flex items-center gap-3 mt-6">
-              <button
-                type="button"
-                onClick={() => void persist()}
-                disabled={saving}
-                className="inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl text-[0.9375rem] font-semibold bg-jenny-coral text-white hover:bg-jenny-coral-dark shadow-sm shadow-jenny-coral/20 active:scale-[0.98] transition-all disabled:opacity-40 disabled:pointer-events-none"
-              >
-                {saving ? (
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                ) : (
-                  <Check className="w-4 h-4" />
-                )}
-                Enregistrer
-              </button>
-              <span className="text-[12px] font-mono text-jenny-text-secondary/70" aria-hidden="true">
-                {saveLabel(saveState, savedAt)}
-                <span className="hidden sm:inline"> · Ctrl+S</span>
-              </span>
-            </div>
+            {!readOnly && (
+              <div className="flex items-center gap-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => void persist()}
+                  disabled={saving}
+                  className="inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl text-[0.9375rem] font-semibold bg-jenny-coral text-white hover:bg-jenny-coral-dark shadow-sm shadow-jenny-coral/20 active:scale-[0.98] transition-all disabled:opacity-40 disabled:pointer-events-none"
+                >
+                  {saving ? (
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  ) : (
+                    <Check className="w-4 h-4" />
+                  )}
+                  Enregistrer
+                </button>
+                <span className="text-[12px] font-mono text-jenny-text-secondary/70" aria-hidden="true">
+                  {saveLabel(saveState, savedAt)}
+                  <span className="hidden sm:inline"> · Ctrl+S</span>
+                </span>
+              </div>
+            )}
           </motion.div>
 
           {/* colonne aperçu */}
