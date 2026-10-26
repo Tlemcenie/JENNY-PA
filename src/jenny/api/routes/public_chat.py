@@ -39,8 +39,8 @@ MAX_BODY = 16 * 1024
 DEFAULT_COLOR = "#FF7F6A"
 # namespace fixe, ne pas changer
 _NS = UUID("6f0c7a52-3b1e-4d8a-9c55-1e2f7a9b4c10")
-_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
-_HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+_SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}")
+_HEX_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 # bidi trompeurs
 _BIDI = {chr(c) for c in (*range(0x202A, 0x202F), *range(0x2066, 0x206A))}
 
@@ -173,10 +173,20 @@ def _parse[T: BaseModel](model: type[T], raw: bytes) -> T:
         ) from None
 
 
+def _check_slug(slug: str) -> None:
+    """Slug mal formé : 404 direct."""
+    if not _SLUG_RE.fullmatch(slug):
+        raise HTTPException(404, "Salon introuvable.")
+
+
+def _ip(request: Request) -> str:
+    # clé courte, bornée
+    return _client_ip(request)[:64]
+
+
 async def _salon(db, slug: str) -> Business:
     """Salon actif par slug, sinon 404."""
-    if not _SLUG_RE.match(slug):
-        raise HTTPException(404, "Salon introuvable.")
+    _check_slug(slug)
     biz = (await db.execute(select(Business).where(Business.slug == slug))).scalar_one_or_none()
     if biz is None or not biz.is_active:
         raise HTTPException(404, "Salon introuvable.")
@@ -189,7 +199,7 @@ def _persona(biz: Business) -> dict:
 
 def _color(persona: dict) -> str:
     raw = persona.get("widget_color")
-    return raw if isinstance(raw, str) and _HEX_RE.match(raw) else DEFAULT_COLOR
+    return raw if isinstance(raw, str) and _HEX_RE.fullmatch(raw) else DEFAULT_COLOR
 
 
 def _greeting(name: str, tu: bool) -> str:
@@ -445,7 +455,8 @@ async def widget_config(
     slug: str, request: Request, response: Response, db: DbSession
 ) -> WidgetConfig | JSONResponse:
     """Nom, couleur et accueil du widget."""
-    wait = _take([(_CONFIG_IP, _client_ip(request))])
+    _check_slug(slug)
+    wait = _take([(_CONFIG_IP, _ip(request))])
     if wait:
         return _too_many(wait, "Trop de requêtes, réessayez dans un instant.")
     biz = await _salon(db, slug)
@@ -465,9 +476,9 @@ async def public_chat(
     slug: str, request: Request, db: DbSession
 ) -> PublicChatResponse | JSONResponse:
     """Message du site vers Jenny."""
+    _check_slug(slug)
     body = _parse(PublicChatRequest, await _read_body(request))
-    ip = _client_ip(request)
-    wait = _take([(_VISITOR, f"{slug}:{body.visitor_id}"), (_IP, ip)])
+    wait = _take([(_VISITOR, f"{slug}:{body.visitor_id}"), (_IP, _ip(request))])
     if wait:
         return _too_many(wait)
     biz = await _salon(db, slug)
@@ -510,8 +521,9 @@ async def public_chat(
 @router.post("/{slug}/poll", response_model=PollResponse)
 async def poll_team(slug: str, request: Request, db: DbSession) -> PollResponse | JSONResponse:
     """Réponses de l'équipe pour ce visiteur."""
+    _check_slug(slug)
     body = _parse(PollRequest, await _read_body(request))
-    wait = _take([(_POLL_VISITOR, f"{slug}:{body.visitor_id}"), (_POLL_IP, _client_ip(request))])
+    wait = _take([(_POLL_VISITOR, f"{slug}:{body.visitor_id}"), (_POLL_IP, _ip(request))])
     if wait:
         return _too_many(wait)
     biz = await _salon(db, slug)

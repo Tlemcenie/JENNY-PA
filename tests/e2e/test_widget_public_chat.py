@@ -88,6 +88,15 @@ class TestUnknownSalon:
     async def test_weird_slug_404(self, client: AsyncClient, db_tables) -> None:
         r = await client.get("/api/v1/public/chat/%27or%201=1/config")
         assert r.status_code == 404
+        # retour ligne en fin de slug
+        biz = await _salon()
+        r = await client.get(f"/api/v1/public/chat/{biz.slug}%0A/config")
+        assert r.status_code == 404
+        r = await client.post(
+            f"/api/v1/public/chat/{'x' * 300}",
+            json={"visitor_id": _visitor(), "message": "Bonjour"},
+        )
+        assert r.status_code == 404
 
 
 class TestConfig:
