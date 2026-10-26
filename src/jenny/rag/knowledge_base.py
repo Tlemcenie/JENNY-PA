@@ -42,6 +42,7 @@ LAYOUT_KEYS = frozenset(
         "overlap_chars",
         "sep",
         "chunk_index",
+        "chunk_v",
     }
 )
 # coupe de l'aperçu (route)
@@ -161,7 +162,7 @@ class KnowledgeBase:
             # section / overlap du découpage
             layout = {
                 k: chunk.metadata[k]
-                for k in ("section", "overlap_chars", "sep")
+                for k in ("section", "overlap_chars", "sep", "chunk_v")
                 if k in chunk.metadata
             }
             chunk_dicts.append(
