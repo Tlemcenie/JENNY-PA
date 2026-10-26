@@ -20,13 +20,12 @@ from uuid import UUID
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from jenny.agents.faq_agent import FAQ_MIN_SCORE
-from jenny.engine.intelligence import GAP_SCORE_HARD_FLOOR
+from jenny.agents.faq_agent import FAQ_MAX_DOCS, FAQ_MIN_SCORE
 
 DATA_PATH = Path(__file__).resolve().parent / "data" / "rag_questions_coiffeur.json"
 DEMO_SLUG = "demo"
-# même seuil que le moteur
-ENGINE_GROUNDING_THRESHOLD = GAP_SCORE_HARD_FLOOR
+# seuil du grounding moteur
+ENGINE_GROUNDING_THRESHOLD = FAQ_MIN_SCORE
 KS = (1, 3, 5)
 
 
@@ -136,12 +135,14 @@ def build_retriever():
 
 
 def _docs(hits) -> list[dict]:
-    return [{"content": h.content, "score": h.score, "metadata": h.metadata} for h in hits]
+    from jenny.agents.faq_agent import to_documents
+
+    return to_documents(hits)
 
 
 async def run_pipeline(questions: list[Question], business_id: str, retriever) -> list[dict]:
     """Vrai chemin du chat, question par question."""
-    from jenny.agents.faq_agent import FAQAgent
+    from jenny.agents.faq_agent import FAQAgent, grounding_documents
     from jenny.engine.intelligence import is_knowledge_gap
     from jenny.engine.state_manager import ConversationState
 
@@ -157,14 +158,7 @@ async def run_pipeline(questions: list[Question], business_id: str, retriever) -
         docs = out.get("documents") or []
         if not docs:
             # grounding transverse moteur
-            docs = _docs(
-                await retriever.search(
-                    q.q,
-                    business_id=business_id,
-                    top_k=3,
-                    score_threshold=ENGINE_GROUNDING_THRESHOLD,
-                )
-            )
+            docs = await grounding_documents(retriever, q.q, business_id)
         gap = is_knowledge_gap(intent="faq", documents=docs, action_result=None, message=q.q)
         rows.append(
             {
@@ -274,7 +268,10 @@ def simulate(
             max_gap=max_gap,
         )
         if not chosen:
-            chosen = [d for d in scored if d["score"] >= ENGINE_GROUNDING_THRESHOLD][:3]
+            # comme le moteur
+            chosen = select_documents(
+                [d for d in scored if d["score"] >= ENGINE_GROUNDING_THRESHOLD][:FAQ_MAX_DOCS]
+            )
         grounded, _reason, _top = gap_verdict(
             chosen,
             q.q,
@@ -345,9 +342,13 @@ async def main(slug: str, do_sweep: bool, json_path: str | None, label: str) -> 
     questions = load_questions()
     business_id = await resolve_business(slug)
     retriever = build_retriever()
+    from jenny.rag.vector_store import default_pool
+
     rows = await run_pipeline(questions, business_id, retriever)
     summary = summarize(rows)
-    print(f"[{label}] {_fmt(summary)}")
+    # candidats par voie, pour comparer
+    summary["pool"] = default_pool()
+    print(f"[{label}] pool={summary['pool']}  {_fmt(summary)}")
     for kind, m in summary["by_kind"].items():
         print(f"   {kind:9s} {json.dumps({k: round(v, 3) for k, v in m.items()})}")
     for part in ("tuning", "holdout"):
