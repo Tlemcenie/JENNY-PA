@@ -365,6 +365,16 @@
   cursor: not-allowed;
 }
 
+/* lien réservation */
+.chipBook {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: var(--w-accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
 /* erreurs */
 
 .error {
