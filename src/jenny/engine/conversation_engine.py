@@ -74,7 +74,7 @@ _CLOSING_RE = re.compile(
     re.I,
 )
 
-# avant « à demain » : début, ponctuation, merci
+# avant « à demain »
 _BYE_LEAD = (
     # pas « jusqu'à demain »
     r"(?:^|[^\w\s'’]|\b(?:merci|ok|super|parfait|top|alors|et|bisous|bises|bcp|beaucoup|vous|"  # noqa: RUF001
@@ -102,7 +102,7 @@ _FAREWELL_WHEN_RE = re.compile(
 _WISH_RE = re.compile(
     r"\bbon(?:ne)?\s+(?:week[\s-]?end|soir[ée]e|nuit|semaine|vacances|"
     r"apr[èe]s[\s-]?midi|aprem|fin\s+de\s+(?:journ[ée]e|semaine|soir[ée]e))\b"
-    # « bon dimanche ! », pas « bon samedi 10h »
+    # « bon dimanche ! » seul
     rf"|\bbon(?:ne)?\s+(?:{_WD_FR})\b(?=\s*(?:$|[^\w\s?]|et\b|[àa]\s+(?:vous|toi|tous)\b))",
     re.I,
 )
@@ -182,7 +182,7 @@ _YES_RE = re.compile(
     r"ok\s+pour\s+moi|avec\s+plaisir|je\s+veux\s+bien)\b",
     re.I,
 )
-# accord léger seul : « ok », « super merci »
+# « ok » tout seul
 _ACK_ONLY_RE = re.compile(
     r"^\s*(?:ok|okay|oki|d['’]accord|dac|[çc]a\s+marche|parfait|super|top|nickel|"  # noqa: RUF001
     r"pourquoi\s+pas|go|allez|vas[\s-]y|allez[\s-]y)"
@@ -282,7 +282,7 @@ _NOT_NAME_TEXT = """
     souci soucis probleme vraiment certainement evidemment meme grand gros enorme immense
 """
 _NOT_NAME_WORDS = frozenset(_NOT_NAME_TEXT.split())
-# « Jenny Martin » : là, un vrai nom
+# « Jenny Martin » : un nom
 _SOFT_NOT_NAME = frozenset({"jenny"})
 # de, la, van...
 _NAME_PARTICLES = frozenset(
@@ -426,7 +426,7 @@ def strip_farewell(message: str, *, keep_days: bool = False) -> str:
     )
     if not keep:
         m = _SEE_YOU_RE.sub(" ", m)
-        # créneau proposé : « à jeudi 10h » = oui
+        # créneau proposé : on garde
         if not keep_days:
             m = _FAREWELL_WHEN_RE.sub(" ", m)
     return m
@@ -492,7 +492,7 @@ def is_implicit_reschedule(
         or intent in _BYE_INTENTS
     ):
         return cue
-    # « sinon jeudi ? », pas « et jeudi vous ouvrez ? »
+    # « sinon jeudi ? » seulement
     alt = _ALT_LEAD_RE.match(m)
     return cue or bool(alt and _when_only(m[alt.end() :])) or _when_only(m)
 
@@ -810,7 +810,7 @@ class ConversationEngine:
                 "needs_clarification": False,
             }
 
-        # « à demain pour mon rdv » : un au revoir
+        # au revoir seul : pas un rdv
         _bye_only = (
             _farewell
             and "?" not in _msg_txt
@@ -841,7 +841,7 @@ class ConversationEngine:
         if state.pending_intent and state.pending_intent != intent:
             msg_l = request.message_text or ""
             real_closing = (intent == "closing" and bool(_CLOSING_RE.search(msg_l))) or _farewell
-            # « merci, à jeudi 10h » choisit le créneau
+            # il choisit un créneau proposé
             if _offered and _slot_in_msg:
                 real_closing = False
             hard_interrupt = intent in _INTERRUPTING_INTENTS or real_closing
@@ -871,7 +871,7 @@ class ConversationEngine:
         # vrai changement de sujet ?
         new_topic = len(re.findall(r"\w+", msg_text)) > 3 and intent not in _FILLER_INTENTS
 
-        # liste d'attente : un créneau n'est pas un oui
+        # un créneau n'est pas un oui
         joining_waitlist = state.awaiting_waitlist and not _slot_in_msg and accepts_offer(msg_text)
         if joining_waitlist:
             state.disarm_latch("awaiting_waitlist")
@@ -1051,7 +1051,7 @@ class ConversationEngine:
         if _ar.get("no_slots"):
             state.arm_latch("awaiting_waitlist")
         elif intent == "appointment" and state.action_result is not None:
-            # autre réponse du salon : offre caduque
+            # autre réponse : offre caduque
             state.disarm_latch("awaiting_waitlist")
         # client sans nom
         if _ar.get("ask_name"):
