@@ -931,7 +931,7 @@ function DayGrid({
       animate="show"
       className="rounded-2xl border border-jenny-divider bg-jenny-surface overflow-hidden"
     >
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto overflow-y-hidden">
         <div style={{ minWidth: 56 + columns.length * 150 }}>
           {/* en-têtes coiffeurs */}
           <div className="grid border-b border-jenny-divider" style={{ gridTemplateColumns: template }}>
@@ -971,19 +971,27 @@ function DayGrid({
                 className="relative border-r border-jenny-divider last:border-r-0"
                 style={{ height: gridHeight }}
               >
-                {hours.map((h) => (
+                {hours.slice(0, -1).map((h) => (
                   <button
                     key={h}
                     type="button"
                     onClick={() => onCreateAt(h, createStaff(col))}
-                    aria-label={`Créer un rendez-vous à ${h}h avec ${col.label}`}
+                    aria-label={`Créer un rendez-vous à ${h}h${col.id && col.id !== NONE ? ` avec ${col.label}` : ""}`}
                     className="absolute left-0 right-0 border-t border-jenny-divider/70 hover:bg-jenny-bg focus:outline-none focus-visible:bg-jenny-bg transition-colors"
                     style={{ top: (h - DAY_START_HOUR) * HOUR_PX, height: HOUR_PX }}
                   />
                 ))}
-                {col.appts.map((appt) => (
-                  <WeekEvent key={appt.id} appt={appt} onClick={() => onSelectAppointment(appt)} />
-                ))}
+                {(() => {
+                  const lanes = layoutLanes(col.appts);
+                  return col.appts.map((appt) => (
+                    <WeekEvent
+                      key={appt.id}
+                      appt={appt}
+                      onClick={() => onSelectAppointment(appt)}
+                      {...lanes.get(appt.id)}
+                    />
+                  ));
+                })()}
               </div>
             ))}
             {showNow && (
@@ -1221,7 +1229,7 @@ function WeekGrid({
       </div>
 
       {/* Corps : gutter horaire + colonnes-jours positionnées */}
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto overflow-y-hidden">
         <div
           className="grid min-w-[640px]"
           style={{ gridTemplateColumns: "56px repeat(7, 1fr)" }}
@@ -1247,7 +1255,7 @@ function WeekGrid({
               style={{ height: gridHeight }}
             >
               {/* Lignes horaires + zones cliquables */}
-              {hours.map((h) => (
+              {hours.slice(0, -1).map((h) => (
                 <button
                   key={h}
                   type="button"
@@ -1259,9 +1267,18 @@ function WeekGrid({
               ))}
 
               {/* Événements positionnés */}
-              {dayAppointments(day).map((appt) => (
-                <WeekEvent key={appt.id} appt={appt} onClick={() => onSelectAppointment(appt)} />
-              ))}
+              {(() => {
+                const list = dayAppointments(day);
+                const lanes = layoutLanes(list);
+                return list.map((appt) => (
+                  <WeekEvent
+                    key={appt.id}
+                    appt={appt}
+                    onClick={() => onSelectAppointment(appt)}
+                    {...lanes.get(appt.id)}
+                  />
+                ));
+              })()}
             </div>
           ))}
         </div>
@@ -1271,7 +1288,49 @@ function WeekGrid({
 }
 
 // Bloc d'événement positionné dans la vue semaine (top/height selon les heures).
-function WeekEvent({ appt, onClick }: { appt: Appointment; onClick: () => void }) {
+// place les RDV qui se chevauchent côte à côte
+function layoutLanes(appts: Appointment[]): Map<string, { lane: number; lanes: number }> {
+  const out = new Map<string, { lane: number; lanes: number }>();
+  const sorted = [...appts].sort((a, b) => +new Date(a.start_at) - +new Date(b.start_at));
+  let cluster: { id: string; lane: number }[] = [];
+  let laneEnds: number[] = [];
+  let clusterEnd = -Infinity;
+  const flush = () => {
+    const lanes = Math.max(laneEnds.length, 1);
+    for (const c of cluster) out.set(c.id, { lane: c.lane, lanes });
+    cluster = [];
+    laneEnds = [];
+    clusterEnd = -Infinity;
+  };
+  for (const a of sorted) {
+    const s = +new Date(a.start_at);
+    const e = Math.max(+new Date(a.end_at), s + 20 * 60_000);
+    if (cluster.length && s >= clusterEnd) flush();
+    let lane = laneEnds.findIndex((end) => end <= s);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(e);
+    } else {
+      laneEnds[lane] = e;
+    }
+    cluster.push({ id: a.id, lane });
+    clusterEnd = Math.max(clusterEnd, e);
+  }
+  flush();
+  return out;
+}
+
+function WeekEvent({
+  appt,
+  onClick,
+  lane = 0,
+  lanes = 1,
+}: {
+  appt: Appointment;
+  onClick: () => void;
+  lane?: number;
+  lanes?: number;
+}) {
   const start = new Date(appt.start_at);
   const end = new Date(appt.end_at);
   const startMinutes = start.getHours() * 60 + start.getMinutes();
@@ -1293,10 +1352,12 @@ function WeekEvent({ appt, onClick }: { appt: Appointment; onClick: () => void }
       type="button"
       onClick={onClick}
       title={appt.title}
-      className="absolute left-0.5 right-0.5 rounded-md px-1.5 py-1 text-left overflow-hidden hover:brightness-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-jenny-coral/40 transition-all"
+      className="absolute rounded-md px-1.5 py-1 text-left overflow-hidden hover:brightness-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-jenny-coral/40 transition-all"
       style={{
         top,
         height,
+        left: `calc(${(lane / lanes) * 100}% + 2px)`,
+        width: `calc(${100 / lanes}% - 4px)`,
         backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)`,
         borderLeft: `3px solid ${color}`,
       }}

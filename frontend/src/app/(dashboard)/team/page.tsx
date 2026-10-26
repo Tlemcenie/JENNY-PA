@@ -84,10 +84,25 @@ function extractError(err: unknown, fallback: string): string {
 function hoursSummary(hours: StaffHours | null): string {
   if (!hours) return "Horaires du salon";
   const off = DAYS.filter((d) => d.key in hours && hours[d.key] === null).map((d) => d.label);
-  const parts = DAYS.flatMap((d) => {
-    const w = hours[d.key];
-    return w ? [`${d.label} ${w[0]}–${w[1]}`] : [];
-  });
+  const parts: string[] = [];
+  // regroupe les jours qui se suivent
+  let i = 0;
+  while (i < DAYS.length) {
+    const w = hours[DAYS[i].key];
+    if (!w) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < DAYS.length) {
+      const n = hours[DAYS[j + 1].key];
+      if (!n || n[0] !== w[0] || n[1] !== w[1]) break;
+      j++;
+    }
+    const label = i === j ? DAYS[i].label : `${DAYS[i].label}–${DAYS[j].label}`;
+    parts.push(`${label} ${w[0]}–${w[1]}`);
+    i = j + 1;
+  }
   if (off.length) parts.push(`repos ${off.join(", ")}`);
   return parts.join(" · ") || "Horaires du salon";
 }
@@ -628,21 +643,6 @@ function StaffCard({
             {member.is_active ? "Actif" : "En pause"}
           </span>
         </div>
-        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-          <IconBtn label={`Modifier ${member.display_name}`} onClick={onEdit} disabled={busy}>
-            <Pencil className="w-4 h-4" />
-          </IconBtn>
-          <IconBtn
-            label={member.is_active ? `Mettre ${member.display_name} en pause` : `Réactiver ${member.display_name}`}
-            onClick={onToggle}
-            disabled={busy}
-          >
-            <Power className="w-4 h-4" />
-          </IconBtn>
-          <IconBtn label={`Retirer ${member.display_name}`} onClick={onDelete} disabled={busy} danger>
-            <Trash className={cn("w-4 h-4", busy && "animate-pulse")} />
-          </IconBtn>
-        </div>
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1">
@@ -689,6 +689,23 @@ function StaffCard({
             <div className="h-full rounded-full transition-all" style={{ width: `${rate}%`, backgroundColor: color }} />
           </div>
         )}
+      </div>
+
+      {/* actions, toujours visibles */}
+      <div className="mt-3 -mb-1 flex items-center justify-end gap-0.5">
+        <IconBtn label={`Modifier ${member.display_name}`} onClick={onEdit} disabled={busy}>
+          <Pencil className="w-4 h-4" />
+        </IconBtn>
+        <IconBtn
+          label={member.is_active ? `Mettre ${member.display_name} en pause` : `Réactiver ${member.display_name}`}
+          onClick={onToggle}
+          disabled={busy}
+        >
+          <Power className="w-4 h-4" />
+        </IconBtn>
+        <IconBtn label={`Retirer ${member.display_name}`} onClick={onDelete} disabled={busy} danger>
+          <Trash className={cn("w-4 h-4", busy && "animate-pulse")} />
+        </IconBtn>
       </div>
     </motion.div>
   );
