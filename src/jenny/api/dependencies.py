@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from jenny.api.auth.api_key_crypto import verify_api_key
 from jenny.api.auth.jwt_utils import decode_token
 from jenny.core.logging import get_logger
+from jenny.db.loading import NO_REL
 from jenny.db.session import get_async_session
 from jenny.domain.models.api_key import ApiKey
 from jenny.domain.models.business import Business
@@ -159,7 +160,8 @@ async def principal_from_api_key(db: AsyncSession, raw: str) -> CurrentPrincipal
     raw = (raw or "").strip()
     if not raw.startswith("sk_"):
         return None
-    rows = await db.execute(select(ApiKey).where(ApiKey.key_prefix == raw[:16]))
+    # sans le salon (selectin)
+    rows = await db.execute(select(ApiKey).where(ApiKey.key_prefix == raw[:16]).options(NO_REL))
     now = datetime.now(UTC)
     for key in rows.scalars().all():
         if api_key_expired(key.expires_at, now):
@@ -280,8 +282,13 @@ async def get_superuser(
     Le flag n'est pas dans le JWT : on relit l'utilisateur en base. Lève 403
     si le compte n'est pas super-admin → protège la console d'administration.
     """
-    user = await db.get(User, principal.user_id)
-    if user is None or not user.is_superuser:
+    is_super = None
+    if principal.user_id is not None:
+        # juste le flag, pas les relations
+        is_super = (
+            await db.execute(select(User.is_superuser).where(User.id == principal.user_id))
+        ).scalar_one_or_none()
+    if not is_super:
         raise HTTPException(403, "Accès réservé aux administrateurs")
     return principal
 

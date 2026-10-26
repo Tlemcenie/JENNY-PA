@@ -710,7 +710,8 @@ async def reply_to_conversation(
         meta={"delivered": delivered},
     )
     await db.commit()
-    await db.refresh(msg)
+    # sans recharger les pièces jointes
+    await db.refresh(msg, attribute_names=["created_at"])
 
     publish_conversation_event(
         conv.business_id, conversation_id=conv.id, kind="outbound", channel=conv.channel
@@ -871,7 +872,7 @@ async def assign_conversation(
         conv.business_id, conversation_id=conv.id, kind="status", channel=conv.channel
     )
     if notif is not None:
-        await db.refresh(notif)
+        # id déjà connu, pas de refresh
         publish_notification_event(
             conv.business_id,
             recipient=new_assignee,

@@ -27,14 +27,14 @@ def test_sqlite_ignores_pool_args() -> None:
 def test_postgres_pool_defaults() -> None:
     opts = engine_options(PG)
     assert opts["echo"] is False  # pas de SQL sur stdout
-    assert opts["pool_size"] == 5 and opts["max_overflow"] == 5
+    assert opts["pool_size"] == 10 and opts["max_overflow"] == 10
     assert opts["pool_recycle"] == 1800 and opts["pool_timeout"] == 10
     assert opts["pool_pre_ping"] is True
     assert "connect_args" not in opts and "poolclass" not in opts
     eng = create_async_engine(PG, **opts)  # aucune connexion ouverte
     try:
-        assert eng.pool.size() == 5
-        assert eng.pool._max_overflow == 5
+        assert eng.pool.size() == 10
+        assert eng.pool._max_overflow == 10
         assert eng.pool._timeout == 10 and eng.pool._recycle == 1800
     finally:
         asyncio.run(eng.dispose())
@@ -68,7 +68,7 @@ def test_pool_size_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JENNY_DB_POOL_SIZE", "8")
     monkeypatch.setenv("JENNY_DB_MAX_OVERFLOW", "oops")
     opts = engine_options(PG)
-    assert opts["pool_size"] == 8 and opts["max_overflow"] == 5
+    assert opts["pool_size"] == 8 and opts["max_overflow"] == 10
     monkeypatch.setenv("JENNY_DB_POOL_SIZE", "0")  # 0 = illimité, refusé
     assert engine_options(PG)["pool_size"] == 1
 

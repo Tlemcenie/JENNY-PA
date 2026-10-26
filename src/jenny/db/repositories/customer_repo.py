@@ -6,9 +6,10 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from jenny.db.loading import NO_REL
 from jenny.db.repositories.base import BaseRepository
 from jenny.domain.models.customer import Customer
 
@@ -19,32 +20,40 @@ class CustomerRepository(BaseRepository[Customer]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(Customer, session)
 
+    @staticmethod
+    def _light() -> Select[tuple[Customer]]:
+        """Client seul, sans tout l'historique."""
+        # appelé à chaque message entrant
+        return select(Customer).options(NO_REL)
+
+    async def _first(self, stmt: Select[tuple[Customer]]) -> Customer | None:
+        """Doublon possible : le plus ancien."""
+        stmt = stmt.order_by(Customer.created_at.asc(), Customer.id.asc()).limit(1)
+        return (await self.session.execute(stmt)).scalars().first()
+
     async def find_by_email(self, business_id: UUID, email: str) -> Customer | None:
         """Trouve un client par email dans un business."""
-        stmt = select(Customer).where(
+        stmt = self._light().where(
             Customer.business_id == business_id,
             Customer.email == email,
         )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return await self._first(stmt)
 
     async def find_by_phone(self, business_id: UUID, phone: str) -> Customer | None:
         """Trouve un client par téléphone dans un business."""
-        stmt = select(Customer).where(
+        stmt = self._light().where(
             Customer.business_id == business_id,
             Customer.phone == phone,
         )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return await self._first(stmt)
 
     async def find_by_handle(self, business_id: UUID, handle: str) -> Customer | None:
         """Trouve un client par handle Instagram dans un business."""
-        stmt = select(Customer).where(
+        stmt = self._light().where(
             Customer.business_id == business_id,
             Customer.instagram_handle == handle,
         )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return await self._first(stmt)
 
     async def resolve_customer(
         self,

@@ -1,32 +1,64 @@
 """Gestion des sessions et du moteur async SQLAlchemy.
 
-Fournit l'engine async et le session maker
-utilisés par toute l'application.
+Deux pools sur Postgres : ``request_engine`` pour les routes (``get_db``),
+``engine`` pour le reste (handlers, RAG, webhooks, tâches). Une session de
+route peut ainsi garder sa connexion pendant l'appel LLM sans affamer les
+sessions imbriquées. Tailles et budget : voir docs/db_pool.md.
 """
 
-import os
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import uuid4
 
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 from sqlalchemy.pool import NullPool
 
-from jenny.core.config import get_settings
+from jenny.core.config import Settings, get_settings
 
 settings = get_settings()
 
 _TRUE = {"1", "true", "yes", "on"}
 
+# défauts pour 1 process API
+POOL_SIZE = 10
+MAX_OVERFLOW = 10
+POOL_TIMEOUT_S = 10
+POOL_RECYCLE_S = 1800
 
-def _env_int(name: str, default: int, low: int) -> int:
-    """Entier depuis l'env, sinon défaut."""
+
+class _PoolSettings(BaseSettings):
+    """Réglages du pool (env ou .env)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="JENNY_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # texte brut, lu avec tolérance
+    sql_echo: str = ""
+    db_pooler: str = ""
+    db_pool_size: str = ""
+    db_max_overflow: str = ""
+
+
+def _pool_settings() -> _PoolSettings:
+    """Relu à chaque appel, même .env que Settings."""
+    return _PoolSettings(_env_file=Settings.model_config.get("env_file"))
+
+
+def _as_int(raw: str, default: int, low: int) -> int:
+    """Entier tolérant, sinon défaut."""
     try:
-        return max(low, int(os.getenv(name, "")))
+        return max(low, int(raw))
     except ValueError:
         return default
 
@@ -38,13 +70,14 @@ def _pg_stmt_name() -> str:
 
 def engine_options(url: str) -> dict[str, Any]:
     """Options du moteur selon la base."""
+    conf = _pool_settings()
     # SQL en clair seulement sur demande
-    echo = os.getenv("JENNY_SQL_ECHO", "").strip().lower() in _TRUE
+    echo = conf.sql_echo.strip().lower() in _TRUE
     # pas de données perso dans les logs
     opts: dict[str, Any] = {"echo": echo, "hide_parameters": not echo}
     if url.startswith("sqlite"):
         return opts  # pool par défaut
-    if os.getenv("JENNY_DB_POOLER", "").strip().lower() == "transaction":
+    if conf.db_pooler.strip().lower() == "transaction":
         # pgbouncer gère déjà le pool
         opts["poolclass"] = NullPool
         opts["connect_args"] = {
@@ -54,27 +87,41 @@ def engine_options(url: str) -> dict[str, Any]:
         }
         return opts
     opts.update(
-        pool_size=_env_int("JENNY_DB_POOL_SIZE", 5, 1),
-        max_overflow=_env_int("JENNY_DB_MAX_OVERFLOW", 5, 0),
-        pool_recycle=1800,
-        pool_timeout=10,
+        pool_size=_as_int(conf.db_pool_size, POOL_SIZE, 1),
+        max_overflow=_as_int(conf.db_max_overflow, MAX_OVERFLOW, 0),
+        pool_recycle=POOL_RECYCLE_S,
+        pool_timeout=POOL_TIMEOUT_S,
         pool_pre_ping=True,
     )
     return opts
 
 
-engine = create_async_engine(settings.database_url, **engine_options(settings.database_url))
+def build_engines(url: str, opts: dict[str, Any] | None = None) -> tuple[AsyncEngine, AsyncEngine]:
+    """Moteur principal + moteur des routes."""
+    opts = engine_options(url) if opts is None else opts
+    main = create_async_engine(url, **opts)
+    if "pool_size" not in opts:
+        return main, main  # sqlite ou pgbouncer
+    return main, create_async_engine(url, **opts)
 
-async_session_factory = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
+
+def session_factory(bind: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    """Fabrique de sessions sur un moteur."""
+    return async_sessionmaker(bind, class_=AsyncSession, expire_on_commit=False)
+
+
+engine, request_engine = build_engines(settings.database_url)
+
+async_session_factory = session_factory(engine)
+# même fabrique si un seul moteur
+request_session_factory = (
+    async_session_factory if request_engine is engine else session_factory(request_engine)
 )
 
 
 async def get_async_session() -> AsyncIterator[AsyncSession]:
     """Génère une session async pour injection de dépendances."""
-    async with async_session_factory() as session:
+    async with request_session_factory() as session:
         try:
             yield session
             await session.commit()
