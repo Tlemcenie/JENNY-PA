@@ -147,6 +147,12 @@ export function intentLabel(intent: string): string {
   return labels[intent] || capitalize(intent);
 }
 
+/** peut régler le salon ? */
+export function canManageSalon(role?: string | null): boolean {
+  // rôle inconnu : l'api tranche
+  return !role || role === "owner" || role === "admin";
+}
+
 // Rôle d'un membre dans l'entreprise (cf. business_member.role).
 export function roleLabel(role: string): string {
   const labels: Record<string, string> = {

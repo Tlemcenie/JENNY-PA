@@ -3,20 +3,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Cpu, Check, ChevronDown } from "lucide-react";
-import { getLlmSettings, switchLlm, type LlmState, ApiError } from "@/lib/api";
+import { getLlmSettings, switchLlm, humanError, type LlmState } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
+import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
-// Bascule du « cerveau » de Jenny côté client : Ollama (local) / Groq (hébergé) /
-// NanoGPT (maison). Compact dans la topbar ; grise les moteurs non prêts.
-const SHORT: Record<string, string> = {
-  ollama: "Ollama",
-  groq: "Groq 70B",
-  nanogpt: "NanoGPT",
-};
+// Bascule du « cerveau » de Jenny : Ollama (local) / Groq (hébergé) / NanoGPT
+// (maison). Réservée aux super-admins (403 sinon côté API).
+
+/** libellé court, vu par l'api */
+function shortLabel(state: LlmState): string {
+  const opt = state.options.find((o) => o.key === state.active);
+  if (!opt) return state.active;
+  const [brand, detail] = opt.label.split("—").map((x) => x.trim());
+  // garde le nom du modèle
+  return detail && /\d/.test(detail) ? detail : brand || opt.label;
+}
 
 export function LlmSwitcher() {
   const toast = useToast();
+  const { user } = useAuth();
+  const isSuper = Boolean(user?.is_superuser);
   const [state, setState] = useState<LlmState | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -31,8 +38,9 @@ export function LlmSwitcher() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    // pas d'appel inutile
+    if (isSuper) void load();
+  }, [load, isSuper]);
 
   useEffect(() => {
     if (!open) return;
@@ -48,7 +56,7 @@ export function LlmSwitcher() {
     };
   }, [open]);
 
-  if (!state) return null;
+  if (!isSuper || !state) return null;
 
   const select = async (key: string) => {
     if (busy || key === state.active) {
@@ -63,9 +71,7 @@ export function LlmSwitcher() {
       const label = next.options.find((o) => o.current)?.label ?? key;
       toast.success(`Jenny tourne maintenant sur ${label}.`);
     } catch (err) {
-      const detail =
-        err instanceof ApiError ? (err.data as { detail?: string })?.detail : null;
-      toast.error(detail || "Impossible de changer de moteur.");
+      toast.error(humanError(err, "Impossible de changer de moteur."));
       void load();
     } finally {
       setBusy(false);
@@ -83,7 +89,7 @@ export function LlmSwitcher() {
       >
         <Cpu className="w-3.5 h-3.5 text-jenny-coral" />
         <span className="hidden sm:inline text-[12px] font-medium">
-          {SHORT[state.active] ?? state.active}
+          {shortLabel(state)}
         </span>
         <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", open && "rotate-180")} />
       </button>

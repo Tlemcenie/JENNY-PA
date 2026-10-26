@@ -18,15 +18,26 @@ class ApiError extends Error {
   }
 }
 
+// détails anglais par défaut
+const GENERIC_DETAILS = new Set([
+  "Not Found",
+  "Forbidden",
+  "Not authenticated",
+  "Unauthorized",
+  "Method Not Allowed",
+]);
+
 /** message d'erreur lisible */
 export function humanError(err: unknown, fallback = "Impossible de charger ces données."): string {
   if (err instanceof ApiError) {
     const detail = (err.data as { detail?: unknown } | undefined)?.detail;
     if (err.status === 401) return "Votre session a expiré. Reconnectez-vous.";
+    if (err.status >= 500) return "Le service est momentanément indisponible. Réessayez dans un instant.";
+    // detail de l'api en priorité
+    const text = typeof detail === "string" ? detail.trim() : "";
+    if (text && !GENERIC_DETAILS.has(text)) return text;
     if (err.status === 403) return "Vous n'avez pas accès à cette information.";
     if (err.status === 404) return "Cette information est introuvable.";
-    if (err.status >= 500) return "Le service est momentanément indisponible. Réessayez dans un instant.";
-    if (typeof detail === "string" && detail.trim()) return detail;
     return fallback;
   }
   // fetch coupé, pas de réseau
