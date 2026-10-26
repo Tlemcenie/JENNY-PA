@@ -96,3 +96,21 @@ def test_alembic_check_bloquant_si_derive_nulle() -> None:
     assert check["run"].strip() == "alembic check"
     if not KNOWN_DRIFT:
         assert not check.get("continue-on-error"), "rendre alembic check bloquant"
+
+
+def test_deploy_doc_a_jour() -> None:
+    """DEPLOY.md suit le code."""
+    doc = (ROOT / "DEPLOY.md").read_text(encoding="utf-8")
+    # migrations puis réindexation
+    assert doc.index("alembic upgrade head") < doc.index("scripts/reindex_kb.py --rechunk")
+    assert "--args=scripts/reindex_kb.py,--rechunk" in doc
+    for var in (
+        "JENNY_JWT_SECRET",
+        "JENNY_MASTER_KEY",
+        "JENNY_FACEBOOK_APP_SECRET",
+        "JENNY_STRIPE_WEBHOOK_SECRET",
+        "JENNY_EMAIL_INBOUND_SECRET",
+        "NEXT_PUBLIC_SITE_URL",
+    ):
+        assert var in doc, var
+    assert Settings.model_fields["llm_model"].default in doc
