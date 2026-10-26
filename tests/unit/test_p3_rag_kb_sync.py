@@ -96,7 +96,8 @@ class _KB:
         if self.in_batch:
             self._write("delete")
         old = self.entries.pop(knowledge_id, None)
-        if old is not None and tombstone and old.metadata.get("kb_key"):
+        real = old is not None and old.metadata.get("seed") == kc.REAL_TAG
+        if real and tombstone and old.metadata.get("kb_key"):
             self.tombs.add(old.metadata["kb_key"])
         return old is not None
 

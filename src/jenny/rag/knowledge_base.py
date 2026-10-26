@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 from jenny.core.logging import get_logger
 from jenny.rag.embeddings import get_default_embedder
 from jenny.rag.ingestion import DocumentIngester, build_embed_text, embed_header, reassemble
+from jenny.rag.kb_coiffeur import REAL_TAG
 from jenny.rag.retriever import embed_query
 from jenny.rag.vector_store import PgVectorStore, lock_business_kb, lock_entry
 
@@ -374,7 +375,10 @@ class KnowledgeBase:
             chunks = await self.vector_store.entry_chunks(
                 self.session, self.business_id, knowledge_id
             )
-            key = chunks[0][1].get("kb_key") if chunks else None
+            meta = chunks[0][1] if chunks else {}
+            # trace : jeu réel seulement
+            if meta.get("seed") == REAL_TAG:
+                key = meta.get("kb_key")
         count = await self.vector_store.delete_by_knowledge_id(
             self.session, self.business_id, knowledge_id
         )
