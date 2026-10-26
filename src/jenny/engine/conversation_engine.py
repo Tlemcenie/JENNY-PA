@@ -157,9 +157,10 @@ _WHEN_WORDS = frozenset(_WHEN_TEXT.split())
 _MGMT_CANCEL_RE = re.compile(
     r"\b(annul|d[ée]command)|\bsupprim\w*\s+(?:mon|le)\s+(?:rdv|rendez)", re.I
 )
+# « rechanger », « échanger » aussi
 _MGMT_RESCHED_RE = re.compile(
     r"\b(d[ée]plac|d[ée]cal|repouss)|\breport\w*\s+(?:mon|le)\s+(?:rdv|rendez)|"
-    r"\bchang\w*\s+(?:l['’]?heure|de\s+jour|la\s+date)",  # noqa: RUF001
+    r"\b(?:re|[ée])?chang\w*+\s+(?:l['’]?heure|de\s+jour|la\s+date)",  # noqa: RUF001
     re.I,
 )
 _MGMT_CONFIRM_RE = re.compile(
