@@ -40,11 +40,11 @@ import {
   type WeekHours,
 } from "@/components/onboarding/hours-editor";
 
-// les étapes qui comptent pour jenny
+// horaires avant le modèle
 const STEPS = [
   { n: 1, label: "Votre salon" },
-  { n: 2, label: "Vos prestations" },
-  { n: 3, label: "Vos horaires" },
+  { n: 2, label: "Vos horaires" },
+  { n: 3, label: "Vos prestations" },
   { n: 4, label: "Vos canaux" },
   { n: 5, label: "Le ton de Jenny" },
 ] as const;
@@ -59,13 +59,13 @@ const STEP_META: Record<number, { eyebrow: string; title: [string, string]; intr
   },
   2: {
     eyebrow: "— étape 2 —",
-    title: ["Vos ", "prestations."],
-    intro: "Avec le catalogue, Jenny donne les bons prix, les bonnes durées et propose des créneaux qui tiennent.",
+    title: ["Vos ", "horaires."],
+    intro: "Jenny ne propose un rendez-vous que pendant vos heures d'ouverture.",
   },
   3: {
     eyebrow: "— étape 3 —",
-    title: ["Vos ", "horaires."],
-    intro: "Jenny ne propose un rendez-vous que pendant vos heures d'ouverture.",
+    title: ["Vos ", "prestations."],
+    intro: "Avec le catalogue, Jenny donne les bons prix, les bonnes durées et propose des créneaux qui tiennent.",
   },
   4: {
     eyebrow: "— étape 4 —",
@@ -137,13 +137,15 @@ export default function OnboardingPage() {
   const [description, setDescription] = useState("");
 
   // étape 2
+  const [week, setWeek] = useState<WeekHours>(() => weekFromBusiness(null));
+
+  // étape 3
   const [prestaCount, setPrestaCount] = useState<number | null>(null);
   const [prestaError, setPrestaError] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [seedInfo, setSeedInfo] = useState<string | null>(null);
-
-  // étape 3
-  const [week, setWeek] = useState<WeekHours>(() => weekFromBusiness(null));
+  // fiches kb déjà créées
+  const [seededKb, setSeededKb] = useState(false);
 
   // étape 4
   const [channels, setChannels] = useState<ChannelStatus[] | null>(null);
@@ -253,9 +255,10 @@ export default function OnboardingPage() {
     setSeedInfo(null);
     try {
       const r = await seedCoiffeurTemplate();
+      if (r.knowledge > 0) setSeededKb(true);
       const kbNote =
         r.knowledge > 0
-          ? ` ${r.knowledge} fiches génériques ont aussi été ajoutées à la base (horaires, annulation) : relisez-les.`
+          ? ` ${r.knowledge} fiche${r.knowledge > 1 ? "s" : ""} ajoutée${r.knowledge > 1 ? "s" : ""} à la base (horaires, annulation) : relisez-les.`
           : "";
       setSeedInfo(
         r.prestations > 0
@@ -270,14 +273,27 @@ export default function OnboardingPage() {
     }
   }
 
-  async function handleStep3() {
+  async function handleHours() {
     const bad = invalidDay(week);
     if (bad) {
-      setSaveError(`${bad} : l'heure de fermeture doit suivre l'ouverture.`);
+      setSaveError(`${bad} : indiquez une ouverture et une fermeture, la fermeture après l'ouverture.`);
       return;
     }
-    const ok = await save({ business_hours: weekToBusiness(week) });
-    if (ok) next();
+    const hours = weekToBusiness(week);
+    // même ordre des jours
+    const before = business?.business_hours
+      ? JSON.stringify(weekToBusiness(weekFromBusiness(business.business_hours)))
+      : "null";
+    const changed = JSON.stringify(hours) !== before;
+    const ok = await save({ business_hours: hours });
+    if (!ok) return;
+    // fiche horaires déjà faite
+    if (seededKb && changed) {
+      setSeedInfo(
+        "Vos horaires ont changé après le chargement du modèle : mettez à jour la fiche « Horaires » dans la base de connaissances."
+      );
+    }
+    next();
   }
 
   async function handleStep5() {
@@ -425,8 +441,8 @@ export default function OnboardingPage() {
                   </div>
                 )}
 
-                {/* étape 2 : prestations */}
-                {step === 2 && (
+                {/* étape 3 : prestations */}
+                {step === 3 && (
                   <div className="flex flex-col gap-3">
                     {prestaError ? (
                       <ErrorBox message={prestaError} onRetry={() => void loadPrestations()} />
@@ -462,6 +478,12 @@ export default function OnboardingPage() {
                         )}
                       </div>
                     )}
+                    {prestaCount === 0 && !business?.business_hours && (
+                      <p className="text-[12.5px] text-jenny-text-secondary">
+                        Enregistrez d&apos;abord vos horaires (étape précédente) : la fiche « Horaires » du
+                        modèle en dépend.
+                      </p>
+                    )}
                     {seedInfo && (
                       <p role="status" className="text-[13px] text-jenny-text-secondary">
                         {seedInfo}
@@ -477,8 +499,8 @@ export default function OnboardingPage() {
                   </div>
                 )}
 
-                {/* étape 3 : horaires */}
-                {step === 3 && <HoursEditor value={week} onChange={setWeek} />}
+                {/* étape 2 : horaires */}
+                {step === 2 && <HoursEditor value={week} onChange={setWeek} />}
 
                 {/* étape 4 : canaux réels */}
                 {step === 4 && (
@@ -608,16 +630,16 @@ export default function OnboardingPage() {
                     </PrimaryButton>
                   )}
 
-                  {(step === 2 || step === 4) && (
+                  {(step === 3 || step === 4) && (
                     <PrimaryButton onClick={next} className="ml-auto">
                       Continuer
                       <ArrowRight className="w-3.5 h-3.5" />
                     </PrimaryButton>
                   )}
 
-                  {step === 3 && (
+                  {step === 2 && (
                     <>
-                      <PrimaryButton onClick={handleStep3} loading={saving} disabled={!business} className="ml-auto">
+                      <PrimaryButton onClick={handleHours} loading={saving} disabled={!business} className="ml-auto">
                         Enregistrer
                         <ArrowRight className="w-3.5 h-3.5" />
                       </PrimaryButton>

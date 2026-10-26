@@ -55,11 +55,16 @@ export function weekToBusiness(week: WeekHours): BusinessHours | null {
   return anyOpen ? out : null;
 }
 
+// heure au format HH:MM
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 /** jour mal saisi, sinon null */
 export function invalidDay(week: WeekHours): string | null {
   for (const d of WEEK_DAYS) {
     const s = week[d.key];
-    if (s?.open && !(s.from < s.to)) return d.label;
+    if (!s?.open) continue;
+    // champ vidé = invalide
+    if (!HHMM.test(s.from) || !HHMM.test(s.to) || !(s.from < s.to)) return d.label;
   }
   return null;
 }
