@@ -258,7 +258,7 @@ export default function OnboardingPage() {
       if (r.knowledge > 0) setSeededKb(true);
       const kbNote =
         r.knowledge > 0
-          ? ` ${r.knowledge} fiche${r.knowledge > 1 ? "s" : ""} ajoutée${r.knowledge > 1 ? "s" : ""} à la base (horaires, annulation) : relisez-les.`
+          ? ` ${r.knowledge} fiche${r.knowledge > 1 ? "s" : ""} tirée${r.knowledge > 1 ? "s" : ""} de vos réglages (horaires, acompte, rappels…) ajoutée${r.knowledge > 1 ? "s" : ""} à la base : relisez-les.`
           : "";
       setSeedInfo(
         r.prestations > 0
@@ -287,11 +287,20 @@ export default function OnboardingPage() {
     const changed = JSON.stringify(hours) !== before;
     const ok = await save({ business_hours: hours });
     if (!ok) return;
-    // fiche horaires déjà faite
+    // fiche horaires à refaire
     if (seededKb && changed) {
-      setSeedInfo(
-        "Vos horaires ont changé après le chargement du modèle : mettez à jour la fiche « Horaires » dans la base de connaissances."
-      );
+      setSeeding(true);
+      try {
+        // relancer = fiches à jour
+        await seedCoiffeurTemplate();
+        setSeedInfo("Horaires enregistrés : la fiche « Horaires » de Jenny est à jour.");
+      } catch {
+        setSeedInfo(
+          "Vos horaires ont changé après le chargement du modèle : mettez à jour la fiche « Horaires » dans la base de connaissances."
+        );
+      } finally {
+        setSeeding(false);
+      }
     }
     next();
   }
@@ -639,7 +648,7 @@ export default function OnboardingPage() {
 
                   {step === 2 && (
                     <>
-                      <PrimaryButton onClick={handleHours} loading={saving} disabled={!business} className="ml-auto">
+                      <PrimaryButton onClick={handleHours} loading={saving || seeding} disabled={!business} className="ml-auto">
                         Enregistrer
                         <ArrowRight className="w-3.5 h-3.5" />
                       </PrimaryButton>
