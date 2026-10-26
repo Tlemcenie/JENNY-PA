@@ -519,7 +519,12 @@ export default function CampaignsPage() {
       try {
         await setMarketingOptOut(id, optOut);
         toast.success(optOut ? `${name} ne recevra plus d'offres.` : "Offres réactivées.");
-        const jobs: Promise<unknown>[] = [loadOptOuts(), listSegments().then(setSegments)];
+        // compteurs et trous à jour
+        const jobs: Promise<unknown>[] = [
+          loadOptOuts(),
+          loadGaps(),
+          listSegments().then(setSegments),
+        ];
         if (selected) jobs.push(previewSegment(selected).then(setPreview));
         await Promise.all(jobs);
       } catch (err) {
@@ -528,7 +533,7 @@ export default function CampaignsPage() {
         setOptBusy(null);
       }
     },
-    [confirm, toast, loadOptOuts, selected]
+    [confirm, toast, loadOptOuts, loadGaps, selected]
   );
 
   // suivi d'un envoi en cours
