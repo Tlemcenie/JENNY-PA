@@ -114,9 +114,12 @@ async def _commercial_gate(
     from jenny.services.offer_cap import claim_offer
 
     cid = customer_id
-    if cid is None and conversation_id is not None:
+    if conversation_id is not None:
         conv = await db.get(Conversation, conversation_id)
-        if conv is not None and conv.business_id == business_id:
+        if conv is not None and conv.business_id != business_id:
+            # fil d'un autre salon
+            return False, None, None
+        if cid is None and conv is not None:
             cid = conv.customer_id
     if cid is None:
         # pas de fiche client

@@ -206,6 +206,34 @@ class TestPlafond:
             assert await notify_customer(db, commercial=True, **kw) is None
             assert await notify_customer(db, **kw) == "sms"
 
+    async def test_offre_sur_le_fil_dun_autre_salon(self, db_tables, monkeypatch) -> None:
+        from jenny.domain.models.conversation import Conversation
+        from jenny.notifications.outbound import notify_customer
+
+        calls: list[str] = []
+
+        async def fake_reply(channel, ext, text, **kw):
+            calls.append(text)
+            return True
+
+        monkeypatch.setattr("jenny.connectors.reply_dispatch.send_channel_reply", fake_reply)
+        mine, other = await _biz(), await _biz("Autre")
+        conv = uuid4()
+        async with async_session_factory() as s, s.begin():
+            s.add(
+                Conversation(
+                    id=conv,
+                    business_id=other.id,
+                    channel="whatsapp",
+                    external_conversation_id="wa:1",
+                )
+            )
+        async with async_session_factory() as db:
+            out = await notify_customer(
+                db, business_id=mine.id, conversation_id=conv, text="offre", commercial=True
+            )
+        assert out is None and not calls
+
 
 # ── segments ──
 

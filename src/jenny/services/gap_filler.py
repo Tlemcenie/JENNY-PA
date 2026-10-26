@@ -62,8 +62,8 @@ REBOOK_MIN_DAYS = 21
 REBOOK_MAX_DAYS = 180
 DEFAULT_CYCLE_DAYS = 42
 REBOOK_POOL = 40
-# annulation récente
-RECENT_CHANGE = timedelta(minutes=15)
+# annulation récente (cron 10 min)
+RECENT_CHANGE = timedelta(minutes=11)
 # un RDV pris dans les 2 jours = rempli
 FILLED_WINDOW = timedelta(days=2)
 
