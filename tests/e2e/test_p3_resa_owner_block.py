@@ -225,7 +225,53 @@ class TestCapacite:
         ("Indisponible le 12 Novembre", None),
         ("Pas dispo demain, Merci", None),
         ("bloque le RDV de 15h", None),
+        # majuscule du clavier
+        ("Peux-tu bloquer mardi de 14h à 16h ?", None),
+        ("Est-ce que tu peux bloquer mardi 14h", None),
+        ("Bloque-moi mardi 14h", None),
+        ("Super, bloque mardi 14h", None),
+        ("Alors bloque mardi", None),
+        ("Parfait bloque mardi", None),
+        ("Après-midi de mardi bloqué", None),
+        ("Pourrais-tu bloquer mardi", None),
+        ("D'accord, bloque mardi 14h", None),
+        ("Bloque Mardi 14h", None),
+        ("Bloque Entre 14h et 16h", None),
+        ("Bloque mardi 14h pour Formation", None),
+        ("Ça sera fermé mardi", None),
+        ("Personne n'est dispo mardi, bloque", None),
+        ("Bloque Rendez-vous mardi", None),
+        # vraie place d'un prénom
+        ("Bloque mardi 14h pour Jade", "Jade"),
+        ("Bloque l'agenda de Jade mardi", "Jade"),
+        ("Bloque l'agenda d'Inès mardi", "Inès"),
+        ("Peux-tu bloquer Jade mardi ?", "Jade"),
+        ("Bloque Jean-Pierre mardi 14h", "Jean-Pierre"),
+        ("bloque mardi, Jade ne travaille pas", "Jade"),
+        ("Mardi 14h Jade indisponible", "Jade"),
+        ("Jade n'est pas là mardi, bloque", "Jade"),
+        ("Super, Jade est malade, bloque mardi", "Jade"),
+        ("Élodie est absente mardi", "Élodie"),
     ],
 )
 def test_name_guess(msg: str, guess: str | None) -> None:
     assert _name_guess(msg) == guess
+
+
+@pytest.mark.parametrize(
+    "tpl",
+    [
+        "Peux-tu bloquer le {d} de 14h à 16h ?",
+        "Est-ce que tu peux bloquer le {d} 14h",
+        "Super, bloque le {d} 14h",
+        "Alors bloque le {d} 14h",
+        "Bloque-moi le {d} 14h",
+    ],
+)
+async def test_tournure_courante_bloque_le_salon(db_tables, tpl: str) -> None:
+    biz, _ = await _salon(("Léa", True), ("Marc", True))
+    out = await _say(biz, tpl.format(d=_txt(_day())))
+    # avant : « Je ne trouve pas « Peux-tu » »
+    assert "unknown_staff" not in out["data"], out["response"]
+    assert out["data"].get("salon") is True
+    assert len(await _blocks(biz)) == 1

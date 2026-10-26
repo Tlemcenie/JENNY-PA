@@ -225,8 +225,15 @@ _SALON_RE = re.compile(
     r"|toute\s+l['’]?\s*[ée]quipe|fermeture)",  # noqa: RUF001
     re.I,
 )
-# mot à majuscule
-_CAP_WORD_RE = re.compile(r"\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:-[A-Za-zÀ-ÖØ-öø-ÿ]+)?")
+# prénom, pas « Peux-tu »
+_NAME = r"[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:-[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+)?(?![\w-])"
+# là où on cite quelqu'un
+_NAME_SPOT_RE = re.compile(
+    rf"(?i:\bbloqu\w*(?:-(?:moi|nous|le|la|les))?\s+|\bpour\s+|\bde\s+|\bd['’]\s*)"  # noqa: RUF001
+    rf"(?P<a>{_NAME})"
+    rf"|(?<![\w-])(?P<b>{_NAME})\s+(?i:est\b|sera\b|ne\b|n['’]|absente?\b|malade\b"  # noqa: RUF001
+    r"|indispo|off\b|pas\s+l[àa]\b|en\s+(?:cong|vacances|repos|formation|arr[êe]t|pause))"
+)
 
 
 def _word_set(text: str) -> frozenset[str]:
@@ -248,7 +255,10 @@ _NOT_NAMES = _word_set(
     " juin juillet aout septembre octobre novembre decembre noel paques ferie"
     " mets met mettre note peux peut veux voudrais est sera suis ne plus rien"
     " jamais absent absente malade rdv rendez stop urgent attention mme mr"
-    " madame monsieur mlle"
+    " madame monsieur mlle moi toi lui ca cela ceci personne aucun aucune entre"
+    " juste aussi encore seulement vite direct deux trois quatre cinq formation"
+    " reunion medecin dentiste dejeuner pause perso raison raisons cause travaux"
+    " inventaire livraison"
 )
 
 
@@ -260,7 +270,8 @@ def _plain(text: str) -> str:
 
 def _name_guess(message: str) -> str | None:
     """Un prénom qu'on ne connaît pas ?"""
-    for word in _CAP_WORD_RE.findall(message or ""):
+    for m in _NAME_SPOT_RE.finditer(message or ""):
+        word = m.group("a") or m.group("b")
         if _plain(word) not in _NOT_NAMES:
             return str(word)
     return None
