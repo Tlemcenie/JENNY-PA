@@ -56,6 +56,11 @@ OUI = [
     "Bonjour plus de pub",
     "Jamais de promos pour moi",
     "pas d'offres merci",
+    # stop + reproche : stop
+    "Stop, vous m'envoyez des pubs",
+    "stop, m'envoyez plus de pub",
+    "Vous m'envoyez des pubs, plus de pub svp",
+    "je veux arrêter de recevoir des offres",
 ]
 
 # la négation porte sur le STOP
@@ -127,6 +132,10 @@ AMBIGU = [
     "envoyez-moi les promos svp",
     "recevoir plus de messages",
     "stop, envoyez-moi des offres",
+    "pouvez-vous m'envoyer les offres",
+    "merci de m'envoyer les offres",
+    "vous m'envoyez des pubs",
+    "m'envoyez pas de pub",
     "stop " + "svp " * 20,
 ]
 

@@ -266,31 +266,42 @@ def _no_before(words: list[str], i: int) -> bool:
     return j < 0 or words[j] in {"ne", "n"} | _MODALS
 
 
-def _no_order(words: list[str], i: int, question: bool) -> bool:
-    """« ne m'envoyez plus », pas une plainte."""
+def _verb_stop(words: list[str], i: int, question: bool) -> bool | None:
+    """Ce verbe : refus, envie, ou flou."""
+    if _after_stop(words, i):
+        return True
+    if words[i] in _SEND_INF:
+        if _no_before(words, i):
+            return True
+        # « vous ne pouvez pas m'envoyer »
+        return None if set(words[:i]) & _NOT else False
     j = i - 1
     while j >= 0 and words[j] in {"me", "m", "nous", "en", "y", "les", "le", "la", "l"}:
         j -= 1
-    if j < 0 or words[j] not in {"ne", "n"}:
-        return False
     after = set(words[i + 1 :]) & _NOT
-    if not after:
-        return False
-    if j and words[j - 1] == "vous":
-        # « vous ne m'envoyez jamais » : plainte
-        return "plus" in after and not after & _NEG and not question
-    return True
+    if j >= 0 and words[j] in {"ne", "n"}:
+        if not after:
+            return None
+        if j and words[j - 1] == "vous":
+            # « vous ne m'envoyez jamais » : plainte
+            return True if "plus" in after and not after & _NEG and not question else None
+        # « ne m'envoyez plus »
+        return True
+    if (j >= 0 and words[j] == "vous") or j < i - 1 or after & _NEG:
+        # « vous m'envoyez », « m'envoyez plus »
+        return None
+    # « envoyez-moi des offres »
+    return False
 
 
 def _clause_stop(words: list[str], question: bool) -> bool | None:
     """Refus, envie, ou rien."""
     verbs = [i for i, w in enumerate(words) if w in _STOP_VERBS]
     if verbs:
-        return all(
-            _after_stop(words, i)
-            or (_no_before(words, i) if words[i] in _SEND_INF else _no_order(words, i, question))
-            for i in verbs
-        )
+        said = [_verb_stop(words, i, question) for i in verbs]
+        if False in said:
+            return False
+        return True if all(said) else None
     for i, w in enumerate(words):
         if w not in _NEG and w != "plus":
             continue
