@@ -4,6 +4,7 @@ CRUD scopé au business du JWT. Sert la vue calendrier du dashboard et peut êtr
 alimenté par l'agent de planification de Jenny (création automatique de RDV).
 """
 
+import contextlib
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -18,10 +19,18 @@ from jenny.api.dependencies import CurrentUser, DbSession
 from jenny.core.logging import get_logger
 from jenny.db.conflicts import is_slot_taken
 from jenny.domain.models.appointment import Appointment
+from jenny.domain.models.business import Business
 from jenny.domain.models.customer import Customer
+from jenny.domain.models.prestation import Prestation
 from jenny.domain.models.staff import Staff
 from jenny.services.audit_service import record_audit
-from jenny.services.availability import StaffPick, find_free_staff, load_staff_pool
+from jenny.services.availability import (
+    StaffPick,
+    business_tz,
+    find_free_staff,
+    load_staff_pool,
+    staff_is_busy,
+)
 
 logger = get_logger(__name__)
 
@@ -112,6 +121,9 @@ async def _check_staff(db: AsyncSession, bid: UUID, staff_id: UUID | None) -> No
 
 
 _OVERLAP = "Ce créneau chevauche un rendez-vous existant"
+_NO_STAFF = "Aucun coiffeur libre sur ce créneau"
+_NO_SKILL = "Aucun coiffeur libre ne fait cette prestation sur ce créneau"
+_WD = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
 def _utc(dt: datetime) -> datetime:
@@ -128,17 +140,19 @@ async def _ensure_room(
     staff_id: UUID | None,
     auto: bool = False,
     exclude_id: UUID | None = None,
+    prestation_ids: list[UUID] | None = None,
 ) -> UUID | None:
     """Vérifie qu'un fauteuil reste libre."""
     pool = await load_staff_pool(db, bid)
 
-    async def _pick(only: UUID | None, hours: bool) -> StaffPick:
+    async def _pick(only: UUID | None, hours: bool, skills: list[UUID] | None) -> StaffPick:
         return await find_free_staff(
             db,
             bid,
             start,
             end,
             staff_id=only,
+            prestation_ids=skills,
             pool=pool,
             exclude_appointment_id=exclude_id,
             check_hours=hours,
@@ -146,17 +160,87 @@ async def _ensure_room(
 
     if auto and staff_id is None:
         # présent d'abord, sinon hors horaires
-        pick = await _pick(None, True)
+        pick = await _pick(None, True, prestation_ids)
         if not pick.free and pool.has_staff:
-            pick = await _pick(None, False)
+            pick = await _pick(None, False, prestation_ids)
         if not pick.free:
-            raise HTTPException(409, "Aucun coiffeur libre sur ce créneau")
+            # libre mais pas compétent ?
+            if prestation_ids and pool.has_staff and (await _pick(None, False, None)).free:
+                raise HTTPException(409, _NO_SKILL)
+            raise HTTPException(409, _NO_STAFF)
         return pick.staff.id if pick.staff else None
-    # coiffeur inactif = un fauteuil
-    only = staff_id if pool.get(staff_id) is not None else None
-    if not (await _pick(only, False)).free:
+    if staff_id is not None and pool.has_staff and pool.get(staff_id) is None:
+        # coiffeur en pause : lui seul
+        if await staff_is_busy(db, bid, staff_id, start, end, exclude_appointment_id=exclude_id):
+            raise HTTPException(409, _OVERLAP)
+        return staff_id
+    if not (await _pick(staff_id, False, None)).free:
         raise HTTPException(409, _OVERLAP)
     return staff_id
+
+
+async def _prestations_for(
+    db: AsyncSession, bid: UUID, prestation_id: UUID | None, title: str
+) -> list[UUID]:
+    """Prestation choisie, ou titre exact."""
+    if prestation_id is not None:
+        owner = await db.scalar(select(Prestation.business_id).where(Prestation.id == prestation_id))
+        if owner != bid:
+            raise HTTPException(400, "Prestation inconnue pour ce salon")
+        return [prestation_id]
+    from jenny.services.prestation_service import (
+        _MULTI_SPLIT_RE,
+        _norm,
+        load_active_prestations,
+    )
+
+    # titre = nom exact, sinon rien
+    parts = [_norm(x) for x in _MULTI_SPLIT_RE.split(title or "") if x and x.strip()]
+    if not parts:
+        return []
+    by_name = {_norm(p.name): p.id for p in await load_active_prestations(db, bid)}
+    ids = [by_name.get(x) for x in parts]
+    if any(i is None for i in ids):
+        return []
+    return list(dict.fromkeys(i for i in ids if i is not None))
+
+
+async def _after_free(db: AsyncSession, freed: dict[str, Any]) -> None:
+    """Place libérée : liste d'attente + relances."""
+    from jenny.services.gap_filler import schedule_after_change
+    from jenny.services.waitlist_service import notify_waitlist_for_freed_slot
+
+    bid = freed["business_id"]
+    try:
+        tz = business_tz(await db.get(Business, bid))
+        cur = _utc(freed["start_at"]).astimezone(tz)
+        when = f"{_WD[cur.weekday()]} {cur.day:02d}/{cur.month:02d} à {cur.strftime('%Hh%M')}"
+        await notify_waitlist_for_freed_slot(
+            db, business_id=bid, service=freed["service"], when_label=when
+        )
+        schedule_after_change(db, bid)
+        await db.commit()
+    except Exception as exc:  # jamais bloquant
+        logger.warning("appointment.freed_hook_failed", business_id=str(bid), error=str(exc))
+        with contextlib.suppress(Exception):
+            await db.rollback()
+
+
+def _frees_slot(a: Appointment) -> bool:
+    """RDV à venir encore actif ?"""
+    if a.status in ("cancelled", "completed", "no_show"):
+        return False
+    return _utc(a.end_at) > datetime.now(UTC)
+
+
+def _snapshot(a: Appointment) -> dict[str, Any]:
+    """Ce qu'il faut garder avant écriture."""
+    return {
+        "business_id": a.business_id,
+        "start_at": a.start_at,
+        # créneau bloqué : sans prestation
+        "service": None if a.status == "blocked" else a.title,
+    }
 
 
 @router.get("", response_model=AppointmentListResponse)
@@ -205,6 +289,8 @@ class AppointmentCreate(BaseModel):
     staff_id: UUID | None = None
     # premier coiffeur libre si pas de choix
     auto_assign_staff: bool = False
+    # compétences en mode auto
+    prestation_id: UUID | None = None
 
 
 @router.post("", response_model=AppointmentItem, status_code=201)
@@ -223,9 +309,18 @@ async def create_appointment(
         owner = await db.scalar(select(Customer.business_id).where(Customer.id == body.customer_id))
         if owner != bid:
             raise HTTPException(400, "Client inconnu pour ce salon")
+    # compétences : mode auto seulement
+    auto = body.auto_assign_staff and body.staff_id is None
+    skills = await _prestations_for(db, bid, body.prestation_id, body.title if auto else "")
     # jamais de surréservation silencieuse
     staff_id = await _ensure_room(
-        db, bid, body.start_at, body.end_at, staff_id=body.staff_id, auto=body.auto_assign_staff
+        db,
+        bid,
+        body.start_at,
+        body.end_at,
+        staff_id=body.staff_id,
+        auto=body.auto_assign_staff,
+        prestation_ids=skills,
     )
     appt = Appointment(
         business_id=bid,
@@ -305,6 +400,8 @@ async def update_appointment(
         await _ensure_room(
             db, appt.business_id, new_start, new_end, staff_id=new_staff, exclude_id=appt.id
         )
+    # annulation : place libérée
+    freed = _snapshot(appt) if new_status == "cancelled" and _frees_slot(appt) else None
     for f in ("title", "description", "location", "status", "start_at", "end_at", "staff_notes"):
         if f in data and data[f] is not None:
             setattr(appt, f, data[f])
@@ -326,6 +423,8 @@ async def update_appointment(
             raise
         await db.rollback()
         raise HTTPException(409, _OVERLAP) from exc
+    if freed is not None:
+        await _after_free(db, freed)
     await db.refresh(appt)
     return await _item(db, appt)
 
@@ -378,6 +477,7 @@ async def delete_appointment(
     if appt is None or appt.business_id != principal.business_id:
         raise HTTPException(404, "Rendez-vous introuvable")
     title = appt.title
+    freed = _snapshot(appt) if _frees_slot(appt) else None
     record_audit(
         db,
         business_id=appt.business_id,
@@ -389,6 +489,8 @@ async def delete_appointment(
     )
     await db.delete(appt)
     await db.commit()
+    if freed is not None:
+        await _after_free(db, freed)
     return {"status": "deleted", "id": str(appointment_id)}
 
 

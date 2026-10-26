@@ -5,11 +5,13 @@ Sans coiffeur actif : un fauteuil implicite, calcul historique inchangé
 
 Avec coiffeurs : départs toutes les 15 min, libre s'il reste un coiffeur
 actif, compétent, présent et sans RDV sur lui. Un RDV sans coiffeur prend un
-fauteuil ; un « blocked » sans coiffeur bloque tout le salon.
+fauteuil ; un « blocked » sans coiffeur bloque tout le salon. Un RDV d'un
+coiffeur en pause n'occupe que lui (même règle que la contrainte EXCLUDE).
 """
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -110,11 +112,15 @@ class StaffPool:
         return next((m for m in self.members if m.id == staff_id), None)
 
     def can_do(self, staff_id: UUID, prestation_ids: Iterable[UUID] | None) -> bool:
-        """Sans compétence déclarée = sait tout faire."""
-        known = self.skills.get(staff_id)
+        """Compétent pour ces prestations ?"""
         wanted = list(prestation_ids or [])
-        if not known or not wanted:
+        if not wanted:
             return True
+        known = self.skills.get(staff_id) or set()
+        if not known:
+            # rien coché : dépend du drapeau
+            member = self.get(staff_id)
+            return member is None or bool(member.all_services)
         return all(p in known for p in wanted)
 
 
@@ -166,6 +172,24 @@ def match_staff(pool: StaffPool, text: str | None) -> Staff | None:
         name = _norm(m.display_name)
         if q == name or q == name.split(" ")[0]:
             return m
+    return None
+
+
+def staff_in_text(pool: StaffPool, text: str | None) -> Staff | None:
+    """Coiffeur cité dans une phrase."""
+    words = re.findall(r"[a-z0-9]+", _norm(text or ""))
+    if not words:
+        return None
+    joined = f" {' '.join(words)} "
+    # nom complet d'abord, puis prénom
+    for full in (True, False):
+        for m in pool.members:
+            parts = re.findall(r"[a-z0-9]+", _norm(m.display_name))
+            if not parts:
+                continue
+            key = " ".join(parts) if full else parts[0]
+            if f" {key} " in joined:
+                return m
     return None
 
 
@@ -268,17 +292,16 @@ def _free_members(
     check_hours: bool = True,
 ) -> list[Staff]:
     """Coiffeurs libres et compétents sur [start, end)."""
-    ids = {m.id for m in pool.members}
     busy: set[UUID] = set()
     loose: list[tuple[datetime, datetime]] = []
     for bs, be, sid, status in booked:
         if not (start < be and end > bs):
             continue
-        if sid is not None and sid in ids:
+        if sid is not None:
+            # coiffeur en pause : n'occupe que lui
             busy.add(sid)
         elif status == "blocked":
-            if sid is None:
-                return []  # salon bloqué
+            return []  # salon bloqué
         else:
             # sans coiffeur : un fauteuil pris
             loose.append((max(bs, start), min(be, end)))
@@ -568,6 +591,21 @@ async def find_free_staff(
         return StaffPick(free=False, has_staff=True)
     chosen = next((m for m in free if m.id == prefer_staff_id), free[0])
     return StaffPick(free=True, staff=chosen, has_staff=True)
+
+
+async def staff_is_busy(
+    db: AsyncSession,
+    business_id: UUID,
+    staff_id: UUID,
+    start: datetime,
+    end: datetime,
+    *,
+    exclude_appointment_id: UUID | None = None,
+) -> bool:
+    """Ce coiffeur a déjà un RDV ?"""
+    start, end = _aware(start), _aware(end)
+    booked = await _load_booked(db, business_id, start, end, exclude_id=exclude_appointment_id)
+    return any(sid == staff_id and start < be and end > bs for bs, be, sid, _ in booked)
 
 
 def format_slots_fr(slots: list[datetime], tz: ZoneInfo, *, with_day: bool = False) -> str:

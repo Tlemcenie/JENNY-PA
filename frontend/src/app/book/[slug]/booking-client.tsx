@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
@@ -16,21 +24,37 @@ import {
   Loader2,
   MapPin,
 } from "lucide-react";
+import { ApiError } from "@/lib/api";
 import {
-  ApiError,
-  createBooking,
-  getBookingInfo,
-  getBookingSlots,
-  type BookingBusinessInfo,
-  type BookingConfirmation,
-  type BookingSlot,
-} from "@/lib/api";
+  createPublicBooking,
+  getPublicBookingInfo,
+  getPublicSlots,
+  staffCanDo,
+  type PublicBookingConfirmation,
+  type PublicBookingInfoFull,
+  type PublicPrestation,
+  type PublicSlot,
+  type PublicStaff,
+} from "@/lib/api-staff";
 import { cn } from "@/lib/utils";
 
 // page publique de réservation
 
-const DURATION = 30; // durée créneau (min)
+const DURATION = 30; // durée sans prestation
 const DAYS_AHEAD = 14; // jours proposés
+
+// détail d'erreur api
+function apiDetail(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  const detail = (err.data as { detail?: unknown } | undefined)?.detail;
+  return typeof detail === "string" && detail.trim() ? detail : null;
+}
+
+// « 45 min · 35 € »
+function prestaMeta(p: PublicPrestation): string {
+  const price = p.price_cents ? ` · ${(p.price_cents / 100).toLocaleString("fr-FR")} €` : "";
+  return `${p.duration_minutes} min${price}`;
+}
 
 // fond + halo corail
 const PAGE_BG =
@@ -65,19 +89,24 @@ interface DayOption {
 
 export default function BookingClient({ slug, children }: { slug: string; children?: ReactNode }) {
   const [phase, setPhase] = useState<Phase>("loading");
-  const [info, setInfo] = useState<BookingBusinessInfo | null>(null);
+  const [info, setInfo] = useState<PublicBookingInfoFull | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // prestation + coiffeur (null = peu importe)
+  const [prestationId, setPrestationId] = useState<string | null>(null);
+  const [staffId, setStaffId] = useState<string | null>(null);
 
   // date choisie
   const [selectedIso, setSelectedIso] = useState<string | null>(null);
 
   // créneaux du jour
-  const [slots, setSlots] = useState<BookingSlot[]>([]);
+  const [slots, setSlots] = useState<PublicSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsError, setSlotsError] = useState<string | null>(null);
+  const slotsReq = useRef(0);
 
   // créneau choisi
-  const [chosenSlot, setChosenSlot] = useState<BookingSlot | null>(null);
+  const [chosenSlot, setChosenSlot] = useState<PublicSlot | null>(null);
 
   // formulaire
   const [fullName, setFullName] = useState("");
@@ -88,7 +117,18 @@ export default function BookingClient({ slug, children }: { slug: string; childr
   const [submitting, setSubmitting] = useState(false);
 
   // confirmation
-  const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null);
+  const [confirmation, setConfirmation] = useState<PublicBookingConfirmation | null>(null);
+
+  const prestations = useMemo(() => info?.prestations ?? [], [info]);
+  const team = useMemo(() => info?.staff ?? [], [info]);
+  const prestation = prestations.find((p) => p.id === prestationId) ?? null;
+  // coiffeurs qui font la prestation
+  const teamForPresta = useMemo(
+    () => team.filter((m) => staffCanDo(m, prestationId)),
+    [team, prestationId]
+  );
+  const chosenStaff = team.find((m) => m.id === staffId) ?? null;
+  const duration = prestation?.duration_minutes ?? DURATION;
 
   // les 14 prochains jours
   const days = useMemo<DayOption[]>(() => {
@@ -110,13 +150,23 @@ export default function BookingClient({ slug, children }: { slug: string; childr
   useEffect(() => {
     let active = true;
     setPhase("loading");
-    getBookingInfo(slug)
+    getPublicBookingInfo(slug)
       .then((data) => {
         if (!active) return;
         setInfo(data);
         setPhase("ready");
-        // défaut : aujourd'hui
-        setSelectedIso(toDateIso(new Date()));
+        // ?date= du lien, sinon aujourd'hui
+        let wanted: string | null = null;
+        try {
+          wanted = new URLSearchParams(window.location.search).get("date");
+        } catch {
+          wanted = null;
+        }
+        const today = toDateIso(new Date());
+        const inRange =
+          wanted && /^\d{4}-\d{2}-\d{2}$/.test(wanted) && wanted >= today &&
+          wanted <= toDateIso(addDays(new Date(), DAYS_AHEAD - 1));
+        setSelectedIso(inRange ? wanted : today);
       })
       .catch((err) => {
         if (!active) return;
@@ -136,26 +186,32 @@ export default function BookingClient({ slug, children }: { slug: string; childr
     };
   }, [slug]);
 
-  // 3. créneaux par date
+  // 3. créneaux par date, coiffeur, prestation
   const loadSlots = useCallback(
     async (dateIso: string) => {
+      // seule la dernière réponse compte
+      const req = ++slotsReq.current;
       setSlotsLoading(true);
       setSlotsError(null);
       try {
-        const res = await getBookingSlots(slug, dateIso, DURATION);
+        const res = await getPublicSlots(slug, dateIso, { duration, staffId, prestationId });
+        if (req !== slotsReq.current) return;
         setSlots(res.slots);
       } catch (err) {
+        if (req !== slotsReq.current) return;
         setSlots([]);
         setSlotsError(
           err instanceof ApiError && err.status === 404
             ? "Page de réservation introuvable."
-            : "Impossible de charger les créneaux. Réessayez."
+            : err instanceof ApiError && err.status === 400
+              ? (apiDetail(err) ?? "Choix plus disponible, rechargez la page.")
+              : "Impossible de charger les créneaux. Réessayez."
         );
       } finally {
-        setSlotsLoading(false);
+        if (req === slotsReq.current) setSlotsLoading(false);
       }
     },
-    [slug]
+    [slug, duration, staffId, prestationId]
   );
 
   useEffect(() => {
@@ -169,6 +225,19 @@ export default function BookingClient({ slug, children }: { slug: string; childr
     setSelectedIso(iso);
     setChosenSlot(null);
     setFormError(null);
+  };
+
+  // prestation : coiffeur gardé s'il sait
+  const handleSelectPrestation = (id: string | null) => {
+    setPrestationId(id);
+    setChosenSlot(null);
+    const keep = team.find((m) => m.id === staffId);
+    if (keep && !staffCanDo(keep, id)) setStaffId(null);
+  };
+
+  const handleSelectStaff = (id: string | null) => {
+    setStaffId(id);
+    setChosenSlot(null);
   };
 
   // 4. soumission
@@ -188,13 +257,15 @@ export default function BookingClient({ slug, children }: { slug: string; childr
 
     setSubmitting(true);
     try {
-      const result = await createBooking(slug, {
+      const result = await createPublicBooking(slug, {
         full_name: fullName.trim(),
         email: email.trim(),
         phone: phone.trim() || undefined,
         start_at: chosenSlot.start_at,
-        duration: DURATION,
+        duration,
         notes: notes.trim() || undefined,
+        staff_id: staffId,
+        prestation_id: prestationId,
       });
       setConfirmation(result);
       setPhase("confirmed");
@@ -221,6 +292,17 @@ export default function BookingClient({ slug, children }: { slug: string; childr
     const d = parseISO(selectedIso);
     return cap(format(d, "EEEE d MMMM", { locale: fr }));
   }, [selectedIso]);
+
+  // numéros d'étape selon le salon
+  const steps = useMemo(() => {
+    let n = 0;
+    const presta = prestations.length > 0 ? ++n : 0;
+    const staff = team.length > 0 ? ++n : 0;
+    const day = ++n;
+    const slot = ++n;
+    const form = ++n;
+    return { presta, staff, day, slot, form, total: n };
+  }, [prestations.length, team.length]);
 
   // rendu
   return (
@@ -275,16 +357,54 @@ export default function BookingClient({ slug, children }: { slug: string; childr
 
                 {!chosenSlot ? (
                   <>
-                    {/* étape 2 : date */}
-                    <StepLabel index={1} total={2} text="Choisissez un jour" />
+                    {/* étape prestation */}
+                    {prestations.length > 0 && (
+                      <>
+                        <StepLabel
+                          index={steps.presta}
+                          total={steps.total}
+                          text="Votre prestation"
+                          id="bk-step-presta"
+                        />
+                        <PrestationPicker
+                          prestations={prestations}
+                          value={prestationId}
+                          onSelect={handleSelectPrestation}
+                        />
+                      </>
+                    )}
+
+                    {/* étape coiffeur */}
+                    {team.length > 0 && (
+                      <>
+                        <StepLabel
+                          index={steps.staff}
+                          total={steps.total}
+                          text="Avec qui ?"
+                          id="bk-step-staff"
+                        />
+                        <StaffPicker
+                          team={teamForPresta}
+                          value={staffId}
+                          onSelect={handleSelectStaff}
+                        />
+                      </>
+                    )}
+
+                    {/* étape date */}
+                    <StepLabel index={steps.day} total={steps.total} text="Choisissez un jour" />
                     <DatePicker
                       days={days}
                       selectedIso={selectedIso}
                       onSelect={handleSelectDate}
                     />
 
-                    {/* étape 3 : créneau */}
-                    <StepLabel index={2} total={2} text={`Créneaux · ${selectedDayLabel}`} />
+                    {/* étape créneau */}
+                    <StepLabel
+                      index={steps.slot}
+                      total={steps.total}
+                      text={`Créneaux · ${selectedDayLabel}`}
+                    />
                     <SlotGrid
                       loading={slotsLoading}
                       error={slotsError}
@@ -297,9 +417,14 @@ export default function BookingClient({ slug, children }: { slug: string; childr
                     />
                   </>
                 ) : (
-                  /* étape 4 : formulaire */
+                  /* étape formulaire */
                   <BookingForm
                     businessName={info.name}
+                    staffName={chosenStaff?.display_name ?? null}
+                    prestationName={prestation?.name ?? null}
+                    duration={duration}
+                    step={steps.form}
+                    totalSteps={steps.total}
                     slot={chosenSlot}
                     fullName={fullName}
                     email={email}
@@ -368,13 +493,127 @@ function Header() {
 
 // libellé d'étape
 
-function StepLabel({ index, total, text }: { index: number; total: number; text: string }) {
+function StepLabel({
+  index,
+  total,
+  text,
+  id,
+}: {
+  index: number;
+  total: number;
+  text: string;
+  id?: string;
+}) {
   return (
     <div className="mt-7 mb-3 flex items-center gap-2.5">
       <span className="font-mono text-[10px] tracking-[0.14em] uppercase text-jenny-coral/90 tabular-nums">
         {index}/{total}
       </span>
-      <span className="text-[13px] font-semibold text-[#F4F1ED]/85">{text}</span>
+      <span id={id} className="text-[13px] font-semibold text-[#F4F1ED]/85">
+        {text}
+      </span>
+    </div>
+  );
+}
+
+// pastille de choix
+
+function ChoiceChip({
+  active,
+  onClick,
+  title,
+  meta,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  meta?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "min-h-11 px-3.5 py-2 rounded-xl text-left transition-all duration-150",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-jenny-coral/40",
+        active ? "bg-jenny-coral text-white shadow-md shadow-jenny-coral/25" : "text-[#F4F1ED]/85 hover:text-white"
+      )}
+      style={
+        active
+          ? undefined
+          : { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.10)" }
+      }
+    >
+      <span className="block text-[13.5px] font-semibold leading-tight">{title}</span>
+      {meta && (
+        <span className={cn("block text-[11.5px] mt-0.5 tabular-nums", active ? "text-white/80" : "text-[#F4F1ED]/50")}>
+          {meta}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// choix de la prestation
+
+function PrestationPicker({
+  prestations,
+  value,
+  onSelect,
+}: {
+  prestations: PublicPrestation[];
+  value: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  return (
+    <div role="group" aria-labelledby="bk-step-presta" className="flex flex-wrap gap-2">
+      {prestations.map((p) => (
+        <ChoiceChip
+          key={p.id}
+          active={p.id === value}
+          onClick={() => onSelect(p.id === value ? null : p.id)}
+          title={p.name}
+          meta={prestaMeta(p)}
+        />
+      ))}
+      <ChoiceChip
+        active={value === null}
+        onClick={() => onSelect(null)}
+        title="Autre demande"
+        meta={`${DURATION} min, à préciser en note`}
+      />
+    </div>
+  );
+}
+
+// choix du coiffeur
+
+function StaffPicker({
+  team,
+  value,
+  onSelect,
+}: {
+  team: PublicStaff[];
+  value: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  return (
+    <div role="group" aria-labelledby="bk-step-staff" className="flex flex-wrap gap-2">
+      <ChoiceChip
+        active={value === null}
+        onClick={() => onSelect(null)}
+        title="Peu importe"
+        meta="Le premier disponible"
+      />
+      {team.map((m) => (
+        <ChoiceChip
+          key={m.id}
+          active={m.id === value}
+          onClick={() => onSelect(m.id)}
+          title={m.display_name}
+        />
+      ))}
     </div>
   );
 }
@@ -450,8 +689,8 @@ function SlotGrid({
 }: {
   loading: boolean;
   error: string | null;
-  slots: BookingSlot[];
-  onPick: (slot: BookingSlot) => void;
+  slots: PublicSlot[];
+  onPick: (slot: PublicSlot) => void;
 }) {
   if (loading) {
     return (
@@ -526,6 +765,11 @@ function SlotGrid({
 
 function BookingForm({
   businessName,
+  staffName,
+  prestationName,
+  duration,
+  step,
+  totalSteps,
   slot,
   fullName,
   email,
@@ -541,7 +785,12 @@ function BookingForm({
   onSubmit,
 }: {
   businessName: string;
-  slot: BookingSlot;
+  staffName: string | null;
+  prestationName: string | null;
+  duration: number;
+  step: number;
+  totalSteps: number;
+  slot: PublicSlot;
   fullName: string;
   email: string;
   phone: string;
@@ -591,12 +840,13 @@ function BookingForm({
             {cap(format(start, "EEEE d MMMM", { locale: fr }))} · {slot.label}
           </div>
           <div className="text-[12px] text-[#F4F1ED]/55 truncate">
-            Avec {businessName} · {DURATION} min
+            {prestationName ? `${prestationName} · ` : ""}
+            Avec {staffName ?? businessName} · {duration} min
           </div>
         </div>
       </div>
 
-      <StepLabel index={2} total={2} text="Vos coordonnées" />
+      <StepLabel index={step} total={totalSteps} text="Vos coordonnées" />
 
       <form onSubmit={onSubmit} className="flex flex-col gap-3.5">
         <div>
@@ -714,7 +964,7 @@ function BookingForm({
 
 // carte de confirmation
 
-function ConfirmationCard({ confirmation }: { confirmation: BookingConfirmation }) {
+function ConfirmationCard({ confirmation }: { confirmation: PublicBookingConfirmation }) {
   const start = parseISO(confirmation.start_at);
   const end = parseISO(confirmation.end_at);
   return (
@@ -772,7 +1022,12 @@ function ConfirmationCard({ confirmation }: { confirmation: BookingConfirmation 
 
       <div className="mt-5 flex items-center justify-center gap-1.5 text-[13px] text-[#F4F1ED]/50">
         <MapPin className="w-3.5 h-3.5" />
-        <span>Avec {confirmation.business_name}</span>
+        <span>
+          {confirmation.prestation_name ? `${confirmation.prestation_name} · ` : ""}
+          {confirmation.staff_name
+            ? `Avec ${confirmation.staff_name}, chez ${confirmation.business_name}`
+            : `Avec ${confirmation.business_name}`}
+        </span>
       </div>
     </motion.div>
   );

@@ -10,10 +10,12 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 
 from jenny.core.logging import get_logger
+from jenny.db.conflicts import is_slot_taken
 from jenny.domain.models.appointment import Appointment
 from jenny.domain.models.business import Business
 from jenny.domain.models.customer import Customer
 from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time
+from jenny.services.availability import load_staff_pool, staff_in_text, staff_is_busy
 
 # extraction du nom client
 _CLIENT_NAME_RE = re.compile(
@@ -236,20 +238,57 @@ async def _handle_block(db: AsyncSession, bid: UUID, actor: str, message: str) -
     end_local = datetime(day.year, day.month, day.day, end_t.hour, end_t.minute, tzinfo=tz)
     if end_local <= start_local:
         end_local = start_local + timedelta(hours=1)
+    start_utc, end_utc = start_local.astimezone(UTC), end_local.astimezone(UTC)
+    day_label = f"{day.day:02d}/{day.month:02d}"
+
+    # coiffeur nommé : lui seul
+    pool = await load_staff_pool(db, bid)
+    member = staff_in_text(pool, message) if pool.has_staff else None
+    if member is not None and await staff_is_busy(db, bid, member.id, start_utc, end_utc):
+        return {
+            "response": f"{member.display_name} a déjà un rendez-vous (ou un blocage) le "
+            f"{day_label} {label}. "
+            "Déplace-le ou annule-le d'abord, puis je bloque le créneau.",
+            "action": "block_slot",
+            "data": {"conflict": True, "staff_id": str(member.id)},
+        }
 
     appt = Appointment(
         business_id=bid,
+        staff_id=member.id if member else None,
         title="🚫 Indisponible",
-        description="Créneau bloqué par le gérant via Jenny.",
+        description=(
+            f"{member.display_name} indisponible, bloqué par le gérant via Jenny."
+            if member
+            else "Créneau bloqué par le gérant via Jenny."
+        ),
         channel="block",
-        start_at=start_local.astimezone(UTC),
-        end_at=end_local.astimezone(UTC),
+        start_at=start_utc,
+        end_at=end_utc,
         status="blocked",
         created_by=actor or "Jenny",
     )
     db.add(appt)
-    await db.commit()
-    day_label = f"{day.day:02d}/{day.month:02d}"
+    try:
+        await db.commit()
+    except Exception as exc:  # déjà un RDV pile là
+        if not is_slot_taken(exc):
+            raise
+        await db.rollback()
+        return {
+            "response": f"Il y a déjà un rendez-vous le {day_label} {label}. "
+            "Déplace-le ou annule-le d'abord, puis je bloque le créneau.",
+            "action": "block_slot",
+            "data": {"conflict": True},
+        }
+    if member is not None:
+        return {
+            "response": f"C'est bloqué ✅ — le {day_label} {label}, {member.display_name} "
+            f"n'est pas disponible. Je ne proposerai plus ce créneau avec {member.display_name}, "
+            "les autres coiffeurs restent réservables.",
+            "action": "block_slot",
+            "data": {"appointment_id": str(appt.id), "staff_id": str(member.id)},
+        }
     return {
         "response": f"C'est bloqué ✅ — le {day_label} {label}, tu n'es pas disponible. "
         "Je ne proposerai pas ce créneau aux clients.",

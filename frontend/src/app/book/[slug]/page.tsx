@@ -86,9 +86,15 @@ export default async function BookPage({ params }: Props) {
   );
 }
 
+// catalogue public (optionnel)
+type SalonInfoData = PublicBookingInfo & {
+  prestations?: { id: string; name: string; duration_minutes: number; price_cents: number | null }[];
+};
+
 // infos pratiques rendues serveur
-function SalonInfo({ info, url }: { info: PublicBookingInfo; url: string }) {
+function SalonInfo({ info, url }: { info: SalonInfoData; url: string }) {
   const phone = info.phone?.trim();
+  const prestations = info.prestations ?? [];
   const address = [info.address, [info.postal_code, info.city].filter(Boolean).join(" ")]
     .map((part) => part?.trim())
     .filter(Boolean)
@@ -141,6 +147,23 @@ function SalonInfo({ info, url }: { info: PublicBookingInfo; url: string }) {
                 </Fragment>
               ))}
             </dl>
+          </>
+        )}
+
+        {prestations.length > 0 && (
+          <>
+            <h3 className="mt-5 mb-2 text-[13px] font-semibold text-[#F4F1ED]/85">Prestations</h3>
+            <ul className="space-y-1.5 text-[13.5px]">
+              {prestations.map((p) => (
+                <li key={p.id} className="flex items-baseline justify-between gap-4">
+                  <span className="text-[#F4F1ED]/80">{p.name}</span>
+                  <span className="tabular-nums text-right text-[#F4F1ED]/60">
+                    {p.duration_minutes} min
+                    {p.price_cents ? ` · ${(p.price_cents / 100).toLocaleString("fr-FR")} €` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </>
         )}
       </div>
