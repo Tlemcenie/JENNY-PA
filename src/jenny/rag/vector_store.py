@@ -250,7 +250,7 @@ class PgVectorStore:
         except Exception as e:
             logger.error("vector_store.caps.error", error=str(e), exc_info=True)
             # pas de SQL dans l'erreur
-            raise VectorSearchError(f"recherche impossible ({type(e).__name__})") from e
+            raise VectorSearchError(type(e).__name__) from e
         if not caps.postgres:
             logger.debug("vector_store.search.no_pgvector", business_id=str(business_id))
             return []
@@ -318,7 +318,7 @@ class PgVectorStore:
                 exc_info=True,
             )
             # pas de SQL dans l'erreur
-            raise VectorSearchError(f"recherche impossible ({type(e).__name__})") from e
+            raise VectorSearchError(type(e).__name__) from e
 
         docs = self._fuse(rows, query_text or "")
         kept = [d for d in docs if d.score >= score_threshold]
