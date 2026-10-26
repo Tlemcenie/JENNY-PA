@@ -175,14 +175,35 @@ def drop_leaked_instructions(text: str) -> str:
     return cleaned if len(cleaned) >= 15 else text
 
 
+# jeton nommé : « <|im_end », « <user »
+_ARTIFACT_TAG_RE = re.compile(r"<\|?(?:im_start|im_end|endoftext|assistant|user|system)\b")
+
+
+def _artifact_start(text: str) -> int | None:
+    """Début du 1er jeton fuité."""
+    m = _ARTIFACT_TAG_RE.search(text)
+    best = m.start() if m else None
+    # « <|…|> » sans retour arrière
+    i = text.find("<|")
+    while i != -1 and (best is None or i < best):
+        j = text.find(">", i + 2)
+        if j == -1:
+            break
+        if j > i + 2 and text[j - 1] == "|":
+            return i
+        # même « > » pour les suivants
+        i = text.find("<|", j + 1)
+    return best
+
+
 def strip_model_artifacts(text: str) -> str:
     """Vire les artefacts du modèle."""
     if not text:
         return text
     # 1) coupe au jeton
-    m = re.search(r"<\|[^>]*\|>|<\|?(?:im_start|im_end|endoftext|assistant|user|system)\b", text)
-    if m:
-        text = text[: m.start()]
+    cut = _artifact_start(text)
+    if cut is not None:
+        text = text[:cut]
     # 2) vire le CJK
     text = re.sub(r"[　-〿㐀-鿿＀-￯가-힯]+", "", text)
     return text.strip()
