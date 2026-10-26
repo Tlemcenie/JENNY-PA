@@ -122,9 +122,10 @@ _NUMERIC_RE = re.compile(
 )
 _APRES_DEMAIN_RE = re.compile(r"\bapres[\s-]?demain\b")
 _DEMAIN_RE = re.compile(r"\bdemain\b")
-_TODAY_RE = re.compile(
-    r"\baujourd(?:'?\s?hui)?|\bce\s+(?:matin|soir|midi)\b|\bcet\s+apres[\s-]?midi\b|\bce\s+jour\b"
-    r"|\btout\s+a\s+l'heure\b|\bcet\s+aprem\b"
+_TODAY_RE = re.compile(r"\baujourd(?:'?\s?hui)?|\bce\s+jour\b")
+# « ce soir », souvent du bavardage
+_SOFT_TODAY_RE = re.compile(
+    r"\bce\s+(?:matin|soir|midi)\b|\bcet\s+apres[\s-]?midi\b|\btout\s+a\s+l'heure\b|\bcet\s+aprem\b"
 )
 _IN_N_RE = re.compile(rf"\b(?:dans|d'ici)\s+({_NUM_ALT})\s+(jours?|semaines?|mois)\b")
 _IN_ONE_RE = re.compile(r"\b(?:dans|d'ici)\s+(?:une|un)\s+(semaine|mois)\b")
@@ -256,10 +257,20 @@ def _shift_en_huit(d: date, t: str) -> date:
     return d
 
 
-def parse_fr_date(text: str, *, today: date | None = None) -> date | None:
-    """Expression de date FR vers ``date``, None si flou."""
+# types de date
+EXACT = "exact"
+SOFT = "soft"  # « ce soir »
+VAGUE = "vague"  # « le week-end »
+
+
+def _kind(d: date | None, kind: str) -> tuple[date | None, str | None]:
+    return (d, kind) if d is not None else (None, None)
+
+
+def _parse_date(text: str, today: date | None) -> tuple[date | None, str | None]:
+    """Date trouvée et son type."""
     if not text:
-        return None
+        return None, None
     today = today or today_in()
     t = _strip(text)
     t = _NEG_BEFORE_RE.sub(" ", t)
@@ -269,15 +280,16 @@ def parse_fr_date(text: str, *, today: date | None = None) -> date | None:
     m = _ISO_DATE_RE.search(t)
     if m:
         try:
-            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3))), EXACT
         except ValueError:
-            return None
+            return None, None
 
     # « 14 février »
     m = _DAY_MONTH_RE.search(t)
     if m:
         year = int(m.group(3)) if m.group(3) else None
-        return _resolve_day_month(_day_num(m.group(1)), _MONTHS[m.group(2)], year, today)
+        d = _resolve_day_month(_day_num(m.group(1)), _MONTHS[m.group(2)], year, today)
+        return _kind(d, EXACT)
 
     # jj/mm(/aaaa)
     m = _NUMERIC_RE.search(t)
@@ -287,14 +299,15 @@ def parse_fr_date(text: str, *, today: date | None = None) -> date | None:
         else:
             day, month, yr = m.group(4), m.group(5), m.group(6)
         if not 1 <= int(month) <= 12:
-            return None
-        return _resolve_day_month(int(day), int(month), int(yr) if yr else None, today)
+            return None, None
+        d = _resolve_day_month(int(day), int(month), int(yr) if yr else None, today)
+        return _kind(d, EXACT)
 
     # demain, après-demain
     for rx, delta in ((_APRES_DEMAIN_RE, 2), (_DEMAIN_RE, 1)):
         m = rx.search(t)
         if m:
-            return _shift_en_huit(today + timedelta(days=delta), t[m.end() :])
+            return _shift_en_huit(today + timedelta(days=delta), t[m.end() :]), EXACT
 
     # dans 3 jours
     m = _IN_N_RE.search(t)
@@ -305,67 +318,83 @@ def parse_fr_date(text: str, *, today: date | None = None) -> date | None:
             if unit.startswith("jour"):
                 # 8 jours = 1 semaine
                 n = {8: 7, 15: 14}.get(n, n)
-                return today + timedelta(days=n)
+                return today + timedelta(days=n), EXACT
             if unit.startswith("semaine"):
-                return today + timedelta(weeks=n)
-            return _add_months(today, n)
+                return today + timedelta(weeks=n), EXACT
+            # jour du mois deviné
+            return _add_months(today, n), VAGUE
     m = _IN_ONE_RE.search(t)
     if m:
-        return today + timedelta(weeks=1) if m.group(1) == "semaine" else _add_months(today, 1)
+        if m.group(1) == "semaine":
+            return today + timedelta(weeks=1), EXACT
+        return _add_months(today, 1), VAGUE
 
     # « mardi 14 »
     m = _WD_DOM_RE.search(t)
     if m:
         d = _next_dom(_day_num(m.group(1)), today)
         if d is not None:
-            return d
+            return d, EXACT
 
     # jour de semaine
     m = _WD_RE.search(t)
     if m:
-        return _weekday_date(t, m, today)
+        return _weekday_date(t, m, today), EXACT
 
     # week-end
     m = _WEEKEND_RE.search(t)
     if m:
         around = t[max(0, m.start() - 12) : m.end() + 12]
         if "prochain" in around:
-            return _next_monday(today) + timedelta(days=5)
+            return _next_monday(today) + timedelta(days=5), VAGUE
         if today.weekday() >= 5:
-            return today
-        return today + timedelta(days=5 - today.weekday())
+            return today, VAGUE
+        return today + timedelta(days=5 - today.weekday()), VAGUE
 
     # semaine prochaine
     if _NEXT_WEEK_RE.search(t):
-        return _next_monday(today)
+        return _next_monday(today), VAGUE
     if _THIS_WEEK_RE.search(t):
-        return today
+        return today, VAGUE
 
     # début mars, fin du mois
     m = _MONTH_ANCHOR_RE.search(t)
     if m:
         where = m.group(1) if m.group(1) in ("debut", "mi", "fin") else "debut"
-        return _month_anchor(where, _MONTHS[m.group(2)], today)
+        return _month_anchor(where, _MONTHS[m.group(2)], today), VAGUE
     m = _NEXT_MONTH_RE.search(t)
     if m:
         nxt = _add_months(today.replace(day=1), 1)
-        return nxt.replace(day=_anchor_day(m.group(1) or "debut", nxt.year, nxt.month))
+        return nxt.replace(day=_anchor_day(m.group(1) or "debut", nxt.year, nxt.month)), VAGUE
     m = _THIS_MONTH_RE.search(t)
     if m:
         d = today.replace(day=_anchor_day(m.group(1), today.year, today.month))
-        return max(d, today)
+        return max(d, today), VAGUE
 
     # « le 14 »
     m = _DOM_RE.search(t)
     if m:
-        return _next_dom(_day_num(m.group(1)), today)
+        return _kind(_next_dom(_day_num(m.group(1)), today), EXACT)
 
     # aujourd'hui en dernier
     m = _TODAY_RE.search(t)
     if m:
-        return _shift_en_huit(today, t[m.end() :])
+        return _shift_en_huit(today, t[m.end() :]), EXACT
+    m = _SOFT_TODAY_RE.search(t)
+    if m:
+        return _shift_en_huit(today, t[m.end() :]), SOFT
 
-    return None
+    return None, None
+
+
+def parse_fr_date(text: str, *, today: date | None = None) -> date | None:
+    """Expression de date FR vers ``date``, None si flou."""
+    return _parse_date(text, today)[0]
+
+
+def fr_date_kind(text: str, *, today: date | None = None) -> str | None:
+    """Date exacte, douce ou floue ?"""
+    return _parse_date(text, today)[1]
 
 
 # ── heures ──

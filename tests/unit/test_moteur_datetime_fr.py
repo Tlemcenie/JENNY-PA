@@ -5,9 +5,13 @@ from datetime import date, datetime, time
 import pytest
 
 from jenny.engine.datetime_fr import (
+    EXACT,
+    SOFT,
+    VAGUE,
     combine_fr,
     format_fr_date,
     format_fr_time,
+    fr_date_kind,
     parse_fr_date,
     parse_fr_duration,
     parse_fr_time,
@@ -421,3 +425,61 @@ class TestPriorites:
 
 def test_avant_midi_pas_midi() -> None:
     assert parse_fr_time("le matin avant midi") is None
+
+
+class TestTypeDeDate:
+    """exact, doux ou flou"""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "2026-10-29",
+            "le 14 février",
+            "14/02",
+            "demain",
+            "après-demain",
+            "jeudi",
+            "jeudi prochain",
+            "mardi 3",
+            "le 14",
+            "aujourd'hui",
+            "dans 3 jours",
+            "dans 15 jours",
+            "dans une semaine",
+        ],
+    )
+    def test_exact(self, text: str) -> None:
+        assert fr_date_kind(text, today=LUNDI) == EXACT
+
+    @pytest.mark.parametrize(
+        "text", ["à ce soir", "ce matin", "ce midi", "cet après-midi", "tout à l'heure"]
+    )
+    def test_doux(self, text: str) -> None:
+        assert fr_date_kind(text, today=LUNDI) == SOFT
+        # date inchangée
+        assert d(text) == LUNDI
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "bon week-end",
+            "la semaine prochaine",
+            "dans la semaine",
+            "début mars",
+            "fin du mois",
+            "le mois prochain",
+            "dans un mois",
+            "dans 2 mois",
+        ],
+    )
+    def test_flou(self, text: str) -> None:
+        assert fr_date_kind(text, today=LUNDI) == VAGUE
+        assert d(text) is not None
+
+    def test_rien(self) -> None:
+        assert fr_date_kind("merci beaucoup", today=LUNDI) is None
+        assert fr_date_kind("2026-13-01", today=LUNDI) is None
+        assert fr_date_kind("le 31/02", today=LUNDI) is None
+
+    def test_exact_prime_sur_doux(self) -> None:
+        assert fr_date_kind("ce soir ou aujourd'hui", today=LUNDI) == EXACT
