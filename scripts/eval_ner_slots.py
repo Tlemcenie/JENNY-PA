@@ -9,6 +9,9 @@ NER servi (filtre prestation), NER brut, NER coupé (regex + catalogue).
 - --live URL : messages entrants de la base, en lecture seule. Pas de gold :
   on compte et on liste les écarts (--show-diffs, sur stderr seulement).
 
+« risques » : presta posée hors flux rdv, presta qui change pendant une
+question annexe (écrase celle du rdv), presta absente ou ambiguë du catalogue.
+
 Usage : PYTHONPATH=src:. .venv/bin/python scripts/eval_ner_slots.py
         [--live postgresql://...] [--show-diffs]
 """
@@ -40,7 +43,7 @@ if __name__ == "__main__":
 from jenny.engine import factory
 from jenny.engine.conversation_engine import ConversationEngine, EngineRequest
 from jenny.engine.datetime_fr import parse_fr_date, parse_fr_time, today_in
-from jenny.engine.ner_guard import looks_like_service
+from jenny.engine.ner_guard import catalog_service, looks_like_service
 from jenny.engine.state_manager import ConversationState, StateManager
 from jenny.rag.kb_coiffeur import DEFAULT_COIFFEUR
 
@@ -347,6 +350,32 @@ def suspects(runs: list[list[dict]]) -> int:
     )
 
 
+def risks(runs: list[list[dict]], catalogs: list[list[str]]) -> dict:
+    """écrasements et prestas hors catalogue."""
+    c = dict.fromkeys(("pose_hors_rdv", "hors_catalogue"), 0)
+    # slot du rdv changé en route
+    overwritten = dict.fromkeys(SLOTS, 0)
+    odd: set[str] = set()
+    for conv, catalog in zip(runs, catalogs, strict=True):
+        prev: dict = {}
+        for turn in conv:
+            posed = turn["slots"].get("service")
+            if posed is not None:
+                if turn["intent"] not in RDV_INTENTS:
+                    c["pose_hors_rdv"] += 1
+                # inconnue ou ambiguë
+                if catalog and catalog_service(posed, catalog) is None:
+                    c["hors_catalogue"] += 1
+                    odd.add(posed)
+            if turn["intent"] not in RDV_INTENTS:
+                for s in SLOTS:
+                    old, cur = prev.get(s), turn["state"].get(s)
+                    if old and cur and gap_kind(cur, old):
+                        overwritten[s] += 1
+            prev = turn["state"]
+    return {**c, "ecrase_hors_rdv": overwritten, "exemples_hors_catalogue": sorted(odd)[:12]}
+
+
 def gap_report(runs: dict[str, list[list[dict]]], label: str | None) -> dict:
     """écarts au ner servi."""
     out: dict = {"prestation_louche": {k: suspects(r) for k, r in runs.items()}}
@@ -384,6 +413,7 @@ async def main() -> None:
                 "poses": counts(r),
                 "score": score(r, gold),
                 "score_flux_rdv": score(r, gold, RDV_INTENTS),
+                "risques": risks(r, [c for _, c in convs]),
             }
             for k, r in runs.items()
         },
@@ -398,6 +428,7 @@ async def main() -> None:
         report["live"] = {
             "conversations": len(live),
             **{k: counts(r) for k, r in runs_l.items()},
+            "risques": {k: risks(r, [c for _, c in live]) for k, r in runs_l.items()},
             **gap_report(runs_l, "live" if args.show_diffs else None),
         }
 
