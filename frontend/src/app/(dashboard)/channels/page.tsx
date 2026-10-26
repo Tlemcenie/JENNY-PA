@@ -138,7 +138,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
             fontSize: 12,
             padding: "8px 10px",
             borderRadius: 8,
-            background: "var(--bg-tint)",
+            background: "var(--bg)",
             color: "var(--text)",
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -296,7 +296,7 @@ function ChannelDialog({
         {webhook && (
           <div
             style={{
-              background: "var(--bg-tint)",
+              background: "var(--bg)",
               border: "1px solid var(--divider)",
               borderRadius: 12,
               padding: 14,
@@ -500,25 +500,25 @@ function CardSkeleton() {
   return (
     <div className="jcard" style={{ padding: 22, display: "flex", gap: 16 }}>
       <div
-        style={{ width: 56, height: 56, borderRadius: 14, background: "var(--bg-tint)", flexShrink: 0 }}
+        style={{ width: 56, height: 56, borderRadius: 14, background: "var(--divider-soft)", flexShrink: 0 }}
         className="animate-pulse"
       />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           className="animate-pulse"
-          style={{ height: 14, width: "55%", borderRadius: 6, background: "var(--bg-tint)", marginBottom: 10 }}
+          style={{ height: 14, width: "55%", borderRadius: 6, background: "var(--divider-soft)", marginBottom: 10 }}
         />
         <div
           className="animate-pulse"
-          style={{ height: 11, width: "40%", borderRadius: 6, background: "var(--bg-tint)", marginBottom: 12 }}
+          style={{ height: 11, width: "40%", borderRadius: 6, background: "var(--divider-soft)", marginBottom: 12 }}
         />
         <div
           className="animate-pulse"
-          style={{ height: 11, width: "90%", borderRadius: 6, background: "var(--bg-tint)", marginBottom: 14 }}
+          style={{ height: 11, width: "90%", borderRadius: 6, background: "var(--divider-soft)", marginBottom: 14 }}
         />
         <div
           className="animate-pulse"
-          style={{ height: 32, width: 110, borderRadius: "var(--r-btn)", background: "var(--bg-tint)" }}
+          style={{ height: 32, width: 110, borderRadius: "var(--r-btn)", background: "var(--divider-soft)" }}
         />
       </div>
     </div>
