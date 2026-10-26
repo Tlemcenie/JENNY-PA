@@ -182,16 +182,26 @@ _YES_RE = re.compile(
     r"ok\s+pour\s+moi|avec\s+plaisir|je\s+veux\s+bien)\b",
     re.I,
 )
-# accord léger, pas un oui
-_ACK_RE = re.compile(
-    r"^\s*(?:ok|okay|d['’]accord|dac|[çc]a\s+marche|parfait|super|top|nickel|"  # noqa: RUF001
-    r"pourquoi\s+pas|go)\b",
+# accord léger seul : « ok », « super merci »
+_ACK_ONLY_RE = re.compile(
+    r"^\s*(?:ok|okay|oki|d['’]accord|dac|[çc]a\s+marche|parfait|super|top|nickel|"  # noqa: RUF001
+    r"pourquoi\s+pas|go|allez|vas[\s-]y|allez[\s-]y)"
+    r"(?:[^\w?]+(?:merci(?:\s+beaucoup)?|alors|go|super|parfait|top|ok|d['’]accord))*"  # noqa: RUF001
+    r"[^\w?]*$",
     re.I,
 )
 # refus
 _DECLINE_RE = re.compile(
     r"^\s*(?:non|nan|nope|pas\s+la\s+peine|pas\s+besoin|sans\s+fa[çc]on|"
     r"laisse[zr]?\s+tomber|tant\s+pis)\b|\bpas\s+int[ée]ress",
+    re.I,
+)
+# refus poli, n'importe où
+_DECLINE_ANY_RE = re.compile(
+    r"\b(?:tant\s+pis|merci\s+quand\s+m[êe]me|quand\s+m[êe]me\s+merci|voir\s+ailleurs|"
+    r"(?:aller|irai|vais)\s+ailleurs|pas\s+la\s+peine|pas\s+besoin|sans\s+fa[çc]on|"
+    r"laisse[zr]?\s+tomber|non\s+merci|une\s+autre\s+fois|"
+    r"pas\s+pour\s+(?:moi|l['’]instant|le\s+moment))\b",  # noqa: RUF001
     re.I,
 )
 
@@ -202,10 +212,18 @@ def is_confirmation(message: str) -> bool:
     return bool(_YES_RE.search(m)) and not _DECLINE_RE.search(m)
 
 
-def accepts_offer(message: str) -> bool:
-    """Accepte une proposition ?"""
+def declines_offer(message: str) -> bool:
+    """Refuse la proposition ?"""
     m = message or ""
-    return bool(_YES_RE.search(m) or _ACK_RE.search(m)) and not _DECLINE_RE.search(m)
+    return bool(_DECLINE_RE.search(m) or _DECLINE_ANY_RE.search(m))
+
+
+def accepts_offer(message: str) -> bool:
+    """Vrai oui, ou « ok » tout seul."""
+    m = message or ""
+    if declines_offer(m):
+        return False
+    return is_confirmation(m) or bool(_ACK_ONLY_RE.match(m))
 
 
 # signaux de prise de rdv
@@ -853,15 +871,15 @@ class ConversationEngine:
         # vrai changement de sujet ?
         new_topic = len(re.findall(r"\w+", msg_text)) > 3 and intent not in _FILLER_INTENTS
 
-        # liste d'attente
-        joining_waitlist = state.awaiting_waitlist and accepts_offer(msg_text)
+        # liste d'attente : un créneau n'est pas un oui
+        joining_waitlist = state.awaiting_waitlist and not _slot_in_msg and accepts_offer(msg_text)
         if joining_waitlist:
             state.disarm_latch("awaiting_waitlist")
             intent = "join_waitlist"
             intent_confidence = 0.95
             state.pending_intent = None
-        elif state.awaiting_waitlist and (_DECLINE_RE.search(msg_text) or new_topic):
-            # refus ou autre sujet
+        elif state.awaiting_waitlist and (declines_offer(msg_text) or new_topic or _slot_in_msg):
+            # refus, autre sujet ou autre jour
             state.disarm_latch("awaiting_waitlist")
 
         # nom attendu ?
@@ -877,6 +895,10 @@ class ConversationEngine:
             if joining_waitlist
             else detect_appointment_mgmt(msg_text, state.awaiting_confirmation and not name_value)
         )
+        # « je confirme, c'est Marie » : les deux
+        confirm_too = bool(name_value) and mgmt_op == "confirm"
+        if confirm_too:
+            mgmt_op = None
 
         # report implicite sans mot-clé
         if mgmt_op is None and not joining_waitlist and not name_value:
@@ -981,6 +1003,9 @@ class ConversationEngine:
         state.agent_used = agent_result.get("agent", "fallback")
         state.action_result = agent_result.get("action_result")
         state.retrieved_documents = agent_result.get("documents", [])
+        # nom noté, puis on confirme
+        if confirm_too and (state.action_result or {}).get("success"):
+            await self._confirm_after_name(state)
 
         # grounding RAG transverse
         if (
@@ -1019,13 +1044,14 @@ class ConversationEngine:
         _booked = _ok and intent == "appointment" and not _ar.get("operation")
         if _ok and _ar.get("appointment_id") and not _ar.get("operation"):
             state.arm_latch("awaiting_confirmation")
-        elif _ar.get("operation") in {"confirm", "cancel"}:
+        elif _ar.get("operation") in {"confirm", "cancel"} or _ar.get("confirmed"):
             state.disarm_latch("awaiting_confirmation")
 
         # salon complet: liste d'attente
         if _ar.get("no_slots"):
             state.arm_latch("awaiting_waitlist")
-        elif _booked:
+        elif intent == "appointment" and state.action_result is not None:
+            # autre réponse du salon : offre caduque
             state.disarm_latch("awaiting_waitlist")
         # client sans nom
         if _ar.get("ask_name"):
@@ -1399,6 +1425,21 @@ class ConversationEngine:
                 logger.warning("engine.router.error", error=str(e))
 
         return {"agent": "fallback", "documents": [], "action_result": None}
+
+    async def _confirm_after_name(self, state: ConversationState) -> None:
+        """Confirme le rdv après le nom."""
+        named = dict(state.action_result or {})
+        intent, confidence = state.current_intent, state.intent_confidence
+        state.current_intent, state.intent_confidence = "manage_appointment", 0.9
+        state.set_slot("operation", "confirm")
+        try:
+            done = (await self._route_to_agent(state)).get("action_result") or {}
+        finally:
+            state.slots.pop("operation", None)
+            state.current_intent, state.intent_confidence = intent, confidence
+        if done.get("success") and done.get("operation") == "confirm":
+            named.update(confirmed=True, confirmed_when=done.get("when"))
+        state.action_result = named
 
     async def _generate_response(
         self, state: ConversationState, on_token: TokenCallback | None = None
