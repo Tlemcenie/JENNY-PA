@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from jenny.api.dependencies import DbSession
 from jenny.core.events import publish_notification_event
@@ -126,7 +127,9 @@ def _check_staff_choice(pool: StaffPool, staff_id: UUID | None) -> None:
         raise HTTPException(400, "Ce coiffeur n'est plus disponible, rechargez la page")
 
 
-async def _load_prestation(db, b: Business, prestation_id: UUID | None) -> Prestation | None:
+async def _load_prestation(
+    db: AsyncSession, b: Business, prestation_id: UUID | None
+) -> Prestation | None:
     """Prestation active du salon."""
     if prestation_id is None:
         return None

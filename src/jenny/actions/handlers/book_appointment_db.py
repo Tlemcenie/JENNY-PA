@@ -291,12 +291,12 @@ class BookAppointmentDBAction(BaseAction):
             chosen = pick.staff
             appt: Appointment | None = None
             for attempt in range(2):
-                cand = _new_appt(chosen)
+                row = _new_appt(chosen)
                 try:
                     async with db.begin_nested():
-                        db.add(cand)
+                        db.add(row)
                         await db.flush()
-                    appt = cand
+                    appt = row
                     break
                 except Exception as exc:  # créneau pris entre-temps (course)
                     if not is_slot_taken(exc):
