@@ -23,7 +23,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { fadeInUp } from "@/lib/motion";
 
-const channels = ["all", "whatsapp", "instagram", "email", "twitter", "form"];
+const channels = ["all", "whatsapp", "instagram", "email", "widget", "twitter", "form"];
 const statuses = ["all", "received", "processing", "responded"];
 
 export default function MessagesPage() {
