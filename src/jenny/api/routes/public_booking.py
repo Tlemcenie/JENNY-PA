@@ -7,6 +7,8 @@ rendez-vous depuis une page publique, façon Calendly :
 - ``GET  /public/booking/{slug}/slots``   → créneaux disponibles d'un jour
 - ``POST /public/booking/{slug}/book``    → confirme un créneau (crée le RDV)
 
+Avec des coiffeurs : choix possible (``staff_id``), sinon attribution auto.
+
 Les créneaux sont calculés à partir des horaires d'ouverture (``business_hours``)
 dans le fuseau du business, en retirant les créneaux déjà réservés et les
 créneaux passés. La réservation crée un vrai ``Customer`` (dédupliqué par email)
@@ -15,11 +17,12 @@ et un vrai ``Appointment`` (statut ``scheduled``), et notifie l'équipe.
 
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import and_, select
+from sqlalchemy import select
 
 from jenny.api.dependencies import DbSession
 from jenny.core.logging import get_logger
@@ -30,6 +33,13 @@ from jenny.domain.models.business import Business
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.notification import Notification
 from jenny.services.audit_service import record_audit
+from jenny.services.availability import (
+    StaffPool,
+    find_free_staff,
+    free_slots_with_staff,
+    is_day_closed,
+    load_staff_pool,
+)
 
 logger = get_logger(__name__)
 
@@ -105,7 +115,18 @@ async def _load_active_business(db, slug: str) -> Business:
     return b
 
 
+def _check_staff_choice(pool: StaffPool, staff_id: UUID | None) -> None:
+    """Le coiffeur choisi doit être actif."""
+    if staff_id is not None and pool.has_staff and pool.get(staff_id) is None:
+        raise HTTPException(400, "Ce coiffeur n'est plus disponible, rechargez la page")
+
+
 # ── Infos publiques ──────────────────────────────────────────────────────────
+
+
+class BookingStaff(BaseModel):
+    id: str
+    display_name: str
 
 
 class BookingBusinessInfo(BaseModel):
@@ -114,18 +135,22 @@ class BookingBusinessInfo(BaseModel):
     description: str | None = None
     timezone: str
     business_hours: dict | None = None
+    # coiffeurs au choix (vide = salon solo)
+    staff: list[BookingStaff] = []
 
 
 @router.get("/{slug}", response_model=BookingBusinessInfo)
 async def booking_info(slug: str, db: DbSession) -> BookingBusinessInfo:
     """Infos publiques affichées sur la page de réservation (aucune donnée sensible)."""
     b = await _load_active_business(db, slug)
+    pool = await load_staff_pool(db, b.id)
     return BookingBusinessInfo(
         name=b.name,
         slug=b.slug,
         description=b.description,
         timezone=b.timezone or "Europe/Paris",
         business_hours=b.business_hours or _DEFAULT_HOURS,
+        staff=[BookingStaff(id=str(m.id), display_name=m.display_name) for m in pool.members],
     )
 
 
@@ -136,6 +161,8 @@ class BookingSlot(BaseModel):
     start_at: datetime
     end_at: datetime
     label: str  # HH:MM dans le fuseau du business
+    # coiffeurs libres sur ce créneau
+    staff_ids: list[str] = []
 
 
 class BookingSlotsResponse(BaseModel):
@@ -151,6 +178,7 @@ async def booking_slots(
     db: DbSession,
     date_str: Annotated[str, Query(alias="date", description="Jour AAAA-MM-JJ")],
     duration: Annotated[int, Query(ge=_MIN_DURATION, le=_MAX_DURATION)] = 30,
+    staff_id: Annotated[UUID | None, Query(description="Coiffeur choisi")] = None,
 ) -> BookingSlotsResponse:
     """Créneaux libres d'un jour donné (horaires - réservations - créneaux passés)."""
     b = await _load_active_business(db, slug)
@@ -167,6 +195,28 @@ async def booking_slots(
         )
 
     step = timedelta(minutes=duration)
+    # salon avec coiffeurs : calcul par fauteuil
+    pool = await load_staff_pool(db, b.id)
+    if pool.has_staff:
+        _check_staff_choice(pool, staff_id)
+        pairs = await free_slots_with_staff(
+            db, b.id, day, duration, business=b, staff_id=staff_id, pool=pool
+        )
+        return BookingSlotsResponse(
+            date=date_str,
+            timezone=str(tz),
+            duration_minutes=duration,
+            slots=[
+                BookingSlot(
+                    start_at=s,
+                    end_at=s + step,
+                    label=s.astimezone(tz).strftime("%H:%M"),
+                    staff_ids=[str(m.id) for m in free],
+                )
+                for s, free in pairs
+            ],
+        )
+
     candidates = _day_slots(b, day, duration)
     now_utc = datetime.now(UTC)
     candidates = [s for s in candidates if s > now_utc]
@@ -218,6 +268,8 @@ class BookingRequest(BaseModel):
     start_at: datetime
     duration: int = Field(default=30, ge=_MIN_DURATION, le=_MAX_DURATION)
     notes: str | None = Field(default=None, max_length=2000)
+    # sans choix : premier coiffeur libre
+    staff_id: UUID | None = None
 
 
 class BookingConfirmation(BaseModel):
@@ -227,6 +279,8 @@ class BookingConfirmation(BaseModel):
     start_at: datetime
     end_at: datetime
     message: str
+    staff_id: str | None = None
+    staff_name: str | None = None
 
 
 @router.post("/{slug}/book", response_model=BookingConfirmation, status_code=201)
@@ -240,18 +294,21 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
     if start <= datetime.now(UTC):
         raise HTTPException(400, "Ce créneau est déjà passé, choisissez-en un autre")
 
-    # Anti double-réservation : refuse si un RDV non annulé chevauche le créneau.
-    clash = (
-        await db.execute(
-            select(Appointment.id).where(
-                Appointment.business_id == b.id,
-                Appointment.status != "cancelled",
-                and_(Appointment.start_at < end, Appointment.end_at > start),
-            )
-        )
-    ).first()
-    if clash is not None:
+    tz = _business_tz(b)
+    pool = await load_staff_pool(db, b.id)
+    _check_staff_choice(pool, body.staff_id)
+    if pool.has_staff and await is_day_closed(db, b.id, start.astimezone(tz).date(), business=b):
+        raise HTTPException(400, "Le salon est fermé ce jour-là, choisissez un autre jour")
+
+    # Anti double-réservation : par coiffeur s'il y en a, sinon tout le salon.
+    pick = await find_free_staff(
+        db, b.id, start, end, business=b, staff_id=body.staff_id, pool=pool
+    )
+    if not pick.free:
         raise HTTPException(409, "Ce créneau vient d'être réservé, choisissez-en un autre")
+    staff_id = pick.staff.id if pick.staff else None
+    staff_name = pick.staff.display_name if pick.staff else None
+    with_staff = f" avec {staff_name}" if staff_name else ""
 
     # Client dédupliqué par email au sein du business.
     email = body.email.strip().lower()
@@ -283,6 +340,7 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
     appt = Appointment(
         business_id=b.id,
         customer_id=customer.id,
+        staff_id=staff_id,
         title=title,
         description=body.notes or None,
         channel="booking",
@@ -294,7 +352,6 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
     db.add(appt)
     await db.flush()
 
-    tz = _business_tz(b)
     when_local = start.astimezone(tz).strftime("%d/%m/%Y à %H:%M")
     db.add(
         Notification(
@@ -302,7 +359,7 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
             recipient=None,
             kind="booking",
             title="Nouvelle réservation en ligne",
-            body=f"{body.full_name.strip()} a réservé le {when_local}.",
+            body=f"{body.full_name.strip()} a réservé le {when_local}{with_staff}.",
             meta={"appointment_id": str(appt.id), "customer_id": str(customer.id)},
         )
     )
@@ -335,7 +392,7 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
         business_id=b.id,
         customer_id=customer.id,
         text=(
-            f"Votre rendez-vous est confirmé : {title}, le {when_local}. "
+            f"Votre rendez-vous est confirmé : {title}, le {when_local}{with_staff}. "
             f"À très vite chez {b.name} ! Pour modifier ou annuler, répondez à ce message."
         ),
         subject=f"Rendez-vous confirmé — {b.name}",
@@ -348,7 +405,9 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
         start_at=appt.start_at,
         end_at=appt.end_at,
         message=(
-            f"Votre rendez-vous du {when_local} est bien enregistré. "
+            f"Votre rendez-vous du {when_local}{with_staff} est bien enregistré. "
             f"L'équipe de {b.name} vous confirmera rapidement."
         ),
+        staff_id=str(staff_id) if staff_id else None,
+        staff_name=staff_name,
     )

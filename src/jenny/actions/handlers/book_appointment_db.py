@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 from uuid import UUID
 
 from jenny.db.conflicts import is_slot_taken
 from jenny.actions.base import BaseAction
 from jenny.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from jenny.domain.models.staff import Staff
+    from jenny.services.availability import StaffPool
 
 logger = get_logger(__name__)
 
@@ -50,8 +54,23 @@ class BookAppointmentDBAction(BaseAction):
                 "message": "Réservation non finalisée (à confirmer avec l'équipe).",
             }
 
+    @staticmethod
+    def _wanted_staff(pool: StaffPool, params: dict) -> Staff | None:
+        """Coiffeur demandé par le client."""
+        raw = params.get("staff_id")
+        if raw:
+            try:
+                found = pool.get(UUID(str(raw)))
+            except (ValueError, TypeError):
+                found = None
+            if found is not None:
+                return found
+        from jenny.services.availability import match_staff
+
+        return match_staff(pool, params.get("staff") or params.get("staff_name"))
+
     async def _book(self, bid: UUID, params: dict) -> dict:
-        from sqlalchemy import and_, func, select
+        from sqlalchemy import func, select
 
         from jenny.db.session import async_session_factory
         from jenny.domain.models.appointment import Appointment
@@ -60,9 +79,11 @@ class BookAppointmentDBAction(BaseAction):
         from jenny.engine.datetime_fr import combine_fr, parse_fr_date, parse_fr_time
         from jenny.services.availability import (
             business_tz,
+            find_free_staff,
             format_slots_fr,
             free_slots_for_day,
             is_day_closed,
+            load_staff_pool,
             next_free_slots,
         )
         from jenny.services.prestation_service import (
@@ -87,6 +108,12 @@ class BookAppointmentDBAction(BaseAction):
                 duration = int(params.get("duration") or 30)
                 service_name = str(params["service"]).strip().capitalize()
                 price_eur = None
+            presta_ids = [p.id for p in matched]
+
+            # coiffeurs du salon
+            pool = await load_staff_pool(db, bid)
+            wanted = self._wanted_staff(pool, params)
+            wanted_id = wanted.id if wanted else None
 
             day = parse_fr_date(params["date"], today=datetime.now(tz).date())
             if day is None:
@@ -94,7 +121,9 @@ class BookAppointmentDBAction(BaseAction):
 
             # fermé → prochain jour ouvert
             if await is_day_closed(db, bid, day, business=business):
-                alts = await next_free_slots(db, bid, duration, from_day=day)
+                alts = await next_free_slots(
+                    db, bid, duration, from_day=day, prestation_ids=presta_ids, staff_id=wanted_id
+                )
                 if not alts:
                     # rien à proposer → liste d'attente
                     return {
@@ -116,10 +145,21 @@ class BookAppointmentDBAction(BaseAction):
 
             # sans heure : propose des créneaux
             if not has_time:
-                slots = await free_slots_for_day(db, bid, day, duration, business=business)
+                slots = await free_slots_for_day(
+                    db,
+                    bid,
+                    day,
+                    duration,
+                    business=business,
+                    prestation_ids=presta_ids,
+                    staff_id=wanted_id,
+                    pool=pool,
+                )
                 same_day = bool(slots)
                 if not slots:
-                    slots = await next_free_slots(db, bid, duration, from_day=day)
+                    slots = await next_free_slots(
+                        db, bid, duration, from_day=day, prestation_ids=presta_ids, staff_id=wanted_id
+                    )
                 if not slots:
                     return {
                         "success": False,
@@ -135,7 +175,8 @@ class BookAppointmentDBAction(BaseAction):
                 }
 
             # avec heure : vérifie puis réserve
-            local_naive = combine_fr(params["date"], str(time_text))
+            # fuseau du salon, pas du serveur
+            local_naive = combine_fr(params["date"], str(time_text), now=datetime.now(tz))
             if local_naive is None:
                 return {"success": False, "message": "Heure non comprise.", "missing": ["time"]}
             start = local_naive.replace(tzinfo=tz).astimezone(UTC)
@@ -143,7 +184,14 @@ class BookAppointmentDBAction(BaseAction):
 
             # jamais réserver dans le passé
             if start <= datetime.now(UTC):
-                alts = await next_free_slots(db, bid, duration, from_day=datetime.now(tz).date())
+                alts = await next_free_slots(
+                    db,
+                    bid,
+                    duration,
+                    from_day=datetime.now(tz).date(),
+                    prestation_ids=presta_ids,
+                    staff_id=wanted_id,
+                )
                 return {
                     "success": False,
                     "past": True,
@@ -152,17 +200,21 @@ class BookAppointmentDBAction(BaseAction):
                     "message": "Ce créneau est déjà passé.",
                 }
 
-            clash = (
-                await db.execute(
-                    select(Appointment.id).where(
-                        Appointment.business_id == bid,
-                        Appointment.status != "cancelled",
-                        and_(Appointment.start_at < end, Appointment.end_at > start),
-                    )
+            # chevauchement, par coiffeur si besoin
+            pick = await find_free_staff(
+                db,
+                bid,
+                start,
+                end,
+                business=business,
+                prestation_ids=presta_ids,
+                staff_id=wanted_id,
+                pool=pool,
+            )
+            if not pick.free:
+                alts = await next_free_slots(
+                    db, bid, duration, from_day=day, prestation_ids=presta_ids, staff_id=wanted_id
                 )
-            ).first()
-            if clash is not None:
-                alts = await next_free_slots(db, bid, duration, from_day=day)
                 return {
                     "success": False,
                     "conflict": True,
@@ -219,9 +271,12 @@ class BookAppointmentDBAction(BaseAction):
                         }
                     also_has = ex_when
 
+            staff_id = pick.staff.id if pick.staff else None
+            staff_name = pick.staff.display_name if pick.staff else None
             appt = Appointment(
                 business_id=bid,
                 customer_id=customer_id,
+                staff_id=staff_id,
                 title=f"{service_name}",
                 # formaté depuis le datetime réservé
                 description=f"Réservé via Jenny — {start.astimezone(tz).strftime('%d/%m/%Y à %Hh%M')}",
@@ -238,7 +293,9 @@ class BookAppointmentDBAction(BaseAction):
                 if not is_slot_taken(exc):
                     raise
                 await db.rollback()
-                alts = await next_free_slots(db, bid, duration, from_day=day)
+                alts = await next_free_slots(
+                    db, bid, duration, from_day=day, prestation_ids=presta_ids, staff_id=wanted_id
+                )
                 return {
                     "success": False,
                     "conflict": True,
@@ -279,7 +336,8 @@ class BookAppointmentDBAction(BaseAction):
             # notifie le coiffeur
             from jenny.domain.models.notification import Notification
 
-            notif_body = f"{service_name} — {day_label} à {time_label}."
+            notif_body = f"{service_name} — {day_label} à {time_label}"
+            notif_body += f" avec {staff_name}." if staff_name else "."
             if deposit:
                 notif_body += f" Acompte {deposit['amount_eur']:.0f}€ en attente."
             db.add(
@@ -298,7 +356,9 @@ class BookAppointmentDBAction(BaseAction):
                 if not is_slot_taken(exc):
                     raise
                 await db.rollback()
-                alts = await next_free_slots(db, bid, duration, from_day=day)
+                alts = await next_free_slots(
+                    db, bid, duration, from_day=day, prestation_ids=presta_ids, staff_id=wanted_id
+                )
                 return {
                     "success": False,
                     "conflict": True,
@@ -321,13 +381,19 @@ class BookAppointmentDBAction(BaseAction):
                     ask_name = True
 
             logger.info("action.book_db.ok", appt_id=str(appt.id), business_id=str(bid))
+            with_staff = f" avec {staff_name}" if staff_name else ""
             return {
                 "success": True,
-                "message": f"Rendez-vous confirmé : {service_name} le {day_label} à {time_label}.",
+                "message": (
+                    f"Rendez-vous confirmé : {service_name} le {day_label} à {time_label}"
+                    f"{with_staff}."
+                ),
                 "appointment_id": str(appt.id),
                 "service": service_name,
                 "day": day_label,
                 "time": time_label,
+                "staff_id": str(staff_id) if staff_id else None,
+                "staff_name": staff_name,
                 "duration_minutes": duration,
                 "price_eur": price_eur,
                 "deposit": deposit,

@@ -9,8 +9,10 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  addDays,
   addMonths,
   addWeeks,
   eachDayOfInterval,
@@ -36,10 +38,10 @@ import {
   Star,
   Trash,
   UserX,
+  Users,
   X,
 } from "lucide-react";
 import {
-  createAppointment,
   createReview,
   deleteAppointment,
   exportAppointmentsIcs,
@@ -47,8 +49,14 @@ import {
   subscribeToConversationEvents,
   updateAppointment,
   ApiError,
-  type Appointment,
 } from "@/lib/api";
+import {
+  createAppointmentWithStaff,
+  listStaff,
+  setAppointmentStaff,
+  type StaffAppointment as Appointment,
+  type StaffMember,
+} from "@/lib/api-staff";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useFocusTrap } from "@/lib/use-focus-trap";
@@ -63,11 +71,17 @@ const DAY_END_HOUR = 21;
 const HOUR_PX = 52; // hauteur d'une heure
 const WEEKDAYS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 
-type CalendarView = "month" | "week";
+type CalendarView = "month" | "week" | "day";
+
+// filtre coiffeur : tous, un id, ou sans coiffeur
+const ALL = "all";
+const NONE = "none";
 
 // couleur d'un RDV
 function appointmentColor(appt: Appointment): string {
   if (appt.status === "cancelled") return "var(--color-jenny-error)";
+  // couleur du coiffeur d'abord
+  if (appt.staff_color) return appt.staff_color;
   switch (appt.channel) {
     case "whatsapp":
       return "var(--color-jenny-whatsapp)";
@@ -121,16 +135,19 @@ interface CreateForm {
   endTime: string; // HH:mm
   location: string;
   description: string;
+  staff: string; // "auto", "" ou id
 }
 
-function emptyForm(day: Date): CreateForm {
+function emptyForm(day: Date, hour = 9, staff = "auto"): CreateForm {
+  const pad = (n: number) => String(n).padStart(2, "0");
   return {
     title: "",
     date: toDateValue(day),
-    startTime: "09:00",
-    endTime: "10:00",
+    startTime: `${pad(hour)}:00`,
+    endTime: `${pad(Math.min(hour + 1, 23))}:00`,
     location: "",
     description: "",
+    staff,
   };
 }
 
@@ -147,6 +164,10 @@ export default function CalendarPage() {
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
+  // équipe + filtre coiffeur
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [staffFilter, setStaffFilter] = useState<string>(ALL);
+
   // modale de création
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<CreateForm>(() => emptyForm(new Date()));
@@ -162,6 +183,7 @@ export default function CalendarPage() {
 
   // plage visible
   const range = useMemo(() => {
+    if (view === "day") return { start: cursor, end: cursor };
     if (view === "week") {
       const start = startOfWeek(cursor, { weekStartsOn: 1 });
       const end = endOfWeek(cursor, { weekStartsOn: 1 });
@@ -204,6 +226,19 @@ export default function CalendarPage() {
     fetchAppointments();
   }, [fetchAppointments]);
 
+  // coiffeurs actifs (vide = salon solo)
+  useEffect(() => {
+    listStaff()
+      .then((res) => setStaff(res.staff.filter((m) => m.is_active)))
+      .catch(() => setStaff([]));
+  }, []);
+
+  const visible = useMemo(() => {
+    if (staffFilter === ALL) return appointments;
+    if (staffFilter === NONE) return appointments.filter((a) => !a.staff_id);
+    return appointments.filter((a) => a.staff_id === staffFilter);
+  }, [appointments, staffFilter]);
+
   // rafraîchit l'agenda en direct quand un RDV est pris (SSE)
   useEffect(() => {
     return subscribeToConversationEvents((ev) => {
@@ -219,7 +254,7 @@ export default function CalendarPage() {
 
   const byDay = useMemo(() => {
     const map = new Map<string, Appointment[]>();
-    for (const appt of appointments) {
+    for (const appt of visible) {
       const key = toDateValue(new Date(appt.start_at));
       const list = map.get(key);
       if (list) list.push(appt);
@@ -230,7 +265,7 @@ export default function CalendarPage() {
       list.sort((a, b) => +new Date(a.start_at) - +new Date(b.start_at));
     }
     return map;
-  }, [appointments]);
+  }, [visible]);
 
   const dayAppointments = useCallback(
     (day: Date) => byDay.get(toDateValue(day)) ?? [],
@@ -252,10 +287,13 @@ export default function CalendarPage() {
 
   // navigation
   const goToday = () => setCursor(new Date());
-  const goPrev = () => setCursor((c) => (view === "week" ? addWeeks(c, -1) : addMonths(c, -1)));
-  const goNext = () => setCursor((c) => (view === "week" ? addWeeks(c, 1) : addMonths(c, 1)));
+  const step = (c: Date, n: number) =>
+    view === "day" ? addDays(c, n) : view === "week" ? addWeeks(c, n) : addMonths(c, n);
+  const goPrev = () => setCursor((c) => step(c, -1));
+  const goNext = () => setCursor((c) => step(c, 1));
 
   const periodLabel = useMemo(() => {
+    if (view === "day") return cap(format(cursor, "EEEE d MMMM yyyy", { locale: fr }));
     if (view === "week") {
       const start = startOfWeek(cursor, { weekStartsOn: 1 });
       const end = endOfWeek(cursor, { weekStartsOn: 1 });
@@ -268,8 +306,8 @@ export default function CalendarPage() {
   }, [cursor, view]);
 
   // ouverture des modales
-  const openCreate = (day?: Date) => {
-    setForm(emptyForm(day ?? new Date()));
+  const openCreate = (day?: Date, hour?: number, staffId?: string) => {
+    setForm(emptyForm(day ?? new Date(), hour ?? 9, staffId ?? (staff.length ? "auto" : "")));
     setCreateOpen(true);
   };
 
@@ -296,12 +334,14 @@ export default function CalendarPage() {
     }
     setSaving(true);
     try {
-      await createAppointment({
+      await createAppointmentWithStaff({
         title: form.title.trim(),
         start_at: startAt.toISOString(),
         end_at: endAt.toISOString(),
         location: form.location.trim() || null,
         description: form.description.trim() || null,
+        staff_id: form.staff && form.staff !== "auto" ? form.staff : null,
+        auto_assign_staff: form.staff === "auto",
       });
       toast.success("Rendez-vous créé.");
       setCreateOpen(false);
@@ -339,6 +379,22 @@ export default function CalendarPage() {
       await fetchAppointments();
     } catch (err) {
       toast.error(extractError(err, "Échec de la mise à jour."));
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  // change le coiffeur du RDV
+  const changeStaff = async (staffId: string | null) => {
+    if (!selected) return;
+    setActionBusy(true);
+    try {
+      const updated = await setAppointmentStaff(selected.id, staffId);
+      setSelected(updated);
+      toast.success(updated.staff_name ? `RDV attribué à ${updated.staff_name}.` : "RDV sans coiffeur.");
+      await fetchAppointments();
+    } catch (err) {
+      toast.error(extractError(err, "Ce coiffeur n'est pas libre sur ce créneau."));
     } finally {
       setActionBusy(false);
     }
@@ -401,7 +457,7 @@ export default function CalendarPage() {
     }
   };
 
-  const totalVisible = appointments.length;
+  const totalVisible = visible.length;
 
   return (
     <div className="h-full overflow-y-auto">
@@ -428,7 +484,7 @@ export default function CalendarPage() {
           <div className="ml-auto flex flex-wrap items-center gap-2">
             {/* Bascule mois / semaine */}
             <div className="flex items-center rounded-xl border border-jenny-divider bg-jenny-surface p-0.5">
-              {(["month", "week"] as const).map((v) => (
+              {(["month", "week", "day"] as const).map((v) => (
                 <button
                   key={v}
                   type="button"
@@ -441,10 +497,18 @@ export default function CalendarPage() {
                       : "text-jenny-text-secondary hover:text-jenny-text"
                   )}
                 >
-                  {v === "month" ? "Mois" : "Semaine"}
+                  {v === "month" ? "Mois" : v === "week" ? "Semaine" : "Jour"}
                 </button>
               ))}
             </div>
+
+            <Link
+              href="/team"
+              className="inline-flex items-center gap-1.5 h-9 px-4 rounded-xl border border-jenny-divider bg-jenny-surface text-[13px] font-semibold text-jenny-text hover:border-jenny-text-secondary/30 transition-colors"
+            >
+              <Users className="w-4 h-4 text-jenny-coral" />
+              Équipe
+            </Link>
 
             <button
               type="button"
@@ -466,7 +530,7 @@ export default function CalendarPage() {
 
             <button
               type="button"
-              onClick={openCreate.bind(null, undefined)}
+              onClick={() => openCreate(view === "day" ? cursor : undefined)}
               className="inline-flex items-center gap-1.5 h-9 px-4 rounded-xl bg-jenny-coral text-white text-[13px] font-semibold shadow-sm shadow-jenny-coral/20 hover:bg-jenny-coral-dark active:scale-[0.98] transition-all"
             >
               <Plus className="w-4 h-4" />
@@ -519,6 +583,11 @@ export default function CalendarPage() {
           </span>
         </motion.div>
 
+        {/* ── Filtre coiffeur ── */}
+        {staff.length > 0 && (
+          <StaffFilter staff={staff} value={staffFilter} onChange={setStaffFilter} />
+        )}
+
         {/* ── Contenu principal ── */}
         {error ? (
           <ErrorBlock message={error} onRetry={fetchAppointments} />
@@ -528,13 +597,22 @@ export default function CalendarPage() {
           ) : (
             <WeekSkeleton />
           )
+        ) : view === "day" ? (
+          <DayGrid
+            day={cursor}
+            appointments={dayAppointments(cursor)}
+            staff={staff}
+            staffFilter={staffFilter}
+            onSelectAppointment={setSelected}
+            onCreateAt={(hour, staffId) => openCreate(cursor, hour, staffId)}
+          />
         ) : view === "month" ? (
           <MonthGrid
             days={days}
             cursor={cursor}
             dayAppointments={dayAppointments}
             onSelectAppointment={setSelected}
-            onCreateDay={openCreate}
+            onCreateDay={(d) => openCreate(d)}
             isEmpty={totalVisible === 0}
             onCreateEmpty={() => openCreate()}
           />
@@ -543,7 +621,7 @@ export default function CalendarPage() {
             cursor={cursor}
             dayAppointments={dayAppointments}
             onSelectAppointment={setSelected}
-            onCreateDay={openCreate}
+            onCreateDay={(d) => openCreate(d)}
           />
         )}
 
@@ -621,6 +699,25 @@ export default function CalendarPage() {
                 </Field>
               </div>
 
+              {staff.length > 0 && (
+                <Field label="Coiffeur" htmlFor="appt-staff">
+                  <select
+                    id="appt-staff"
+                    value={form.staff}
+                    onChange={(e) => setForm((f) => ({ ...f, staff: e.target.value }))}
+                    className="h-11 px-3.5 rounded-xl bg-jenny-bg border border-jenny-divider text-[0.9rem] text-jenny-text focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral transition-all cursor-pointer"
+                  >
+                    <option value="auto">Automatique (premier libre)</option>
+                    {staff.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.display_name}
+                      </option>
+                    ))}
+                    <option value="">Sans coiffeur</option>
+                  </select>
+                </Field>
+              )}
+
               <Field label="Lieu (optionnel)" htmlFor="appt-location">
                 <input
                   id="appt-location"
@@ -688,11 +785,228 @@ export default function CalendarPage() {
               onMarkNoShow={markNoShow}
               onSaveNotes={saveNotes}
               onSubmitReview={submitReview}
+              staff={staff}
+              onChangeStaff={changeStaff}
             />
           </Modal>
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+// ── Filtre coiffeur ─────────────────────────────────────────────────────────
+
+function StaffFilter({
+  staff,
+  value,
+  onChange,
+}: {
+  staff: StaffMember[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const chips = [
+    { id: ALL, label: "Tous", color: null as string | null },
+    ...staff.map((m) => ({ id: m.id, label: m.display_name, color: m.color })),
+    { id: NONE, label: "Sans coiffeur", color: null as string | null },
+  ];
+  return (
+    <motion.div
+      variants={fadeInUp}
+      initial="hidden"
+      animate="show"
+      role="radiogroup"
+      aria-label="Filtrer par coiffeur"
+      className="flex flex-wrap items-center gap-1.5"
+    >
+      {chips.map((c) => (
+        <button
+          key={c.id}
+          type="button"
+          role="radio"
+          aria-checked={value === c.id}
+          onClick={() => onChange(c.id)}
+          className={cn(
+            "inline-flex items-center gap-1.5 h-8 px-3 rounded-full border text-[12.5px] font-semibold transition-colors",
+            value === c.id
+              ? "bg-jenny-coral text-white border-jenny-coral"
+              : "bg-jenny-surface text-jenny-text-secondary border-jenny-divider hover:text-jenny-text"
+          )}
+        >
+          {c.color && (
+            <span
+              className="w-2 h-2 rounded-full ring-1 ring-white/60"
+              style={{ backgroundColor: c.color }}
+            />
+          )}
+          {c.label}
+        </button>
+      ))}
+    </motion.div>
+  );
+}
+
+// ── Vue JOUR (une colonne par coiffeur) ─────────────────────────────────────
+
+interface DayColumn {
+  id: string; // id coiffeur, NONE ou ""
+  label: string;
+  color: string | null;
+  appts: Appointment[];
+}
+
+function DayGrid({
+  day,
+  appointments,
+  staff,
+  staffFilter,
+  onSelectAppointment,
+  onCreateAt,
+}: {
+  day: Date;
+  appointments: Appointment[];
+  staff: StaffMember[];
+  staffFilter: string;
+  onSelectAppointment: (appt: Appointment) => void;
+  onCreateAt: (hour: number, staffId?: string) => void;
+}) {
+  const columns = useMemo<DayColumn[]>(() => {
+    // salon solo : une colonne
+    if (staff.length === 0) return [{ id: "", label: "Agenda", color: null, appts: appointments }];
+    const known = new Set(staff.map((m) => m.id));
+    const cols: DayColumn[] = staff
+      .filter((m) => staffFilter === ALL || staffFilter === m.id)
+      .map((m) => ({
+        id: m.id,
+        label: m.display_name,
+        color: m.color,
+        appts: appointments.filter((a) => a.staff_id === m.id),
+      }));
+    // coiffeurs inactifs avec RDV
+    if (staffFilter === ALL) {
+      const extra = new Map<string, DayColumn>();
+      for (const a of appointments) {
+        if (!a.staff_id || known.has(a.staff_id)) continue;
+        const col = extra.get(a.staff_id) ?? {
+          id: a.staff_id,
+          label: a.staff_name ?? "Inactif",
+          color: a.staff_color ?? null,
+          appts: [],
+        };
+        col.appts.push(a);
+        extra.set(a.staff_id, col);
+      }
+      cols.push(...extra.values());
+    }
+    const loose = appointments.filter((a) => !a.staff_id);
+    if ((staffFilter === ALL && loose.length > 0) || staffFilter === NONE) {
+      cols.push({ id: NONE, label: "Sans coiffeur", color: null, appts: loose });
+    }
+    return cols;
+  }, [appointments, staff, staffFilter]);
+
+  const hours = useMemo(() => {
+    const out: number[] = [];
+    for (let h = DAY_START_HOUR; h <= DAY_END_HOUR; h++) out.push(h);
+    return out;
+  }, []);
+  const gridHeight = (DAY_END_HOUR - DAY_START_HOUR) * HOUR_PX;
+  const template = `56px repeat(${columns.length}, minmax(150px, 1fr))`;
+
+  // ligne « maintenant » (figée au rendu)
+  const [now] = useState(() => new Date());
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const showNow =
+    toDateValue(now) === toDateValue(day) &&
+    nowMin >= DAY_START_HOUR * 60 &&
+    nowMin <= DAY_END_HOUR * 60;
+
+  const createStaff = (col: DayColumn) => (col.id === NONE ? "" : col.id || undefined);
+
+  return (
+    <motion.div
+      variants={fadeInUp}
+      initial="hidden"
+      animate="show"
+      className="rounded-2xl border border-jenny-divider bg-jenny-surface overflow-hidden"
+    >
+      <div className="overflow-x-auto overflow-y-hidden">
+        <div style={{ minWidth: 56 + columns.length * 150 }}>
+          {/* en-têtes coiffeurs */}
+          <div className="grid border-b border-jenny-divider" style={{ gridTemplateColumns: template }}>
+            <div className="border-r border-jenny-divider" />
+            {columns.map((col) => (
+              <div
+                key={col.id || "solo"}
+                className="px-2 py-2.5 flex items-center justify-center gap-2 border-r border-jenny-divider last:border-r-0 min-w-0"
+              >
+                {col.color && (
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: col.color }} />
+                )}
+                <span className="text-[13px] font-semibold text-jenny-text truncate">{col.label}</span>
+                <span className="font-mono text-[10px] text-jenny-text-secondary shrink-0">
+                  {col.appts.length}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* corps */}
+          <div className="relative grid" style={{ gridTemplateColumns: template }}>
+            <div className="relative border-r border-jenny-divider" style={{ height: gridHeight }}>
+              {hours.map((h) => (
+                <div
+                  key={h}
+                  className="absolute right-1.5 -translate-y-1/2 font-mono text-[10px] text-jenny-text-secondary"
+                  style={{ top: (h - DAY_START_HOUR) * HOUR_PX }}
+                >
+                  {h}h
+                </div>
+              ))}
+            </div>
+            {columns.map((col) => (
+              <div
+                key={col.id || "solo"}
+                className="relative border-r border-jenny-divider last:border-r-0"
+                style={{ height: gridHeight }}
+              >
+                {hours.slice(0, -1).map((h) => (
+                  <button
+                    key={h}
+                    type="button"
+                    onClick={() => onCreateAt(h, createStaff(col))}
+                    aria-label={`Créer un rendez-vous à ${h}h${col.id && col.id !== NONE ? ` avec ${col.label}` : ""}`}
+                    className="absolute left-0 right-0 border-t border-jenny-divider/70 hover:bg-jenny-bg focus:outline-none focus-visible:bg-jenny-bg transition-colors"
+                    style={{ top: (h - DAY_START_HOUR) * HOUR_PX, height: HOUR_PX }}
+                  />
+                ))}
+                {(() => {
+                  const lanes = layoutLanes(col.appts);
+                  return col.appts.map((appt) => (
+                    <WeekEvent
+                      key={appt.id}
+                      appt={appt}
+                      onClick={() => onSelectAppointment(appt)}
+                      {...lanes.get(appt.id)}
+                    />
+                  ));
+                })()}
+              </div>
+            ))}
+            {showNow && (
+              <div
+                className="pointer-events-none absolute right-0 h-px bg-jenny-error"
+                style={{ left: 56, top: ((nowMin - DAY_START_HOUR * 60) / 60) * HOUR_PX }}
+                aria-hidden="true"
+              >
+                <span className="absolute -left-1 -top-1 w-2 h-2 rounded-full bg-jenny-error" />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
@@ -915,7 +1229,7 @@ function WeekGrid({
       </div>
 
       {/* Corps : gutter horaire + colonnes-jours positionnées */}
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto overflow-y-hidden">
         <div
           className="grid min-w-[640px]"
           style={{ gridTemplateColumns: "56px repeat(7, 1fr)" }}
@@ -941,7 +1255,7 @@ function WeekGrid({
               style={{ height: gridHeight }}
             >
               {/* Lignes horaires + zones cliquables */}
-              {hours.map((h) => (
+              {hours.slice(0, -1).map((h) => (
                 <button
                   key={h}
                   type="button"
@@ -953,9 +1267,18 @@ function WeekGrid({
               ))}
 
               {/* Événements positionnés */}
-              {dayAppointments(day).map((appt) => (
-                <WeekEvent key={appt.id} appt={appt} onClick={() => onSelectAppointment(appt)} />
-              ))}
+              {(() => {
+                const list = dayAppointments(day);
+                const lanes = layoutLanes(list);
+                return list.map((appt) => (
+                  <WeekEvent
+                    key={appt.id}
+                    appt={appt}
+                    onClick={() => onSelectAppointment(appt)}
+                    {...lanes.get(appt.id)}
+                  />
+                ));
+              })()}
             </div>
           ))}
         </div>
@@ -965,7 +1288,49 @@ function WeekGrid({
 }
 
 // Bloc d'événement positionné dans la vue semaine (top/height selon les heures).
-function WeekEvent({ appt, onClick }: { appt: Appointment; onClick: () => void }) {
+// place les RDV qui se chevauchent côte à côte
+function layoutLanes(appts: Appointment[]): Map<string, { lane: number; lanes: number }> {
+  const out = new Map<string, { lane: number; lanes: number }>();
+  const sorted = [...appts].sort((a, b) => +new Date(a.start_at) - +new Date(b.start_at));
+  let cluster: { id: string; lane: number }[] = [];
+  let laneEnds: number[] = [];
+  let clusterEnd = -Infinity;
+  const flush = () => {
+    const lanes = Math.max(laneEnds.length, 1);
+    for (const c of cluster) out.set(c.id, { lane: c.lane, lanes });
+    cluster = [];
+    laneEnds = [];
+    clusterEnd = -Infinity;
+  };
+  for (const a of sorted) {
+    const s = +new Date(a.start_at);
+    const e = Math.max(+new Date(a.end_at), s + 20 * 60_000);
+    if (cluster.length && s >= clusterEnd) flush();
+    let lane = laneEnds.findIndex((end) => end <= s);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(e);
+    } else {
+      laneEnds[lane] = e;
+    }
+    cluster.push({ id: a.id, lane });
+    clusterEnd = Math.max(clusterEnd, e);
+  }
+  flush();
+  return out;
+}
+
+function WeekEvent({
+  appt,
+  onClick,
+  lane = 0,
+  lanes = 1,
+}: {
+  appt: Appointment;
+  onClick: () => void;
+  lane?: number;
+  lanes?: number;
+}) {
   const start = new Date(appt.start_at);
   const end = new Date(appt.end_at);
   const startMinutes = start.getHours() * 60 + start.getMinutes();
@@ -987,10 +1352,12 @@ function WeekEvent({ appt, onClick }: { appt: Appointment; onClick: () => void }
       type="button"
       onClick={onClick}
       title={appt.title}
-      className="absolute left-0.5 right-0.5 rounded-md px-1.5 py-1 text-left overflow-hidden hover:brightness-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-jenny-coral/40 transition-all"
+      className="absolute rounded-md px-1.5 py-1 text-left overflow-hidden hover:brightness-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-jenny-coral/40 transition-all"
       style={{
         top,
         height,
+        left: `calc(${(lane / lanes) * 100}% + 2px)`,
+        width: `calc(${100 / lanes}% - 4px)`,
         backgroundColor: `color-mix(in srgb, ${color} 16%, transparent)`,
         borderLeft: `3px solid ${color}`,
       }}
@@ -1078,8 +1445,12 @@ function DetailContent({
   onMarkNoShow,
   onSaveNotes,
   onSubmitReview,
+  staff,
+  onChangeStaff,
 }: {
   appt: Appointment;
+  staff: StaffMember[];
+  onChangeStaff: (staffId: string | null) => void;
   busy: boolean;
   onClose: () => void;
   onConfirm: () => void;
@@ -1157,6 +1528,31 @@ function DetailContent({
           <div className="flex items-center gap-2.5">
             <Calendar className="w-4 h-4 text-jenny-text-secondary shrink-0" />
             <span>Avec {appt.customer_name}</span>
+          </div>
+        )}
+        {(staff.length > 0 || appt.staff_name) && (
+          <div className="flex items-center gap-2.5">
+            <Users className="w-4 h-4 text-jenny-text-secondary shrink-0" />
+            <label htmlFor="appt-detail-staff" className="sr-only">
+              Coiffeur
+            </label>
+            <select
+              id="appt-detail-staff"
+              value={appt.staff_id ?? ""}
+              disabled={busy}
+              onChange={(e) => onChangeStaff(e.target.value || null)}
+              className="h-9 px-2.5 rounded-lg bg-jenny-bg border border-jenny-divider text-[13px] text-jenny-text focus:outline-none focus:ring-2 focus:ring-jenny-coral/20 focus:border-jenny-coral cursor-pointer disabled:opacity-50"
+            >
+              <option value="">Sans coiffeur</option>
+              {staff.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.display_name}
+                </option>
+              ))}
+              {appt.staff_id && !staff.some((m) => m.id === appt.staff_id) && (
+                <option value={appt.staff_id}>{appt.staff_name ?? "Coiffeur inactif"}</option>
+              )}
+            </select>
           </div>
         )}
         {appt.description && (

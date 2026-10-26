@@ -26,6 +26,8 @@ class Appointment(Base, TimestampMixin):
         Index("ix_appointments_business_start", "business_id", "start_at"),
         Index("ix_appointments_business_customer", "business_id", "customer_id"),
         Index("ix_appointments_business_status", "business_id", "status"),
+        # agenda d'un coiffeur
+        Index("ix_appointments_business_staff_start", "business_id", "staff_id", "start_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -49,6 +51,12 @@ class Appointment(Base, TimestampMixin):
         UUID(as_uuid=True),
         default=None,
         index=True,
+    )
+    # coiffeur du RDV, null = non attribué
+    staff_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("staff.id", ondelete="SET NULL"),
+        default=None,
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, default=None)

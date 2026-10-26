@@ -8,12 +8,15 @@ Jenny demande au client de s'identifier. Ouvre sa propre session DB.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 from uuid import UUID
 
 from jenny.db.conflicts import is_slot_taken
 from jenny.actions.base import BaseAction
 from jenny.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -50,6 +53,14 @@ class ManageAppointmentAction(BaseAction):
         except Exception as exc:  # pragma: no cover - dépend de l'environnement DB
             logger.error("action.manage_appt.error", error=str(exc))
             return {"success": False, "operation": op, "message": "Action non aboutie."}
+
+    @staticmethod
+    async def _prestation_ids(db: AsyncSession, bid: UUID, title: str | None) -> list[UUID]:
+        """Prestations du RDV (via son titre)."""
+        from jenny.services.prestation_service import load_active_prestations, match_prestations
+
+        prestations = await load_active_prestations(db, bid)
+        return [p.id for p in match_prestations(prestations, title or "")]
 
     async def _manage(
         self,
@@ -133,15 +144,24 @@ class ManageAppointmentAction(BaseAction):
             # jour de fermeture, jamais sur un créneau déjà pris. Sinon Jenny
             # « accepterait » verbalement un déplacement impossible.
             from jenny.services.availability import (
+                find_free_staff,
                 format_slots_fr,
                 is_day_closed,
+                load_staff_pool,
                 next_free_slots,
             )
 
             dur_minutes = max(int(duration.total_seconds() // 60), 15)
+            # compétences tirées du titre
+            pool = await load_staff_pool(db, bid)
+            presta_ids = await self._prestation_ids(db, bid, appt.title) if pool.has_staff else []
             if new_start <= now:
                 alts = await next_free_slots(
-                    db, bid, dur_minutes, from_day=now.astimezone(tz).date()
+                    db,
+                    bid,
+                    dur_minutes,
+                    from_day=now.astimezone(tz).date(),
+                    prestation_ids=presta_ids,
                 )
                 return {
                     "success": False,
@@ -151,7 +171,9 @@ class ManageAppointmentAction(BaseAction):
                     "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
                 }
             if await is_day_closed(db, bid, day):
-                alts = await next_free_slots(db, bid, dur_minutes, from_day=day)
+                alts = await next_free_slots(
+                    db, bid, dur_minutes, from_day=day, prestation_ids=presta_ids
+                )
                 return {
                     "success": False,
                     "operation": "reschedule",
@@ -160,19 +182,22 @@ class ManageAppointmentAction(BaseAction):
                     "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
                 }
             new_end = new_start + duration
-            clash = (
-                await db.execute(
-                    select(Appointment.id).where(
-                        Appointment.business_id == bid,
-                        Appointment.id != appt.id,
-                        Appointment.status.notin_(["cancelled"]),
-                        Appointment.start_at < new_end,
-                        Appointment.end_at > new_start,
-                    )
+            # même coiffeur si possible, sinon un autre
+            pick = await find_free_staff(
+                db,
+                bid,
+                new_start,
+                new_end,
+                business=business,
+                prestation_ids=presta_ids,
+                prefer_staff_id=appt.staff_id,
+                exclude_appointment_id=appt.id,
+                pool=pool,
+            )
+            if not pick.free:
+                alts = await next_free_slots(
+                    db, bid, dur_minutes, from_day=day, prestation_ids=presta_ids
                 )
-            ).first()
-            if clash is not None:
-                alts = await next_free_slots(db, bid, dur_minutes, from_day=day)
                 return {
                     "success": False,
                     "operation": "reschedule",
@@ -181,6 +206,12 @@ class ManageAppointmentAction(BaseAction):
                     "alternatives_text": format_slots_fr(alts, tz, with_day=True) if alts else "",
                 }
 
+            old_staff_id = appt.staff_id
+            new_staff = pick.staff
+            new_staff_name = new_staff.display_name if new_staff else None
+            staff_changed = new_staff is not None and new_staff.id != old_staff_id
+            if new_staff is not None:
+                appt.staff_id = new_staff.id
             appt.start_at = new_start
             appt.end_at = appt.start_at + duration
             # L'ancien créneau se libère → on prévient la liste d'attente.
@@ -203,9 +234,14 @@ class ManageAppointmentAction(BaseAction):
                 f"{_WD[new_local.weekday()]} {new_local.day:02d}/{new_local.month:02d} "
                 f"à {new_local.strftime('%Hh%M')}"
             )
+            # nouveau coiffeur : on le dit
+            if staff_changed and old_staff_id is not None:
+                new_when += f" avec {new_staff_name}"
             return {
                 "success": True,
                 "operation": "reschedule",
                 "when": new_when,
                 "service": appt.title,
+                "staff_name": new_staff_name,
+                "staff_changed": staff_changed,
             }
