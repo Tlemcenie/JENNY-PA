@@ -10,6 +10,7 @@ from jenny.domain.models.audit_log import AuditLog
 from jenny.domain.models.business import Business
 from jenny.domain.models.business_closure import BusinessClosure
 from jenny.domain.models.business_member import BusinessMember
+from jenny.domain.models.campaign import Campaign, CampaignRecipient, SlotOffer
 from jenny.domain.models.canned_response import CannedResponse
 from jenny.domain.models.channel_account import ChannelAccount
 from jenny.domain.models.conversation import Conversation
@@ -44,6 +45,8 @@ __all__ = [
     "Business",
     "BusinessClosure",
     "BusinessMember",
+    "Campaign",
+    "CampaignRecipient",
     "CannedResponse",
     "ChannelAccount",
     "Conversation",
@@ -64,6 +67,7 @@ __all__ = [
     "Prestation",
     "Quote",
     "Review",
+    "SlotOffer",
     "Staff",
     "StaffSkill",
     "SupportTicket",
