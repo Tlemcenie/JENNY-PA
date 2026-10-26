@@ -39,6 +39,7 @@ import { RelativeTime } from "@/components/ui/relative-time";
 import { CopyButton } from "@/components/ui/copy-button";
 import { ActivityTimeline } from "@/components/customer/activity-timeline";
 import { ScheduleAppointmentDialog } from "@/components/customer/schedule-appointment-dialog";
+import { MarketingOptOut } from "@/components/customer/marketing-opt-out";
 import { useFocusTrap } from "@/lib/use-focus-trap";
 import {
   cn,
@@ -684,6 +685,8 @@ export function CustomerPanel({ customerId, onClose, onOpenConversation }: Custo
                       </h3>
                     </div>
                     <div className="space-y-1.5">
+                      {/* refus des offres (STOP) */}
+                      <MarketingOptOut customerId={data.id} />
                       <button
                         onClick={handleExport}
                         disabled={exporting}

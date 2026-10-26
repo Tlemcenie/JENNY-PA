@@ -22,6 +22,8 @@ export interface SampleCustomer {
   no_shows: number;
   reachable: boolean;
   eligible: boolean;
+  // a répondu STOP
+  opt_out: boolean;
 }
 
 export interface SegmentPreview extends Segment {
@@ -41,7 +43,7 @@ export interface Campaign {
   segment: SegmentKey;
   segment_label: string;
   message: string;
-  status: "sending" | "sent" | string;
+  status: "sending" | "sent" | "failed" | string;
   created_at: string;
   created_by: string | null;
   target_count: number;
@@ -122,12 +124,28 @@ export function runGapFiller(): Promise<GapRun> {
   return request<GapRun>("/api/v1/campaigns/gaps/run", { method: "POST" });
 }
 
-export function setMarketingOptOut(
-  customerId: string,
-  optOut: boolean
-): Promise<{ customer_id: string; opt_out: boolean; opt_out_at: string | null }> {
-  return request(`/api/v1/campaigns/opt-out/${customerId}`, {
+export interface OptOutState {
+  customer_id: string;
+  opt_out: boolean;
+  opt_out_at: string | null;
+}
+
+export interface OptOutList {
+  total: number;
+  customers: { id: string; name: string; opt_out_at: string }[];
+}
+
+export function getMarketingOptOut(customerId: string): Promise<OptOutState> {
+  return request<OptOutState>(`/api/v1/campaigns/opt-out/${customerId}`);
+}
+
+export function setMarketingOptOut(customerId: string, optOut: boolean): Promise<OptOutState> {
+  return request<OptOutState>(`/api/v1/campaigns/opt-out/${customerId}`, {
     method: "PUT",
     body: { opt_out: optOut },
   });
+}
+
+export function listOptOuts(limit = 50): Promise<OptOutList> {
+  return request<OptOutList>(`/api/v1/campaigns/opt-outs?limit=${limit}`);
 }
