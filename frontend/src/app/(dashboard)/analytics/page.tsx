@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/shared/error-state";
 import { SatisfactionCard } from "@/components/dashboard/satisfaction-card";
 import { GapsCard } from "@/components/analytics/gaps-card";
+import { computeTrend } from "@/components/analytics/trend";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { channelLabel, cn } from "@/lib/utils";
 import { fadeInUp, staggerContainer, staggerItem, easeOutExpo } from "@/lib/motion";
@@ -50,16 +51,6 @@ const CHANNEL_COLORS: Record<string, string> = {
 
 function channelColor(channel: string): string {
   return CHANNEL_COLORS[channel] || "#7284A8";
-}
-
-// 2e moitié vs 1re
-function computeTrend(daily: DailyStat[]): number | null {
-  if (daily.length < 4) return null;
-  const mid = Math.floor(daily.length / 2);
-  const first = daily.slice(0, mid).reduce((s, d) => s + d.count, 0);
-  const second = daily.slice(mid).reduce((s, d) => s + d.count, 0);
-  if (first === 0) return null; // rien à comparer
-  return ((second - first) / first) * 100;
 }
 
 // jour le plus chargé
@@ -313,12 +304,15 @@ export default function AnalyticsPage() {
                     <span
                       className={cn(
                         "font-mono text-[13px] font-bold",
-                        trend >= 0 ? "text-jenny-success" : "text-jenny-error"
+                        trend.pct >= 0 ? "text-jenny-success" : "text-jenny-error"
                       )}
-                      title="Deuxième moitié de la période comparée à la première"
+                      title={`Jours complets seulement : les ${trend.span} derniers comparés aux ${trend.span} d'avant`}
                     >
-                      {trend >= 0 ? "+" : ""}
-                      {trend.toFixed(0)}% <span className="font-normal text-jenny-text-secondary">sur la période</span>
+                      {trend.pct >= 0 ? "+" : ""}
+                      {trend.pct}%{" "}
+                      <span className="font-normal text-jenny-text-secondary">
+                        {trend.span} derniers jours vs {trend.span} d&apos;avant
+                      </span>
                     </span>
                   )}
                 </div>
