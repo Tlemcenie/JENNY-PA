@@ -11,7 +11,6 @@ import { DensityToggle } from "@/components/ui/density-toggle";
 import { LanguageSwitcher } from "@/components/ui/language-switcher";
 import { NotificationBell } from "@/components/layout/notification-bell";
 import { UserMenu } from "@/components/layout/user-menu";
-import { LlmSwitcher } from "@/components/layout/llm-switcher";
 
 // titre par route
 const pageTitleKeys: Record<string, string> = {
@@ -30,9 +29,7 @@ const pageTitleKeys: Record<string, string> = {
   "/stats": "nav.stats",
   "/channels": "nav.channels",
   "/efficacy": "nav.efficacy",
-  "/lab": "nav.lab",
   "/customers": "nav.customers",
-  "/messages": "nav.messages",
   "/profile": "nav.settings",
 };
 
@@ -92,7 +89,6 @@ export function Topbar() {
         {/* Réglages secondaires : masqués sur mobile (évite le débordement de la
             barre à 375px), toujours accessibles dès `sm`. */}
         <span className="hidden sm:flex items-center gap-2">
-          <LlmSwitcher />
         </span>
         <NotificationBell />
         <span className="hidden sm:flex items-center gap-2">

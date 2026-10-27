@@ -19,7 +19,6 @@ import {
   Lightbulb,
   Megaphone,
   Gauge,
-  Cpu,
   Scissors,
   CalendarDays,
   Shield,
@@ -67,7 +66,6 @@ const mainItems: NavItem[] = [
 // vitrine technique, repliée
 const labItems: NavItem[] = [
   { href: "/efficacy", icon: Gauge, labelKey: "nav.efficacy" },
-  { href: "/lab", icon: Cpu, labelKey: "nav.lab" },
 ];
 
 // section compte

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { BarChart3, Building2, Cpu, ScrollText, Users, X } from "lucide-react";
+import { BarChart3, Building2, ScrollText, Users, X } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
@@ -31,18 +31,16 @@ import { OverviewTab } from "@/components/admin/overview-tab";
 import { BusinessesTab } from "@/components/admin/businesses-tab";
 import { UsersTab } from "@/components/admin/users-tab";
 import { AuditTab } from "@/components/admin/audit-tab";
-import { PlatformBrainCard } from "@/components/admin/platform-brain-card";
 
 // console super-admin plateforme
 
-type TabId = "overview" | "businesses" | "users" | "audit" | "brain";
+type TabId = "overview" | "businesses" | "users" | "audit";
 
 const TABS: AdminTab<TabId>[] = [
   { id: "overview", label: "Vue d'ensemble", icon: BarChart3 },
   { id: "businesses", label: "Entreprises", icon: Building2 },
   { id: "users", label: "Comptes", icon: Users },
   { id: "audit", label: "Journal d'audit", icon: ScrollText },
-  { id: "brain", label: "Cerveau plateforme", icon: Cpu },
 ];
 
 const TAB_INDEX: Record<TabId, number> = {
@@ -50,7 +48,6 @@ const TAB_INDEX: Record<TabId, number> = {
   businesses: 1,
   users: 2,
   audit: 3,
-  brain: 4,
 };
 
 export default function AdminPage() {
@@ -240,7 +237,6 @@ export default function AdminPage() {
                   />
                 )}
                 {tab === "audit" && <AuditTab />}
-                {tab === "brain" && <PlatformBrainCard />}
               </motion.div>
             </AnimatePresence>
           </div>
