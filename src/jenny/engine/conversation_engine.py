@@ -1147,7 +1147,7 @@ class ConversationEngine:
 
         # dates/heures en absolu
         _svc_choices: list[str] = []
-        if intent in ("appointment", "manage_appointment") and not _stays:
+        if intent in ("appointment", "manage_appointment", "planning") and not _stays:
             msg = msg_text.strip()
             # sans la formule d'au revoir
             _day = parse_fr_date(_when_txt, today=today)
