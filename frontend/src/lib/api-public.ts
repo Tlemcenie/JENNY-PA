@@ -1,5 +1,6 @@
 import { cache } from "react";
 import type { PublicBookingInfoFull } from "./api-staff";
+import { dayWindow } from "./salon-hours";
 
 // lecture serveur de la page publique
 
@@ -76,27 +77,6 @@ const DAYS: Record<string, string> = {
   sat: "Saturday",
   sun: "Sunday",
 };
-
-export const DAY_LABELS: [string, string][] = [
-  ["mon", "Lundi"],
-  ["tue", "Mardi"],
-  ["wed", "Mercredi"],
-  ["thu", "Jeudi"],
-  ["fri", "Vendredi"],
-  ["sat", "Samedi"],
-  ["sun", "Dimanche"],
-];
-
-const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
-
-/** Plage valide ou null. */
-export function dayWindow(info: PublicBookingInfo, key: string): [string, string] | null {
-  const w = info.business_hours?.[key];
-  if (!Array.isArray(w) || w.length !== 2) return null;
-  const [open, close] = w;
-  if (!HHMM.test(open) || !HHMM.test(close) || close <= open) return null;
-  return [open, close];
-}
 
 /** Données structurées HairSalon. */
 export function hairSalonJsonLd(info: PublicBookingInfo, url: string): Record<string, unknown> {

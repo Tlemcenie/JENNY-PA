@@ -144,8 +144,10 @@ export default function OnboardingPage() {
   const [prestaError, setPrestaError] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [seedInfo, setSeedInfo] = useState<string | null>(null);
-  // fiches kb déjà créées
+  // modèle chargé ici
   const [seededKb, setSeededKb] = useState(false);
+  // fiches à vérifier
+  const [kbCheck, setKbCheck] = useState(false);
 
   // étape 4
   const [channels, setChannels] = useState<ChannelStatus[] | null>(null);
@@ -253,13 +255,16 @@ export default function OnboardingPage() {
   async function handleSeed() {
     setSeeding(true);
     setSeedInfo(null);
+    setKbCheck(false);
     try {
       const r = await seedCoiffeurTemplate();
-      if (r.knowledge > 0) setSeededKb(true);
+      setSeededKb(true);
+      // 0 fiche : rien de prouvé
+      setKbCheck(r.knowledge === 0);
       const kbNote =
         r.knowledge > 0
-          ? ` ${r.knowledge} fiche${r.knowledge > 1 ? "s" : ""} tirée${r.knowledge > 1 ? "s" : ""} de vos réglages (horaires, acompte, rappels…) ajoutée${r.knowledge > 1 ? "s" : ""} à la base : relisez-les.`
-          : "";
+          ? ` ${r.knowledge} fiche${r.knowledge > 1 ? "s" : ""} tirée${r.knowledge > 1 ? "s" : ""} de vos réglages (horaires, acompte, rappels…) ajoutée${r.knowledge > 1 ? "s" : ""} ou mise${r.knowledge > 1 ? "s" : ""} à jour dans la base : relisez-les.`
+          : " Aucune fiche n'a été ajoutée ni mise à jour dans la base de Jenny (horaires, acompte, rappels…) : vérifiez-la.";
       setSeedInfo(
         r.prestations > 0
           ? `${r.prestations} prestations ajoutées. Ajustez les prix quand vous voulez.${kbNote}`
@@ -292,11 +297,23 @@ export default function OnboardingPage() {
       setSeeding(true);
       try {
         // relancer = fiches à jour
-        await seedCoiffeurTemplate();
-        setSeedInfo("Horaires enregistrés : la fiche « Horaires » de Jenny est à jour.");
+        const r = await seedCoiffeurTemplate();
+        // succès seulement si prouvé
+        if (r.knowledge > 0) {
+          setKbCheck(false);
+          setSeedInfo(
+            `Horaires enregistrés : ${r.knowledge} fiche${r.knowledge > 1 ? "s" : ""} de Jenny mise${r.knowledge > 1 ? "s" : ""} à jour avec vos nouveaux horaires.`
+          );
+        } else {
+          setKbCheck(true);
+          setSeedInfo(
+            "Horaires enregistrés, mais Jenny n'a pas pu confirmer la mise à jour de sa fiche « Horaires » : vérifiez-la dans la base de connaissances."
+          );
+        }
       } catch {
+        setKbCheck(true);
         setSeedInfo(
-          "Vos horaires ont changé après le chargement du modèle : mettez à jour la fiche « Horaires » dans la base de connaissances."
+          "Horaires enregistrés, mais la fiche « Horaires » de Jenny n'a pas pu être mise à jour : corrigez-la dans la base de connaissances."
         );
       } finally {
         setSeeding(false);
@@ -496,6 +513,14 @@ export default function OnboardingPage() {
                     {seedInfo && (
                       <p role="status" className="text-[13px] text-jenny-text-secondary">
                         {seedInfo}
+                        {kbCheck && (
+                          <>
+                            {" "}
+                            <Link href="/knowledge" className="text-jenny-coral font-semibold hover:underline">
+                              Ouvrir la base de connaissances
+                            </Link>
+                          </>
+                        )}
                       </p>
                     )}
                     <p className="text-[12.5px] text-jenny-text-secondary">

@@ -151,8 +151,11 @@ export function staffCanDo(member: PublicStaff, prestationId: string | null): bo
   return member.prestation_ids.includes(prestationId);
 }
 
+// toujours frais, jamais du cache
 export async function getPublicBookingInfo(slug: string): Promise<PublicBookingInfoFull> {
-  return request<PublicBookingInfoFull>(`/api/v1/public/booking/${encodeURIComponent(slug)}`);
+  return request<PublicBookingInfoFull>(`/api/v1/public/booking/${encodeURIComponent(slug)}`, {
+    cache: "no-store",
+  });
 }
 
 export async function getPublicSlots(

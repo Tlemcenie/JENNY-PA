@@ -248,8 +248,8 @@ export default function TeamPage() {
         working_hours[d.key] = row.on ? [row.start, row.end] : null;
       }
     }
-    // section pas touchée : on garde
-    const sendSkills = !editing || form.skillsTouched;
+    // pas touchée : on garde, sauf catalogue vide
+    const sendSkills = !editing || form.skillsTouched || catalogueSize === 0;
     // catalogue vraiment vide : fait tout
     const allServices = form.allServices || catalogueSize === 0;
     if (sendSkills && !allServices && !form.prestationIds.some((id) => prestaName[id])) {
@@ -400,6 +400,7 @@ export default function TeamPage() {
                   member={m}
                   load={load[m.id]}
                   prestaName={prestaName}
+                  emptyCatalogue={catalogueSize === 0}
                   busy={busyId === m.id}
                   onEdit={() => openEdit(m)}
                   onToggle={() => toggleActive(m)}
@@ -486,14 +487,18 @@ export default function TeamPage() {
                     <div className="text-[12.5px] font-semibold text-jenny-text mb-1">Prestations réalisées</div>
                     {catalogueSize === 0 ? (
                       <p className="text-[12.5px] text-jenny-text-secondary">
-                        Aucune prestation dans le catalogue : ce coiffeur fera tout.{" "}
+                        {editing && !doesEverything(editing)
+                          ? "Aucune prestation dans le catalogue : en enregistrant, ce coiffeur fera tout."
+                          : "Aucune prestation dans le catalogue : ce coiffeur fera tout."}{" "}
                         <Link href="/prestations" className="text-jenny-coral font-semibold hover:underline">
                           Créer le catalogue
                         </Link>
                       </p>
                     ) : (
                       <p className="text-[12.5px] text-jenny-text-secondary">
-                        Aucune prestation active pour l&apos;instant : ses prestations restent inchangées.{" "}
+                        {editing
+                          ? "Aucune prestation active pour l'instant : ses prestations restent inchangées."
+                          : "Aucune prestation active pour l'instant : il pourra tout faire, à affiner quand le catalogue sera actif."}{" "}
                         <Link href="/prestations" className="text-jenny-coral font-semibold hover:underline">
                           Voir le catalogue
                         </Link>
@@ -635,6 +640,7 @@ function StaffCard({
   member,
   load,
   prestaName,
+  emptyCatalogue,
   busy,
   onEdit,
   onToggle,
@@ -643,6 +649,7 @@ function StaffCard({
   member: StaffMember;
   load?: StaffLoad;
   prestaName: Record<string, string>;
+  emptyCatalogue: boolean;
   busy: boolean;
   onEdit: () => void;
   onToggle: () => void;
@@ -696,10 +703,14 @@ function StaffCard({
           // prestations supprimées : à revoir
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-jenny-warning/12 text-jenny-warning text-[11.5px] font-medium"
-            title="Ses prestations ont été supprimées ou désactivées : Jenny ne lui donne plus de RDV pour une prestation précise."
+            title={
+              emptyCatalogue
+                ? "Catalogue vide : ouvrez sa fiche et enregistrez, il fera tout."
+                : "Ses prestations ont été supprimées ou désactivées : Jenny ne lui donne plus de RDV pour une prestation précise."
+            }
           >
             <AlertTriangle className="w-3 h-3" />
-            Aucune prestation, à compléter
+            {emptyCatalogue ? "À revoir : catalogue vide" : "Aucune prestation, à compléter"}
           </span>
         ) : (
           skills.map((s) => (
