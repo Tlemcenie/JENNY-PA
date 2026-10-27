@@ -31,7 +31,11 @@ class BookAppointmentDBAction(BaseAction):
         business_id = params.get("business_id")
         if not business_id:
             # pas de contexte business
-            return {"success": False, "message": "Contexte business absent.", "missing": list(missing)}
+            return {
+                "success": False,
+                "message": "Contexte business absent.",
+                "missing": list(missing),
+            }
         if missing:
             return {
                 "success": False,
@@ -71,6 +75,14 @@ class BookAppointmentDBAction(BaseAction):
 
     async def _book(self, bid: UUID, params: dict) -> dict:
         from sqlalchemy import func, select
+
+        # fil de la conversation
+        try:
+            conv_id = (
+                UUID(str(params["conversation_id"])) if params.get("conversation_id") else None
+            )
+        except ValueError:
+            conv_id = None
 
         from jenny.db.session import async_session_factory
         from jenny.domain.models.appointment import Appointment
@@ -160,7 +172,12 @@ class BookAppointmentDBAction(BaseAction):
                 same_day = bool(slots)
                 if not slots:
                     slots = await next_free_slots(
-                        db, bid, duration, from_day=day, prestation_ids=presta_ids, staff_id=wanted_id
+                        db,
+                        bid,
+                        duration,
+                        from_day=day,
+                        prestation_ids=presta_ids,
+                        staff_id=wanted_id,
                     )
                 if not slots:
                     return {
@@ -277,6 +294,8 @@ class BookAppointmentDBAction(BaseAction):
                 return Appointment(
                     business_id=bid,
                     customer_id=customer_id,
+                    # pour retrouver l'acompte
+                    conversation_id=conv_id,
                     staff_id=staff.id if staff else None,
                     title=f"{service_name}",
                     # formaté depuis le datetime réservé
@@ -400,7 +419,9 @@ class BookAppointmentDBAction(BaseAction):
             # notif live → cloche + calendrier
             from jenny.core.events import publish_notification_event
 
-            publish_notification_event(bid, kind="booking", title="Nouveau rendez-vous pris par Jenny")
+            publish_notification_event(
+                bid, kind="booking", title="Nouveau rendez-vous pris par Jenny"
+            )
 
             # nom manquant → demandé après
             ask_name = customer_id is None

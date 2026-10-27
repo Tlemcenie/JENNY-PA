@@ -119,18 +119,26 @@ def _day_slots(b: Business, day: date, duration_min: int) -> list[datetime]:
 
 
 async def _load_active_business(db, slug: str) -> Business:
-    b = (
-        await db.execute(select(Business).where(Business.slug == slug))
-    ).scalar_one_or_none()
+    b = (await db.execute(select(Business).where(Business.slug == slug))).scalar_one_or_none()
     if b is None or not b.is_active:
         raise HTTPException(404, "Page de réservation introuvable")
     return b
 
 
-def _check_staff_choice(pool: StaffPool, staff_id: UUID | None) -> None:
-    """Le coiffeur choisi doit être actif."""
-    if staff_id is not None and pool.has_staff and pool.get(staff_id) is None:
+def _check_staff_choice(
+    pool: StaffPool, staff_id: UUID | None, skills: list[UUID] | None = None
+) -> None:
+    """Coiffeur actif et compétent."""
+    if staff_id is None or not pool.has_staff:
+        return
+    member = pool.get(staff_id)
+    if member is None:
         raise HTTPException(400, "Ce coiffeur n'est plus disponible, rechargez la page")
+    if skills and not pool.can_do(staff_id, skills):
+        raise HTTPException(
+            400,
+            f"{member.display_name} ne réalise pas cette prestation, choisissez un autre coiffeur",
+        )
 
 
 async def _load_prestation(
@@ -412,7 +420,7 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
 
     tz = _business_tz(b)
     pool = await load_staff_pool(db, b.id)
-    _check_staff_choice(pool, body.staff_id)
+    _check_staff_choice(pool, body.staff_id, skills)
     if await is_day_closed(db, b.id, start.astimezone(tz).date(), business=b):
         raise HTTPException(400, "Le salon est fermé ce jour-là, choisissez un autre jour")
     # solo : horaires du salon
@@ -422,7 +430,14 @@ async def booking_book(slug: str, body: BookingRequest, db: DbSession) -> Bookin
     async def _pick() -> Staff | None:
         """Par coiffeur s'il y en a, sinon tout le salon."""
         pick = await find_free_staff(
-            db, b.id, start, end, business=b, prestation_ids=skills, staff_id=body.staff_id, pool=pool
+            db,
+            b.id,
+            start,
+            end,
+            business=b,
+            prestation_ids=skills,
+            staff_id=body.staff_id,
+            pool=pool,
         )
         if not pick.free:
             raise HTTPException(409, _TAKEN)

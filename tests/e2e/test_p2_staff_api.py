@@ -427,7 +427,9 @@ class TestPublicBooking:
                 "staff_id": marc["id"],
             },
         )
-        assert r.status_code == 409
+        # motif clair, pas « créneau pris »
+        assert r.status_code == 400
+        assert "ne réalise pas cette prestation" in r.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_booking_pushes_live_event(
