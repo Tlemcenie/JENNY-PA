@@ -31,13 +31,17 @@ class CustomerAddress(Base, TimestampMixin):
         nullable=False,
         index=True,
     )
-    label: Mapped[str | None] = mapped_column(String(100), default=None)
+    label: Mapped[str | None] = mapped_column(
+        String(100), default=None, comment="billing, shipping, home"
+    )
     line1: Mapped[str] = mapped_column(String(255), nullable=False)
     line2: Mapped[str | None] = mapped_column(String(255), default=None)
     city: Mapped[str | None] = mapped_column(String(120), default=None)
     region: Mapped[str | None] = mapped_column(String(120), default=None)
     postal_code: Mapped[str | None] = mapped_column(String(32), default=None)
-    country: Mapped[str | None] = mapped_column(String(2), default=None)
+    country: Mapped[str | None] = mapped_column(
+        String(2), default=None, comment="ISO 3166-1 alpha-2"
+    )
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     business = relationship("Business", back_populates="customer_addresses")

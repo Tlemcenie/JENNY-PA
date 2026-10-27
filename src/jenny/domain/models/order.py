@@ -31,10 +31,14 @@ class Order(Base, TimestampMixin):
         default=None,
         index=True,
     )
-    reference: Mapped[str | None] = mapped_column(String(120), default=None)
+    reference: Mapped[str | None] = mapped_column(
+        String(120), default=None, comment="Référence métier unique par business"
+    )
     status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="EUR", nullable=False)
-    total_amount_minor: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    total_amount_minor: Mapped[int | None] = mapped_column(
+        BigInteger, default=None, comment="Montant total en plus petite unité"
+    )
     tax_amount_minor: Mapped[int | None] = mapped_column(BigInteger, default=None)
     metadata_: Mapped[dict | None] = mapped_column("metadata_", JSON, default=None)
 

@@ -45,7 +45,9 @@ class CustomerTransaction(Base, TimestampMixin):
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="EUR", nullable=False)
     status: Mapped[str] = mapped_column(String(40), default="pending", nullable=False)
-    provider: Mapped[str | None] = mapped_column(String(40), default=None)
+    provider: Mapped[str | None] = mapped_column(
+        String(40), default=None, comment="stripe, paypal, manual, …"
+    )
     external_id: Mapped[str | None] = mapped_column(String(255), default=None)
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
