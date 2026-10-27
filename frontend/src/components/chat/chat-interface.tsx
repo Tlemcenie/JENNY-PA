@@ -20,28 +20,38 @@ const QUICK_SUGGESTIONS = [
 
 /** quick-replies contextuelles */
 function deriveQuickReplies(text: string, needsClarification?: boolean): string[] {
-  const t = text.toLowerCase();
-  const asks = text.includes("?");
-  if (!asks) return [];
-  // question prestation
+  // dernière question seulement
+  const asks = text.trim().split(/(?<=[.!?])\s+/).filter((p) => p.includes("?"));
+  const q = asks[asks.length - 1] ?? "";
+  if (!q) return [];
+  const t = q.toLowerCase();
+  // réponse libre attendue
+  if (/\b(nom|prénom|téléphone|numéro|mail|adresse|naissance)\b/.test(t)) return [];
+  // créneaux proposés
+  const pick = /lequel|laquelle|lesquels|quel créneau|vous convient|préférez/.test(t);
+  const hours: string[] = [];
+  for (const m of (pick ? text : q).toLowerCase().matchAll(/\b(\d{1,2})\s*h\s*(\d{2})?/g)) {
+    const label = `${Number(m[1])}h${m[2] && m[2] !== "00" ? m[2] : ""}`;
+    if (!hours.includes(label)) hours.push(label);
+  }
+  if (hours.length >= 2) return hours.slice(0, 4);
+  const yesNo =
+    /\b(vous voulez|voulez-vous|souhaitez-vous|est-ce que|[çc]a vous (va|convient|dit|tente)|je vous (réserve|note|cale|inscris|bloque)|on (part|réserve|cale) sur|c'est bon pour|d'accord)\b/.test(
+      t
+    );
+  if (yesNo && !/\bquel/.test(t) && q.length < 120) return ["Oui", "Non"];
   const serviceWords = [
     "coupe", "couleur", "coloration", "balayage", "brushing", "mèches",
     "soin", "prestation", "réaliser", "coiffure",
   ];
   const serviceHits = serviceWords.filter((w) => t.includes(w)).length;
-  // priorité au jour/heure
   const asksDay = /quel\s+jour|quand|quelle\s+date|jour vous arrange|disponib|quel moment vous/.test(t);
   const asksTime = /quelle?\s+heure|à quelle heure|quel\s+moment|créneau|plutôt le matin|après-?midi/.test(t);
   if (!asksDay && !asksTime && (serviceHits >= 2 || /quelle?\s+(prestation|service|coiffure)|que souhaitez/.test(t)))
     return ["Une coupe", "Une couleur", "Un balayage"];
   if (asksTime && !asksDay) return ["En matinée", "L'après-midi", "En fin de journée"];
   if (asksDay) return ["Aujourd'hui", "Demain", "Ce samedi"];
-  // question oui/non
-  const yesNo =
-    /\b(vous voulez|voulez-vous|souhaitez-vous|est-ce que|[çc]a vous (va|convient|dit|tente)|je vous (réserve|note|cale|inscris|bloque)|on (part|réserve|cale) sur|c'est bon pour|d'accord)\b/.test(
-      t
-    );
-  if ((yesNo || needsClarification) && text.trim().length < 120) return ["Oui", "Non"];
+  if (needsClarification && q.length < 120) return ["Oui", "Non"];
   return [];
 }
 

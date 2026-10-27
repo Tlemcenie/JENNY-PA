@@ -409,11 +409,40 @@ _YES_NO = re.compile(
 )
 
 
+# réponse libre attendue
+_ASKS_FREE = re.compile(r"\b(nom|prénom|téléphone|numéro|mail|adresse|naissance)\b")
+_HOUR_IN = re.compile(r"\b(\d{1,2})\s*h\s*(\d{2})?")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+# « lequel vous convient ? »
+_PICK_RE = re.compile(r"lequel|laquelle|lesquels|quel créneau|vous convient|préférez")
+
+
+def _last_question(text: str) -> str:
+    """Dernière phrase avec « ? »."""
+    asks = [p for p in _SENTENCE_END.split(text.strip()) if "?" in p]
+    return asks[-1] if asks else ""
+
+
 def quick_replies(text: str, needs_clarification: bool = False) -> list[str]:
     """Réponses rapides selon la question."""
-    if "?" not in text:
+    q = _last_question(text or "")
+    if not q:
         return []
-    t = text.lower()
+    t = q.lower()
+    if _ASKS_FREE.search(t):
+        return []
+    # créneaux proposés : on les offre
+    pick = _PICK_RE.search(t)
+    hours = []
+    for h, m in _HOUR_IN.findall((text if pick else q).lower()):
+        label = f"{int(h)}h" + (m if m and m != "00" else "")
+        if label not in hours:
+            hours.append(label)
+    if len(hours) >= 2:
+        return hours[:4]
+    # oui/non avant le reste
+    if _YES_NO.search(t) and not re.search(r"\bquel", t) and len(q) < 120:
+        return ["Oui", "Non"]
     hits = sum(1 for w in _SERVICE_WORDS if w in t)
     day = bool(_ASKS_DAY.search(t))
     hour = bool(_ASKS_TIME.search(t))
@@ -423,7 +452,7 @@ def quick_replies(text: str, needs_clarification: bool = False) -> list[str]:
         return ["En matinée", "L'après-midi", "En fin de journée"]
     if day:
         return ["Aujourd'hui", "Demain", "Ce samedi"]
-    if (_YES_NO.search(t) or needs_clarification) and len(text.strip()) < 120:
+    if (_YES_NO.search(t) or needs_clarification) and len(q) < 120:
         return ["Oui", "Non"]
     return []
 
