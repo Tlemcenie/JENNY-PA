@@ -57,7 +57,10 @@ async def test_whatsapp_threads_customer_id_to_engine(db_tables: None, monkeypat
         s.add(Business(id=bid, name="Salon", slug=f"s-{uuid4().hex[:6]}"))
 
     fake = _FakeEngine()
-    monkeypatch.setattr(wh, "_get_engine", lambda: fake)
+    async def _engine():
+        return fake
+
+    monkeypatch.setattr(wh, "_get_engine", _engine)
 
     async def _no_send(recipient: str, content: str) -> bool:
         return True

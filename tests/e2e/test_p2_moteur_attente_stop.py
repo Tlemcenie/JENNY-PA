@@ -224,7 +224,10 @@ class TestStop:
         biz = await _seed()
         eng = build_engine(state_manager=StateManager(redis_url="redis://localhost:1/0"))
         eng.response_generator = None
-        monkeypatch.setattr(wh, "_get_engine", lambda: eng)
+        async def _engine():
+            return eng
+
+        monkeypatch.setattr(wh, "_get_engine", _engine)
         sent: list[str] = []
 
         async def _send(recipient: str, content: str, **_kw) -> bool:
