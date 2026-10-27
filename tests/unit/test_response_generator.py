@@ -290,3 +290,19 @@ def test_ligne_de_fait_lineaire() -> None:
     t = time.perf_counter()
     rewrite_fact_line("RDV réservé — prestation : " + "a " * 5000 + "· jour : x")
     assert time.perf_counter() - t < 0.05
+
+
+def test_fausse_resa_est_reservee() -> None:
+    """« est réservée » sans résa : retiré."""
+    from jenny.engine.response_generator import strip_false_booking_confirmation
+
+    txt = (
+        "Parfait, votre coupe femme est réservée samedi 31 octobre à 11 h au nom de "
+        "Julie Bernard. Vous confirmez ?"
+    )
+    out = strip_false_booking_confirmation(txt, booking_confirmed=False)
+    assert "réservée" not in out
+    assert "réservée" in strip_false_booking_confirmation(txt, booking_confirmed=True)
+    # créneau déjà pris : on garde
+    pris = "Désolée, ce créneau est déjà réservé. Je vous propose 14h ou 15h ?"
+    assert strip_false_booking_confirmation(pris, booking_confirmed=False) == pris

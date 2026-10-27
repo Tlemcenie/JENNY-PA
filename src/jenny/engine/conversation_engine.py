@@ -875,8 +875,13 @@ class ConversationEngine:
         _has_when = False
         if not _blocks_appt_override:
             _has_when = bool(parse_fr_date(_when_txt, today=today) or parse_fr_time(_when_txt))
+        # « une coupe » compte aussi
         _has_service = bool(
-            request.catalog_services and match_catalog_services(_msg_txt, request.catalog_services)
+            request.catalog_services
+            and (
+                match_catalog_services(_msg_txt, request.catalog_services)
+                or ambiguous_heads(_msg_txt, request.catalog_services)
+            )
         )
         _strong_appt = bool(_STRONG_APPOINTMENT_RE.search(_msg_txt))
         _wants_appt = _strong_appt or (_has_when and _has_service)
@@ -996,8 +1001,23 @@ class ConversationEngine:
             if _keep_days and _slot_in_msg:
                 real_closing = False
             hard_interrupt = intent in _INTERRUPTING_INTENTS or real_closing
+            # « femme » : précise la prestation
+            _svc_slot = state.slots.get("service")
+            _gives_service = bool(
+                state.pending_intent == "appointment"
+                and not (_svc_slot and _svc_slot.filled)
+                and request.catalog_services
+                and "?" not in msg_l
+                and not _PRICE_SIGNAL_RE.search(msg_l)
+                and match_catalog_services(
+                    " ".join([*state.user_messages_since_reset(6), msg_l]),
+                    request.catalog_services,
+                )
+            )
             # complète une prise de rdv ?
-            provides_appt_info = state.pending_intent == "appointment" and _slot_in_msg
+            provides_appt_info = state.pending_intent == "appointment" and (
+                _slot_in_msg or _gives_service
+            )
             # question d'info pendant un rdv
             info_interrupt = intent in _INFO_REQUEST_INTENTS and not provides_appt_info
             real_complaint = intent == "complaint" and bool(_COMPLAINT_SIGNAL_RE.search(msg_l))

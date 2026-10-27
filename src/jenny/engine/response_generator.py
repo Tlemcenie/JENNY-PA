@@ -374,7 +374,11 @@ _BOOKING_CONFIRM_PHRASE_RE = re.compile(
     r"|je vous (?:attends|note|r[ée]serve|inscris|cale|bloque|re[çc]ois|accueille)"
     r"|(?:rendez-vous|rdv)\s+(?:est\s+)?(?:bien\s+)?"
     r"(?:confirm[ée]s?|not[ée]s?|r[ée]serv[ée]s?|pris|enregistr[ée]s?|valid[ée]s?|bloqu[ée]s?)"
-    r"|c'est (?:not[ée]|bon|r[ée]serv[ée]|valid[ée]|confirm[ée]))",
+    r"|c'est (?:not[ée]|bon|r[ée]serv[ée]|valid[ée]|confirm[ée])"
+    # « votre coupe est réservée »
+    r"|\b(?:est|sont)\s+(?!d[ée]j[àa])(?:bien\s+)?"
+    r"(?:r[ée]serv|confirm|enregistr|not|bloqu)[ée]e?s?\b"
+    r"|\b(?:j'ai|je vous ai)\s+(?:bien\s+)?(?:r[ée]serv|not|bloqu|enregistr|cal)[ée]e?s?\b)",
     re.I,
 )
 # jour ou heure explicite

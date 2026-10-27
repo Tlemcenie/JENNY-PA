@@ -821,3 +821,36 @@ class TestDebit:
         assert r.intent == "faq"
         # ~0.3 s d'inférence, boucle vivante
         assert ticks >= 10
+
+
+class TestCoupeAmbigue:
+    @pytest.mark.asyncio
+    async def test_coupe_puis_femme_reserve(self) -> None:
+        """« une coupe samedi 11h » puis « femme »."""
+        eng, acts = _engine()
+        chat = _Chat(eng)
+        r = await chat.say("Bonjour, je voudrais une coupe samedi à 11h")
+        assert r.intent == "appointment"
+        assert not acts["book"].calls or not acts["book"].calls[-1].get("service")
+        assert "coupe femme ou coupe homme" in (chat.state.clarification_instruction or "")
+        await chat.say("femme")
+        sent = acts["book"].calls[-1]
+        assert sent["service"] == "Coupe femme"
+        assert sent["time"] == "11:00"
+
+    @pytest.mark.asyncio
+    async def test_coupe_puis_femme_avec_la_tete(self) -> None:
+        """Pareil avec la vraie tête d'intention."""
+        from pathlib import Path
+
+        ckpt = Path("checkpoints/intent_head/head.npz")
+        if not ckpt.exists():
+            pytest.skip("checkpoint absent")
+        from ml.models.intent_head.predict import EmbeddingIntentPredictor
+
+        eng, acts = _engine(intent_predictor=EmbeddingIntentPredictor.from_checkpoint(ckpt))
+        chat = _Chat(eng)
+        r = await chat.say("Bonjour, je voudrais une coupe samedi à 11h")
+        assert r.intent == "appointment"
+        await chat.say("femme")
+        assert acts["book"].calls and acts["book"].calls[-1]["service"] == "Coupe femme"
