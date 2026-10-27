@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from jenny.agents.faq_agent import FAQ_MAX_DOCS, FAQ_MIN_SCORE, select_documents
 from jenny.core.logging import get_logger
+from jenny.engine.catalog_match import ambiguous_heads, find_services
 from jenny.engine.datetime_fr import (
     SOFT,
     VAGUE,
@@ -419,10 +420,7 @@ def _norm_txt(s: str) -> str:
 
 def match_catalog_services(message: str, services: list[str]) -> str | None:
     """Repère les prestations citées."""
-    if not message or not services:
-        return None
-    m = _norm_txt(message)
-    found = [svc for svc in services if (n := _norm_txt(svc)) and len(n) > 2 and n in m]
+    found = find_services(message, services)
     return " et ".join(found) if found else None
 
 
@@ -1148,6 +1146,7 @@ class ConversationEngine:
                 state.set_slot(entity_name, clean, entity_type=entity_name.upper())
 
         # dates/heures en absolu
+        _svc_choices: list[str] = []
         if intent in ("appointment", "manage_appointment") and not _stays:
             msg = msg_text.strip()
             # sans la formule d'au revoir
@@ -1167,6 +1166,9 @@ class ConversationEngine:
                     matched_svc = match_catalog_services(recent_user, request.catalog_services)
                 if matched_svc:
                     state.set_slot("service", matched_svc, entity_type="SERVICE")
+                else:
+                    # « une coupe » : on demande
+                    _svc_choices = ambiguous_heads(msg, request.catalog_services)
 
         # 4. agent
         state.phase = ConversationPhase.PROCESSING
@@ -1260,6 +1262,12 @@ class ConversationEngine:
                 missing[0].name,
                 "Demande poliment au client l'information manquante pour traiter sa demande.",
             )
+            if missing[0].name == "service" and _svc_choices:
+                state.clarification_instruction = (
+                    "Le client n'a pas précisé : demande-lui simplement s'il veut "
+                    + " ou ".join(c.lower() for c in _svc_choices)
+                    + ", en une phrase, sans proposer de créneau."
+                )
             needs_clarification = True
             clarification_reason = "slot_filling"
             # garde l'action en cours
