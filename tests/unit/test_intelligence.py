@@ -29,9 +29,7 @@ class TestLanguage:
 
 class TestClarification:
     def test_vague_message_triggers(self) -> None:
-        d = decide_clarification(
-            message_text="info", intent="general", confidence=0.3, entities={}
-        )
+        d = decide_clarification(message_text="info", intent="general", confidence=0.3, entities={})
         assert d.needs_clarification and d.reason == "too_vague"
 
     def test_missing_order_number_triggers(self) -> None:
@@ -79,17 +77,12 @@ class TestKnowledgeGap:
 
     def test_relevant_doc_not_gap(self) -> None:
         assert (
-            is_knowledge_gap(
-                intent="faq", documents=[{"score": 0.7}], action_result=None
-            )
-            is False
+            is_knowledge_gap(intent="faq", documents=[{"score": 0.7}], action_result=None) is False
         )
 
     def test_low_score_is_gap(self) -> None:
         assert (
-            is_knowledge_gap(
-                intent="pricing", documents=[{"score": 0.1}], action_result=None
-            )
+            is_knowledge_gap(intent="pricing", documents=[{"score": 0.1}], action_result=None)
             is True
         )
 

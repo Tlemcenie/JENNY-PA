@@ -187,7 +187,9 @@ async def _prestations_for(
 ) -> list[UUID]:
     """Prestation choisie, ou titre exact."""
     if prestation_id is not None:
-        owner = await db.scalar(select(Prestation.business_id).where(Prestation.id == prestation_id))
+        owner = await db.scalar(
+            select(Prestation.business_id).where(Prestation.id == prestation_id)
+        )
         if owner != bid:
             raise HTTPException(400, "Prestation inconnue pour ce salon")
         return [prestation_id]
@@ -498,9 +500,7 @@ async def mark_deposit_paid(
 
 
 @router.delete("/{appointment_id}")
-async def delete_appointment(
-    appointment_id: UUID, db: DbSession, principal: CurrentUser
-) -> dict:
+async def delete_appointment(appointment_id: UUID, db: DbSession, principal: CurrentUser) -> dict:
     """Supprime un rendez-vous."""
     appt = await db.get(Appointment, appointment_id)
     if appt is None or appt.business_id != principal.business_id:
@@ -527,12 +527,7 @@ async def delete_appointment(
 
 
 def _ics_escape(text: str) -> str:
-    return (
-        text.replace("\\", "\\\\")
-        .replace(";", "\\;")
-        .replace(",", "\\,")
-        .replace("\n", "\\n")
-    )
+    return text.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
 
 def _ics_dt(dt: datetime) -> str:

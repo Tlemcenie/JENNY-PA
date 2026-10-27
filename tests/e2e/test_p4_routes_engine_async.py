@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import itertools
 import threading
 import time
 from pathlib import Path
@@ -22,7 +23,6 @@ FILES = (
     "conversation.py",
     "conversations.py",
     "copilot.py",
-    "llm_settings.py",
     "public_chat.py",
     "webhooks.py",
 )
@@ -84,7 +84,7 @@ async def _timed(coro):  # type: ignore[no-untyped-def]
         elapsed = time.monotonic() - start
         stop.set()
         await task
-    gap = max(b - a for a, b in zip(ticks, ticks[1:], strict=False))
+    gap = max(b - a for a, b in itertools.pairwise(ticks))
     return out, elapsed, gap
 
 

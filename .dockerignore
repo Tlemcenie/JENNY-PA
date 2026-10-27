@@ -35,7 +35,6 @@ frontend/
 
 # gros artefacts ml
 # checkpoints gardés, corpus exclus
-nanogpt/data/
 data/raw/
 data/interim/
 data/processed/

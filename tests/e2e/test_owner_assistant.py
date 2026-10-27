@@ -105,13 +105,17 @@ class TestOwnerAssistant:
         # Un créneau bloqué a bien été créé en base.
         async with async_session_factory() as s:
             rows = (
-                await s.execute(
-                    select(Appointment).where(
-                        Appointment.business_id == UUID(bid),
-                        Appointment.status == "blocked",
+                (
+                    await s.execute(
+                        select(Appointment).where(
+                            Appointment.business_id == UUID(bid),
+                            Appointment.status == "blocked",
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         assert len(rows) == 1
         assert (rows[0].end_at - rows[0].start_at) == timedelta(hours=2)
 
@@ -145,9 +149,14 @@ class TestOwnerAssistant:
             await s.flush()
             s.add(
                 Appointment(
-                    business_id=UUID(bid), customer_id=cust.id, title="Coupe",
-                    channel="chat", start_at=noon, end_at=noon + timedelta(minutes=30),
-                    status="scheduled", created_by="test",
+                    business_id=UUID(bid),
+                    customer_id=cust.id,
+                    title="Coupe",
+                    channel="chat",
+                    start_at=noon,
+                    end_at=noon + timedelta(minutes=30),
+                    status="scheduled",
+                    created_by="test",
                 )
             )
         r = await client.post(
@@ -168,9 +177,14 @@ class TestOwnerAssistant:
             await s.flush()
             s.add(
                 Appointment(
-                    business_id=UUID(bid), customer_id=cust.id, title="Coloration",
-                    channel="chat", start_at=start, end_at=start + timedelta(minutes=90),
-                    status="scheduled", created_by="test",
+                    business_id=UUID(bid),
+                    customer_id=cust.id,
+                    title="Coloration",
+                    channel="chat",
+                    start_at=start,
+                    end_at=start + timedelta(minutes=90),
+                    status="scheduled",
+                    created_by="test",
                 )
             )
         r = await client.post(
@@ -204,7 +218,9 @@ class TestTopPrestations:
 
         now = datetime.now(UTC)
         async with async_session_factory() as s, s.begin():
-            s.add(Prestation(business_id=UUID(bid), name=title, price_cents=3900, duration_minutes=30))
+            s.add(
+                Prestation(business_id=UUID(bid), name=title, price_cents=3900, duration_minutes=30)
+            )
             for i in range(n):
                 start = now + timedelta(hours=2 + i)
                 s.add(

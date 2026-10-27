@@ -10,9 +10,8 @@ from typing import Any
 import numpy as np
 
 from jenny.core.logging import get_logger
-from ml.models.intent.config import INTENT_LABELS
-from ml.models.intent.predict import IntentPredictor
 from ml.models.intent_head.features import CharNgrams
+from ml.models.intent_head.labels import INTENT_LABELS
 
 logger = get_logger(__name__)
 
@@ -86,7 +85,7 @@ def load_checkpoint(path: str | Path) -> tuple[dict[str, np.ndarray], dict]:
     return arrays, config
 
 
-class EmbeddingIntentPredictor(IntentPredictor):
+class EmbeddingIntentPredictor:
     """tête logistique sur mpnet figé."""
 
     def __init__(
@@ -262,6 +261,10 @@ class EmbeddingIntentPredictor(IntentPredictor):
             "all_scores": all_scores,
             "needs_clarification": primary["confidence"] < self.clarify_threshold,
         }
+
+    def predict(self, text: str) -> dict[str, object]:
+        """intention principale."""
+        return self.predict_batch([text or ""])[0]
 
     def predict_multi(self, text: str) -> dict:
         """prédit toutes les intentions."""

@@ -18,13 +18,9 @@ class MessageFeedback(Base, TimestampMixin):
     """Évaluation 👍/👎 d'un message sortant (réponse de Jenny)."""
 
     __tablename__ = "message_feedback"
-    __table_args__ = (
-        UniqueConstraint("message_id", name="uq_message_feedback_message"),
-    )
+    __table_args__ = (UniqueConstraint("message_id", name="uq_message_feedback_message"),)
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     message_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("messages.id", ondelete="CASCADE"),

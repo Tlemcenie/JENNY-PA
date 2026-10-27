@@ -51,8 +51,7 @@ class EvalRetriever:
             return []
         qv = await self.embedder.embed_text(query)
         scored = [
-            _Hit(content=c, score=_cosine_similarity(qv, v), metadata=m)
-            for c, v, m in self._docs
+            _Hit(content=c, score=_cosine_similarity(qv, v), metadata=m) for c, v, m in self._docs
         ]
         scored.sort(key=lambda h: h.score, reverse=True)
         # même échelle que la prod

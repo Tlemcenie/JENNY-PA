@@ -300,9 +300,7 @@ class TestFeedbackMetrics:
         assert rc["question"] == "Combien pour un balayage ?"
         assert rc["answer"] == "Je ne sais pas."
 
-    async def test_days_filter_windows_old_feedback(
-        self, db_tables, client: AsyncClient
-    ) -> None:
+    async def test_days_filter_windows_old_feedback(self, db_tables, client: AsyncClient) -> None:
         from jenny.domain.models.message_feedback import MessageFeedback
 
         biz, _, reply = await _seed_conversation_with_reply()

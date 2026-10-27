@@ -15,7 +15,9 @@ class ChannelAccount(Base, TimestampMixin):
 
     __tablename__ = "channel_accounts"
     __table_args__ = (
-        UniqueConstraint("channel", "external_account_id", name="uq_channel_accounts_channel_external"),
+        UniqueConstraint(
+            "channel", "external_account_id", name="uq_channel_accounts_channel_external"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

@@ -60,18 +60,20 @@ async def list_audit(
     if entity_id:
         filters.append(AuditLog.entity_id == entity_id)
 
-    total = (
-        await db.execute(select(func.count(AuditLog.id)).where(*filters))
-    ).scalar_one()
+    total = (await db.execute(select(func.count(AuditLog.id)).where(*filters))).scalar_one()
     rows = (
-        await db.execute(
-            select(AuditLog)
-            .where(*filters)
-            .order_by(AuditLog.created_at.desc())
-            .limit(limit)
-            .offset(offset)
+        (
+            await db.execute(
+                select(AuditLog)
+                .where(*filters)
+                .order_by(AuditLog.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     return AuditListResponse(
         items=[

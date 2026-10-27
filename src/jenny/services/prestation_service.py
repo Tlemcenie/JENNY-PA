@@ -33,12 +33,16 @@ async def load_active_prestations(db: AsyncSession, business_id: UUID) -> list[P
     """Liste les prestations actives d'un business, triées pour l'affichage."""
     try:
         rows = (
-            await db.execute(
-                select(Prestation)
-                .where(Prestation.business_id == business_id, Prestation.is_active.is_(True))
-                .order_by(Prestation.sort_order.asc(), Prestation.name.asc())
+            (
+                await db.execute(
+                    select(Prestation)
+                    .where(Prestation.business_id == business_id, Prestation.is_active.is_(True))
+                    .order_by(Prestation.sort_order.asc(), Prestation.name.asc())
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return list(rows)
     except Exception as exc:  # pragma: no cover - dépend de l'environnement DB
         logger.warning("prestation.load_error", error=str(exc))

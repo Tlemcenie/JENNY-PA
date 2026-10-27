@@ -25,7 +25,9 @@ def _extract_text(msg: Message) -> str:
     if msg.is_multipart():
         for part in msg.walk():
             ctype = part.get_content_type()
-            if ctype == "text/plain" and "attachment" not in (part.get("Content-Disposition") or ""):
+            if ctype == "text/plain" and "attachment" not in (
+                part.get("Content-Disposition") or ""
+            ):
                 try:
                     return part.get_content()
                 except Exception:

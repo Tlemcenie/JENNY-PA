@@ -1,22 +1,10 @@
-"""Mesure HONNÊTE des modèles intention (LSTM, tête mpnet) et NER (BiGRU).
+"""Mesure HONNÊTE de la tête d'intention (mpnet + logistique).
 
-L'ancienne version tirait 600 lignes du fichier COMPLET, donc ~70 % du
-« test » était en fait du train (le split d'entraînement est un
-``random_split`` sur ce même fichier) → chiffres gonflés d'environ 5 points.
-
-Ici on reproduit le split exact de l'entraînement (seed 42, 70/15/15) et on
-n'évalue que sur le TEST. Les deux modèles d'intention passent sur le MÊME
-test, le MÊME test perturbé (sans accents / sans ponctuation / SMS) et un
-test « SMS inédit » dont les formes ne sont jamais vues à l'entraînement.
-On mesure aussi la latence par message (appel unitaire, comme le moteur).
-Multi-intention : rappel (au moins deux intentions sur les lignes à deux
-étiquettes), paire complète, faux multi sur les lignes simples, set-F1.
-« sonde_multi » = petit jeu écrit à la main, hors gabarits, jamais entraîné.
-« intent_head_avant » = la même tête sans les têtes secondaires (softmax
-seule, seuil calé sur VAL), donc le comportement de la passe 1.
+Split figé seed 42, 70/15/15 : on note le TEST, le test perturbé (SMS,
+sans accents) et des abréviations jamais vues. Latence par message.
 
 Usage : PYTHONPATH=src:. .venv/bin/python scripts/eval_ml_models.py
-        [--skip-ner] [--skip-train] [--skip-cpu] [--latency-n 200]
+        [--skip-train] [--skip-cpu] [--latency-n 200]
 """
 
 import argparse
@@ -35,9 +23,7 @@ from ml.models.intent_head.augment import perturb_unseen
 
 SEED = 42
 OUT = Path("var/eval/ml_metrics.json")
-LSTM_PATH = "checkpoints/intent/best_model.pt"
 HEAD_PATH = "checkpoints/intent_head/head.npz"
-NER_PATH = "checkpoints/ner/best_model.pt"
 # sonde manuelle hors gabarits
 PROBE_PATH = Path("data/generated/intents_multi_probe.jsonl")
 
@@ -77,22 +63,6 @@ def macro_f1(pairs: list[tuple[str, str]]) -> tuple[float, dict]:
         detail[c] = {"f1": round(100 * f1, 1), "support": tp[c] + fn[c]}
         total += f1
     return (100 * total / len(classes) if classes else 0.0), detail
-
-
-def spans(tokens: list[str], tags: list[str]) -> set[tuple[str, int, int]]:
-    """Spans BIO -> {(type, debut, fin)} pour un F1 strict."""
-    found: set[tuple[str, int, int]] = set()
-    cur_type, start = None, 0
-    for i, tag in enumerate([*tags, "O"]):
-        if tag.startswith("B-") or tag == "O" or (tag.startswith("I-") and tag[2:] != cur_type):
-            if cur_type is not None:
-                found.add((cur_type, start, i))
-                cur_type = None
-            if tag.startswith("B-"):
-                cur_type, start = tag[2:], i
-        elif tag.startswith("I-") and tag[2:] == cur_type:
-            continue
-    return found
 
 
 def gold_labels(row: dict) -> list[str]:
@@ -198,22 +168,12 @@ def softmax_only(head):
 
 
 def eval_intents(with_train: bool, cpu_latency: bool, latency_n: int) -> dict:
-    from ml.models.intent.predict import IntentPredictor
     from ml.models.intent_head.predict import ENCODER_NAME, EmbeddingIntentPredictor, get_encoder
 
     rows = load_jsonl("data/generated/intents.jsonl")
     idx = split_indices(len(rows))
     sample = [rows[i]["text"] for i in idx["test"][:latency_n]]
     out: dict = {"n_total": len(rows)}
-
-    lstm = IntentPredictor.from_checkpoint(LSTM_PATH)
-    res = score_intent(lstm, rows, idx, with_train)
-    res["latence_ms"] = {lstm.config.device: latency_ms(lstm.predict_multi, sample)}
-    if cpu_latency and lstm.config.device != "cpu":
-        lstm.model.to("cpu")
-        lstm.config.device = "cpu"
-        res["latence_ms"]["cpu"] = latency_ms(lstm.predict_multi, sample)
-    out["intent_lstm"] = res
 
     head = EmbeddingIntentPredictor.from_checkpoint(HEAD_PATH)
     res = score_intent(head, rows, idx, with_train)
@@ -234,78 +194,16 @@ def eval_intents(with_train: bool, cpu_latency: bool, latency_n: int) -> dict:
     out["intent_head_avant"] = score_intent(avant, rows, idx, False)
     out["intent_head_avant"]["multi_threshold"] = avant.multi_threshold
 
-    a, b = out["intent_lstm"], out["intent_head"]
-    comp = {}
-    for nom in ("test", "test_perturbe", "test_sms_inedit"):
-        comp[nom] = {
-            "lstm_top1": a[nom]["top1"],
-            "head_top1": b[nom]["top1"],
-            "delta_pts": round(b[nom]["top1"] - a[nom]["top1"], 1),
-            "lstm_macro_f1": a[nom]["macro_f1"],
-            "head_macro_f1": b[nom]["macro_f1"],
-            "lstm_rappel_multi": a[nom]["multi"]["rappel_multi_pct"],
-            "head_rappel_multi": b[nom]["multi"]["rappel_multi_pct"],
-            "lstm_set_f1": a[nom]["multi"]["set_f1"],
-            "head_set_f1": b[nom]["multi"]["set_f1"],
-            "head_avant_rappel_multi": out["intent_head_avant"][nom]["multi"]["rappel_multi_pct"],
-            "head_avant_set_f1": out["intent_head_avant"][nom]["multi"]["set_f1"],
-            "lstm_faux_multi": a[nom]["multi"]["faux_multi_pct"],
-            "head_faux_multi": b[nom]["multi"]["faux_multi_pct"],
-        }
-        # top-1 inchangé par les secondaires
-        comp[nom]["top1_identique_avant"] = out["intent_head_avant"][nom]["top1"] == b[nom]["top1"]
-    comp["head_bat_lstm_test"] = b["test"]["top1"] > a["test"]["top1"]
-    comp["head_bat_lstm_perturbe"] = b["test_perturbe"]["top1"] > a["test_perturbe"]["top1"]
-    # critère de bascule complet
-    comp["head_set_f1_ok"] = b["multi"]["set_f1"] >= a["multi"]["set_f1"]
-    out["comparaison"] = comp
+    # secondaires : top-1 inchangé ?
+    out["top1_identique_avant"] = {
+        nom: out["intent_head_avant"][nom]["top1"] == out["intent_head"][nom]["top1"]
+        for nom in ("test", "test_perturbe", "test_sms_inedit")
+    }
     return out
 
 
-def eval_ner(with_train: bool, cpu_latency: bool, latency_n: int) -> dict:
-    from ml.models.ner.predict import NERPredictor
-
-    p = NERPredictor.from_checkpoint(NER_PATH)
-    rows = load_jsonl("data/generated/ner.jsonl")
-    idx = split_indices(len(rows))
-
-    res: dict = {"n_total": len(rows)}
-    for nom in ("train", "test") if with_train else ("test",):
-        tp = fp = fn = tok_ok = tok_tot = 0
-        for i in idx[nom]:
-            r = rows[i]
-            toks = r.get("tokens") or r["text"].split()
-            gold_tags = r.get("tags") or []
-            pred = p.predict_with_tags(r["text"])
-            pred_tags = [t for _, t in pred][: len(toks)]
-            pred_tags += ["O"] * (len(toks) - len(pred_tags))
-            g, d = spans(toks, gold_tags), spans(toks, pred_tags)
-            tp += len(g & d)
-            fp += len(d - g)
-            fn += len(g - d)
-            for a, b in zip(gold_tags, pred_tags, strict=False):
-                tok_tot += 1
-                tok_ok += a == b
-        prec = tp / (tp + fp) if (tp + fp) else 0.0
-        rec = tp / (tp + fn) if (tp + fn) else 0.0
-        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
-        res[nom] = {
-            "n": len(idx[nom]),
-            "span_f1": round(100 * f1, 1),
-            "token_acc": round(100 * tok_ok / tok_tot, 1) if tok_tot else 0.0,
-        }
-    sample = [rows[i]["text"] for i in idx["test"][:latency_n]]
-    res["latence_ms"] = {p.config.device: latency_ms(p.predict, sample)}
-    if cpu_latency and p.config.device != "cpu":
-        p.model.to("cpu")
-        p.config.device = "cpu"
-        res["latence_ms"]["cpu"] = latency_ms(p.predict, sample)
-    return res
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="éval honnête des modèles ML")
-    parser.add_argument("--skip-ner", action="store_true")
+    parser = argparse.ArgumentParser(description="éval honnête de la tête")
     parser.add_argument("--skip-train", action="store_true", help="pas d'éval sur le train")
     parser.add_argument("--skip-cpu", action="store_true", help="pas de latence CPU")
     parser.add_argument("--latency-n", type=int, default=200)
@@ -320,8 +218,6 @@ def main() -> None:
         "machine": {"python": platform.python_version(), "torch": torch.__version__},
     }
     out.update(eval_intents(not args.skip_train, not args.skip_cpu, args.latency_n))
-    if not args.skip_ner:
-        out["ner_bigru"] = eval_ner(not args.skip_train, not args.skip_cpu, args.latency_n)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(out, indent=2, ensure_ascii=False))

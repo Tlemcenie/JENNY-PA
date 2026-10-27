@@ -754,14 +754,12 @@ class ConversationEngine:
         self,
         state_manager: StateManager | None = None,
         intent_predictor: object | None = None,
-        ner_predictor: object | None = None,
         agent_router: object | None = None,
         response_generator: object | None = None,
         retriever: object | None = None,
     ) -> None:
         self.state_manager = state_manager or StateManager()
         self.intent_predictor = intent_predictor
-        self.ner_predictor = ner_predictor
         self.agent_router = agent_router
         self.response_generator = response_generator
         # retriever RAG transverse
@@ -1545,21 +1543,7 @@ class ConversationEngine:
 
     async def _extract_entities(self, text: str, state: ConversationState) -> dict[str, str]:
         """Extrait les entités du message."""
-        regex_entities = self._regex_entity_extraction(text)
-        predict = getattr(self.ner_predictor, "predict", None)
-        if callable(predict):
-            try:
-                # hors boucle d'événements
-                found = await asyncio.to_thread(_ml_call, predict, text)
-                entities = dict(found or {})
-                # regex en complément
-                for key, value in regex_entities.items():
-                    entities.setdefault(key, value)
-                return entities
-            except Exception as e:
-                logger.warning("engine.ner.model_error", error=str(e))
-
-        return regex_entities
+        return self._regex_entity_extraction(text)
 
     def _regex_entity_extraction(self, text: str) -> dict[str, str]:
         """Extraction d'entités par regex (fallback)."""

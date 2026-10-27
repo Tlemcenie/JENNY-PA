@@ -122,9 +122,7 @@ def _fail_keys(action: str, email: str, ip: str, pair_max: int, email_max: int) 
     if action == "login":
         # bourrage multi-comptes
         s = get_settings()
-        keys.append(
-            ("login_ip", ip, s.rate_limit_auth_max_requests, s.rate_limit_window_seconds)
-        )
+        keys.append(("login_ip", ip, s.rate_limit_auth_max_requests, s.rate_limit_window_seconds))
     return keys
 
 
@@ -309,9 +307,7 @@ async def register(body: RegisterRequest, db: DbSession) -> JSONResponse:
 
 @router.post("/login")
 async def login(body: LoginRequest, db: DbSession, request: Request) -> JSONResponse:
-    keys = _fail_keys(
-        "login", body.email, client_key(request), _LOGIN_PAIR_MAX, _LOGIN_EMAIL_MAX
-    )
+    keys = _fail_keys("login", body.email, client_key(request), _LOGIN_PAIR_MAX, _LOGIN_EMAIL_MAX)
     # réservé avant bcrypt
     held = await _reserve(keys)
     if held is None:
@@ -457,9 +453,7 @@ async def reset_password(
     body: ResetPasswordRequest, db: DbSession, request: Request
 ) -> JSONResponse:
     """reset via code email."""
-    keys = _fail_keys(
-        "reset", body.email, client_key(request), _RESET_PAIR_MAX, _RESET_EMAIL_MAX
-    )
+    keys = _fail_keys("reset", body.email, client_key(request), _RESET_PAIR_MAX, _RESET_EMAIL_MAX)
     # peu d'essais, réservés
     held = await _reserve(keys)
     if held is None:
@@ -471,9 +465,7 @@ async def reset_password(
     if is_expired(user.password_reset_expires_at):
         await _release(held)
         raise HTTPException(400, "Code expiré, redemandez-en un")
-    if not await asyncio.to_thread(
-        verify_code, body.code.strip(), user.password_reset_code_hash
-    ):
+    if not await asyncio.to_thread(verify_code, body.code.strip(), user.password_reset_code_hash):
         if await _reset_burned(body.email):
             # trop de faux : code grillé
             user.password_reset_code_hash = None
@@ -585,12 +577,8 @@ async def update_me(body: UpdateMeRequest, db: DbSession, principal: CurrentUser
 
     if body.new_password is not None:
         if not user.password_hash:
-            raise HTTPException(
-                400, "Aucun mot de passe défini sur ce compte (connexion Google)"
-            )
-        if not body.current_password or not await _check(
-            body.current_password, user.password_hash
-        ):
+            raise HTTPException(400, "Aucun mot de passe défini sur ce compte (connexion Google)")
+        if not body.current_password or not await _check(body.current_password, user.password_hash):
             raise HTTPException(400, "Mot de passe actuel incorrect")
         pw_err = _check_password_strength(body.new_password)
         if pw_err:

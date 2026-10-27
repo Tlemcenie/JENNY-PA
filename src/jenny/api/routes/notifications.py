@@ -61,26 +61,26 @@ async def list_notifications(
 
     unread = (
         await db.execute(
-            select(func.count(Notification.id)).where(
-                *base, Notification.read_at.is_(None)
-            )
+            select(func.count(Notification.id)).where(*base, Notification.read_at.is_(None))
         )
     ).scalar_one()
-    total = (
-        await db.execute(select(func.count(Notification.id)).where(*base))
-    ).scalar_one()
+    total = (await db.execute(select(func.count(Notification.id)).where(*base))).scalar_one()
 
     filters = list(base)
     if only_unread:
         filters.append(Notification.read_at.is_(None))
     rows = (
-        await db.execute(
-            select(Notification)
-            .where(*filters)
-            .order_by(Notification.created_at.desc())
-            .limit(limit)
+        (
+            await db.execute(
+                select(Notification)
+                .where(*filters)
+                .order_by(Notification.created_at.desc())
+                .limit(limit)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     return NotificationListResponse(
         notifications=[
@@ -142,9 +142,7 @@ async def mark_all_read(db: DbSession, principal: CurrentUser) -> UnreadCount:
 
 
 @router.post("/{notification_id}/read", response_model=UnreadCount)
-async def mark_read(
-    notification_id: str, db: DbSession, principal: CurrentUser
-) -> UnreadCount:
+async def mark_read(notification_id: str, db: DbSession, principal: CurrentUser) -> UnreadCount:
     """Marque une notification comme lue et renvoie le nouveau compteur non lues."""
     bid = principal.business_id
     if bid is not None:

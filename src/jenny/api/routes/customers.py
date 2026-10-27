@@ -234,9 +234,7 @@ async def import_customers_csv(
         if email:
             exists = (
                 await db.execute(
-                    select(Customer.id).where(
-                        Customer.business_id == bid, Customer.email == email
-                    )
+                    select(Customer.id).where(Customer.business_id == bid, Customer.email == email)
                 )
             ).scalar_one_or_none()
             if exists:
@@ -325,27 +323,35 @@ async def get_customer_360(
     cust = await _load_customer(db, customer_id, bid)
 
     convs = (
-        await db.execute(
-            select(Conversation)
-            .where(Conversation.customer_id == customer_id)
-            .order_by(
-                func.coalesce(Conversation.last_message_at, Conversation.created_at).desc()
+        (
+            await db.execute(
+                select(Conversation)
+                .where(Conversation.customer_id == customer_id)
+                .order_by(
+                    func.coalesce(Conversation.last_message_at, Conversation.created_at).desc()
+                )
+                .limit(50)
+                # sans les messages
+                .options(NO_REL)
             )
-            .limit(50)
-            # sans les messages
-            .options(NO_REL)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     orders = (
-        await db.execute(
-            select(Order)
-            .where(Order.customer_id == customer_id)
-            .order_by(Order.created_at.desc())
-            .limit(50)
-            .options(NO_REL)
+        (
+            await db.execute(
+                select(Order)
+                .where(Order.customer_id == customer_id)
+                .order_by(Order.created_at.desc())
+                .limit(50)
+                .options(NO_REL)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     tx_rows = (
         await db.execute(
@@ -362,14 +368,18 @@ async def get_customer_360(
     ).all()
 
     tickets = (
-        await db.execute(
-            select(SupportTicket)
-            .where(SupportTicket.customer_id == customer_id)
-            .order_by(SupportTicket.created_at.desc())
-            .limit(50)
-            .options(NO_REL)
+        (
+            await db.execute(
+                select(SupportTicket)
+                .where(SupportTicket.customer_id == customer_id)
+                .order_by(SupportTicket.created_at.desc())
+                .limit(50)
+                .options(NO_REL)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     # ── Statistiques de synthèse (calculées en base, pas en Python) ──
     # une seule requête, sans plafond 50
@@ -507,9 +517,7 @@ async def update_customer(
     # valeurs déjà à jour en mémoire
     await db.commit()
 
-    logger.info(
-        "customer.updated", customer_id=str(cust.id), fields=sorted(fields.keys())
-    )
+    logger.info("customer.updated", customer_id=str(cust.id), fields=sorted(fields.keys()))
     return CustomerUpdateResult(
         id=str(cust.id),
         full_name=cust.full_name,

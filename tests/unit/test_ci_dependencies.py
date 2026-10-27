@@ -1,7 +1,7 @@
 """Hygiène des dépendances : cœur léger, extras cohérents, outils alignés.
 
-Le chemin de prod couvre src/jenny ET les modules ml/ et nanogpt/
-que src charge (tête d'intention, lstm, ner, nanogpt).
+Le chemin de prod couvre src/jenny ET les modules ml/
+que src charge (tête d'intention).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ EXTRAS = PYPROJECT["project"]["optional-dependencies"]
 ML_EXTRA = {canonicalize_name(Requirement(r).name) for r in EXTRAS["ml"]}
 
 # paquets de l'extra [ml], bannis du chemin de prod
-ML_ONLY = {"mlflow", "datasets", "groq", "rich"}
+ML_ONLY = {"sklearn"}
 # imports paresseux et gardés
 OPTIONAL = {"fitz", "pdfplumber", "google", "googleapiclient", "opentelemetry"}
 # tirés par une dep déclarée
@@ -41,7 +41,7 @@ TRANSITIVE = {
     "scipy": "sentence-transformers",
 }
 # modules maison
-LOCAL = {"jenny", "ml", "nanogpt"}
+LOCAL = {"jenny", "ml"}
 # nom d'import != nom pip
 IMPORT_TO_DIST = {
     "sklearn": "scikit-learn",
@@ -50,7 +50,7 @@ IMPORT_TO_DIST = {
     "PIL": "pillow",
 }
 # modules maison suivis depuis src
-FOLLOWED = ("ml", "nanogpt")
+FOLLOWED = ("ml",)
 
 
 def _imports(path: Path) -> tuple[set[str], set[str]]:
@@ -93,7 +93,7 @@ def _module_file(name: str) -> Path | None:
 
 
 def _runtime_closure() -> dict[Path, set[str]]:
-    """Fichiers ml/nanogpt atteints depuis src, avec leurs imports tiers."""
+    """Fichiers ml/ atteints depuis src, avec leurs imports tiers."""
     todo: set[str] = set()
     for path in (ROOT / "src" / "jenny").rglob("*.py"):
         if "scripts" in path.parts:
@@ -137,9 +137,9 @@ def _dist_names(module: str, dists: Mapping[str, list[str]]) -> set[str]:
 
 
 def _ml_tree_imports() -> dict[str, set[str]]:
-    """Imports tiers de ml/, nanogpt/, pipelines/."""
+    """Imports tiers de ml/."""
     found: dict[str, set[str]] = {}
-    for base in ("ml", "nanogpt", "pipelines"):
+    for base in ("ml",):
         for module, files in _third_party_imports(ROOT / base).items():
             found.setdefault(module, set()).update(files)
     return found
@@ -161,14 +161,12 @@ DIRECT_RUNTIME = {m: f for m, f in RUNTIME_IMPORTS.items() if m not in TRANSITIV
 
 
 def test_closure_couvre_le_chemin_ml() -> None:
-    """Tête, lstm, ner et nanogpt vus."""
+    """Tête d'intention vue."""
     rel = {_rel(p) for p in CLOSURE}
     assert {
         "ml/models/intent_head/predict.py",
         "ml/models/intent_head/features.py",
-        "ml/models/intent/predict.py",
-        "ml/models/ner/predict.py",
-        "nanogpt/generate.py",
+        "ml/models/intent_head/labels.py",
     } <= rel
     # entraînement hors chemin
     assert not {p for p in rel if p.endswith("/train.py")}
@@ -204,7 +202,7 @@ def test_ml_tree_deps_declared() -> None:
 def test_deps_vues_sans_rien_installe() -> None:
     """Comme la CI sans [ml]."""
     imports = _ml_tree_imports()
-    # mlflow, groq... vus quand même
+    # sklearn vu quand même
     assert set(imports) >= ML_ONLY
     assert _undeclared(imports, CORE | ML_EXTRA, {}) == {}
     assert _undeclared(DIRECT_RUNTIME, CORE, {}) == {}
@@ -229,8 +227,8 @@ def test_noms_pip_connus_exacts() -> None:
 def test_extras_layout() -> None:
     """[ml] et [dev] bien rangés."""
     dev = {canonicalize_name(Requirement(r).name) for r in EXTRAS["dev"]}
-    assert ML_EXTRA >= ML_ONLY
-    assert not (ML_ONLY & CORE)
+    # entraînement hors cœur
+    assert "scikit-learn" not in CORE
     # entraînement de la tête
     assert {"scikit-learn", "scipy"} <= ML_EXTRA
     # sécurité et fuseaux

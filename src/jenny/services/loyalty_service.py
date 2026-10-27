@@ -17,9 +17,7 @@ if TYPE_CHECKING:
     from jenny.domain.models.business import Business
 
 
-async def compute_loyalty(
-    db: AsyncSession, business: Business, customer_id: UUID
-) -> dict:
+async def compute_loyalty(db: AsyncSession, business: Business, customer_id: UUID) -> dict:
     """Points de fidélité d'un client + état de la récompense.
 
     Points = nombre de RDV honorés (confirmés/terminés, passés). Récompense

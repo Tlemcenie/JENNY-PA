@@ -85,22 +85,33 @@ async def test_stats_aggregates(client: AsyncClient, db_tables: None) -> None:
         def _appt(cid, hours, status, title="Coupe", dep=None):
             start = now + timedelta(hours=hours)
             ap = Appointment(
-                business_id=buid, customer_id=cid, title=title, channel="chat",
-                start_at=start, end_at=start + timedelta(minutes=30),
-                status=status, created_by="test",
+                business_id=buid,
+                customer_id=cid,
+                title=title,
+                channel="chat",
+                start_at=start,
+                end_at=start + timedelta(minutes=30),
+                status=status,
+                created_by="test",
             )
             if dep:
                 ap.deposit_cents, ap.deposit_status = dep
             return ap
 
-        s.add_all([
-            _appt(a.id, -72, "confirmed"),            # passé honoré
-            _appt(a.id, -48, "completed"),            # passé honoré → Alice fidèle
-            _appt(b.id, -24, "cancelled"),            # passé annulé
-            _appt(a.id, 24, "scheduled", dep=(1200, "paid")),   # à venir + acompte payé
-            _appt(b.id, 48, "scheduled", dep=(1000, "pending")),  # à venir + acompte en attente
-        ])
-        s.add(WaitlistEntry(business_id=buid, service="Coupe", status="waiting", conversation_id=uuid4()))
+        s.add_all(
+            [
+                _appt(a.id, -72, "confirmed"),  # passé honoré
+                _appt(a.id, -48, "completed"),  # passé honoré → Alice fidèle
+                _appt(b.id, -24, "cancelled"),  # passé annulé
+                _appt(a.id, 24, "scheduled", dep=(1200, "paid")),  # à venir + acompte payé
+                _appt(b.id, 48, "scheduled", dep=(1000, "pending")),  # à venir + acompte en attente
+            ]
+        )
+        s.add(
+            WaitlistEntry(
+                business_id=buid, service="Coupe", status="waiting", conversation_id=uuid4()
+            )
+        )
 
     r = await client.get("/api/v1/salon/stats", headers=headers)
     assert r.status_code == 200, r.text

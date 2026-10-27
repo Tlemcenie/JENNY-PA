@@ -11,9 +11,9 @@ Remplace `OWNER/REPO` dans l’URL du badge après création du dépôt GitHub.
 ```
 Platform Layer   →  FastAPI API, routes, middlewares
 Application      →  Services, workers ARQ, connecteurs
-AI / ML          →  Moteur d'agents maison, RAG, LLM providers, NanoGPT
+AI / ML          →  Moteur d'agents maison, RAG hybride, tête d'intention mpnet, LLM Groq
 Data             →  PostgreSQL + pgvector, Redis, SQLAlchemy
-Infrastructure   →  Docker, Compose, MLflow, observabilité
+Infrastructure   →  Docker, Compose, observabilité
 ```
 
 ## Stack
@@ -27,9 +27,8 @@ Infrastructure   →  Docker, Compose, MLflow, observabilité
 | Cache/Broker | Redis 7 |
 | Jobs async | ARQ |
 | Agents | Orchestration maison (Python, sans framework) |
-| ML Tracking | MLflow |
-| Deep Learning | PyTorch |
-| Mini LLM | NanoGPT (from scratch) |
+| Intention | Tête logistique sur mpnet figé (sentence-transformers) |
+| LLM | Groq (GPT-OSS 120B), repli OpenAI optionnel |
 | Lint/Format | Ruff |
 | Typecheck | mypy |
 | Tests | pytest + httpx |
@@ -57,7 +56,6 @@ make demo-up        # build + up + migrate + seed  (API + interface + infra)
 | API + Swagger     | http://localhost:8000/docs           |
 | Health / Ready    | http://localhost:8000/health, /ready |
 | Mailhog (UI mail) | http://localhost:8025                |
-| MLflow            | http://localhost:5000                |
 
 Compte de démonstration créé automatiquement :
 
@@ -68,8 +66,7 @@ Compte de démonstration créé automatiquement :
 > (rapide, quota gratuit généreux). Récupère une clé sur
 > [console.groq.com](https://console.groq.com), mets-la dans `.env`
 > (`JENNY_GROQ_API_KEY=gsk_...`), puis `docker compose up -d api`. Sans clé, l'API
-> tourne mais le chat retombe sur des réponses génériques. Alternative 100 % locale :
-> [Ollama](https://ollama.com) + `JENNY_LLM_PROVIDER=llama` (voir `.env.example`).
+> tourne mais le chat retombe sur des réponses génériques.
 
 Pour tout arrêter (et purger les volumes) :
 
@@ -83,8 +80,7 @@ make demo-down
 > le fichier `.env` (à la racine) est listé dans le [`.gitignore`](.gitignore) et
 > **ne part donc pas sur GitHub**. Tu le crées en copiant le modèle :
 > `cp .env.example .env`, puis tu y mets tes propres clés. Le dépôt public ne
-> contient que `.env.example` (des placeholders) et `configs/*.env` (valeurs de
-> démo, sans secret).
+> contient que `.env.example` (des placeholders).
 
 Deux clés externes rendent Jenny pleinement fonctionnelle. **Aucune n'est
 obligatoire pour démarrer** (l'app tourne sans, en mode dégradé) :
@@ -95,9 +91,8 @@ obligatoire pour démarrer** (l'app tourne sans, en mode dégradé) :
 | `JENNY_SMTP_PASSWORD` (`re_…`) | **Envoi d'emails** via [Resend](https://resend.com) : codes de vérification de compte, réinitialisation de mot de passe, notifications, PDF de devis, réponses email aux clients. | Optionnelle | [resend.com](https://resend.com) — offre gratuite. En **dev**, laisse **Mailhog** (aucune clé, les mails s'affichent sur http://localhost:8025) |
 
 En clair : **Groq = ce que Jenny dit**, **Resend = les emails qu'elle envoie**. En
-local tu peux tout tester sans Resend (Mailhog capture les mails) et, si tu veux
-un chat 100 % local sans clé, remplacer Groq par [Ollama](https://ollama.com)
-(`JENNY_LLM_PROVIDER=llama`). Détails de chaque variable dans `.env.example`.
+local tu peux tout tester sans Resend (Mailhog capture les mails). Détails de
+chaque variable dans `.env.example`.
 
 ### Mode développeur (Python local)
 
@@ -107,7 +102,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pre-commit install
 
-# infra (Postgres, Redis, Mailhog, MLflow) en docker
+# infra (Postgres, Redis, Mailhog) en docker
 make up
 
 # migrations + seed
@@ -122,29 +117,18 @@ make worker       # dans un autre terminal
 L’API est accessible sur `http://localhost:8000`.
 La documentation OpenAPI est sur `http://localhost:8000/docs`.
 
-### Modèles ML — ce qui est dans le dépôt (et ce qui ne l'est pas)
+### Modèle ML
 
-Jenny embarque **trois modèles maison** entraînés from scratch. Tous ne sont pas
-versionnés de la même façon (voir la règle `*.pt` dans le [`.gitignore`](.gitignore)) :
+Un seul modèle maison : la **tête d'intention** (`checkpoints/intent_head/head.npz`,
+~1 Mo). C'est une régression logistique posée sur l'encodeur figé
+`paraphrase-multilingual-mpnet-base-v2`, le même que celui du RAG (un seul
+mpnet en mémoire). Sur le test figé : **91,4 %** de bonnes réponses, **89,3 %**
+sur des messages écrits façon SMS. Mesure : `python scripts/eval_ml_models.py`,
+réentraînement : `python -m ml.models.intent_head.train` (extra `[ml]`).
 
-| Modèle | Rôle | Taille | Versionné ? |
-|---|---|---|---|
-| **Intention** (`checkpoints/intent/best_model.pt`) | Classe le message client (RDV, prix, réclamation…) | ~10 Mo | ✅ **Oui** — nécessaire aux tests e2e / à la CI |
-| **Compréhension / NER** (`checkpoints/ner/best_model.pt`) | Extrait les entités (prestation, date, heure, nom, téléphone) | ~8 Mo | ✅ **Oui** — idem |
-| **NanoGPT** (`checkpoints/nanogpt/best_model.pt`) | Mini-LLM « fait maison » (vitrine pédagogique de la page Lab) | **~200 Mo** | ❌ **Non** (seul le `tokenizer.json` l'est) |
-
-**Pourquoi NanoGPT est exclu du git.** Le poids fait **~200 Mo**, soit **au-dessus de
-la limite de 100 Mo par fichier de GitHub** (et bien au-delà de la limite conseillée
-de 50 Mo). L'embarquer alourdirait chaque clone pour un modèle qui n'est qu'une
-**démonstration** (« regardez, on a entraîné notre propre LLM ») — il n'entre jamais
-dans le chemin de production, où c'est **Groq/Ollama** qui répond. Conséquence sur un
-clone : l'onglet « modèle maison » de la page Lab reste vide, **sans aucun impact** sur
-le reste de l'application. Pour le régénérer localement : `python -m nanogpt.train`
-(voir [`nanogpt/RUNBOOK.md`](nanogpt/RUNBOOK.md)).
-
-Les deux modèles ML « utiles » (intention + NER) sont, eux, **volontairement versionnés**
-(~18 Mo au total) pour qu'un clone fonctionne immédiatement et que la CI puisse les
-tester. S'ils manquaient : `python scripts/train_models.py`.
+Les prestations, dates, heures, noms et téléphones sont extraits sans modèle :
+règles françaises (`engine/datetime_fr.py`) et repérage tolérant du catalogue
+du salon (`engine/catalog_match.py`).
 
 ### Commandes utiles
 
@@ -182,7 +166,7 @@ make up / make down
   (clés étrangères actives, comme Postgres), Redis sur un port mort → état en mémoire ;
 - **réseau sortant coupé toute la session** (connect, DNS, UDP, httpx) : seul le local
   ouvert par le test lui-même passe, plus les services déclarés dans
-  `JENNY_TEST_POSTGRES_URL` / `JENNY_TEST_REDIS_URL`. Le Postgres/Redis/Ollama de dev
+  `JENNY_TEST_POSTGRES_URL` / `JENNY_TEST_REDIS_URL`. Le Postgres/Redis de dev
   ne sont **jamais** joints. Un accès tenté fait échouer le test (et le run, même à la
   collecte) ; voulu → fixture `blocked_network` / `blocked_llm_calls` ou marqueur
   `@pytest.mark.allow_network` ;
@@ -250,32 +234,10 @@ src/jenny/         # Package applicatif principal
 ├── rag/           # Retrieval-Augmented Generation
 └── llm/           # Abstraction fournisseurs LLM
 
-ml/                # Couche ML / expérimentation
-├── training/      # Boucle d'entraînement
-├── evaluation/    # Métriques et évaluation
-├── inference/     # Prédiction en production
-├── features/      # Feature engineering
-├── tracking/      # Intégration MLflow
-└── registry/      # Model registry
+ml/                # Tête d'intention (entraînement + inférence)
+└── models/intent_head/
 
-nanogpt/           # Mini LLM from scratch
-├── model.py       # Architecture Transformer
-├── config.py      # Hyperparamètres
-├── train.py       # Entraînement
-└── generate.py    # Génération de texte
-
-pipelines/         # Pipelines orchestrés
-├── data_pipeline.py
-├── training_pipeline.py
-└── inference_pipeline.py
-
-data/              # Données (gitignored)
-├── raw/
-├── interim/
-├── processed/
-├── labeled/
-├── synthetic/
-└── prompts/
+data/generated/    # Jeu d'intentions (entraînement de la tête)
 ```
 
 ## Endpoints API (aperçu)

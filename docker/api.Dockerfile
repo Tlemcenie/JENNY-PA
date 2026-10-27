@@ -33,8 +33,6 @@ ARG EMBED_MODEL=paraphrase-multilingual-mpnet-base-v2
 RUN python -c "from sentence_transformers import SentenceTransformer as S; S('${EMBED_MODEL}', device='cpu')"
 
 COPY ml/ ./ml/
-COPY nanogpt/ ./nanogpt/
-COPY pipelines/ ./pipelines/
 COPY checkpoints/ ./checkpoints/
 COPY scripts/ ./scripts/
 COPY alembic.ini ./

@@ -28,9 +28,7 @@ def _array_as_json_sqlite(element, compiler, **kw):
 @pytest.fixture
 async def client() -> AsyncClient:
     app = create_app()
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://e2e"
-    ) as c:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://e2e") as c:
         yield c
 
 
@@ -51,9 +49,7 @@ async def _auth(client: AsyncClient, email: str) -> tuple[dict, str]:
     )
     assert r.status_code == 202, r.text
     code = r.json()["debug_code"]
-    rv = await client.post(
-        "/api/v1/auth/verify-email", json={"email": email, "code": code}
-    )
+    rv = await client.post("/api/v1/auth/verify-email", json={"email": email, "code": code})
     assert rv.status_code == 200, rv.text
     token = rv.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -112,28 +108,20 @@ class TestPriority:
         assert r.json()["priority_level"] == "critical"
 
         # le détail l'expose
-        detail = (
-            await client.get(f"/api/v1/conversations/{cid}", headers=headers)
-        ).json()
+        detail = (await client.get(f"/api/v1/conversations/{cid}", headers=headers)).json()
         assert detail["priority_level"] == "critical"
 
         # filtre par priorité
         filtered = (
-            await client.get(
-                "/api/v1/conversations?priority=critical", headers=headers
-            )
+            await client.get("/api/v1/conversations?priority=critical", headers=headers)
         ).json()
         assert filtered["total"] == 1
         # filtre sans résultat
-        none = (
-            await client.get("/api/v1/conversations?priority=low", headers=headers)
-        ).json()
+        none = (await client.get("/api/v1/conversations?priority=low", headers=headers)).json()
         assert none["total"] == 0
 
         # tri par priorité ok
-        sorted_resp = await client.get(
-            "/api/v1/conversations?sort_by=priority", headers=headers
-        )
+        sorted_resp = await client.get("/api/v1/conversations?sort_by=priority", headers=headers)
         assert sorted_resp.status_code == 200
 
 
@@ -142,9 +130,7 @@ class TestPriority:
 
 class TestBulk:
     @pytest.mark.asyncio
-    async def test_bulk_priority_and_tag(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_bulk_priority_and_tag(self, client: AsyncClient, db_tables: None) -> None:
         headers, bid = await _auth(client, "bulk@x.com")
         c1 = await _seed_conversation(client, bid, email="a@x.com", message="Salut")
         c2 = await _seed_conversation(client, bid, email="b@x.com", message="Coucou")
@@ -164,9 +150,7 @@ class TestBulk:
         )
         assert r2.json()["updated"] == 2
 
-        detail = (
-            await client.get(f"/api/v1/conversations/{c1}", headers=headers)
-        ).json()
+        detail = (await client.get(f"/api/v1/conversations/{c1}", headers=headers)).json()
         assert detail["priority_level"] == "high"
         assert "vip" in detail["tags"]
 
@@ -193,12 +177,8 @@ class TestMerge:
         self, client: AsyncClient, db_tables: None
     ) -> None:
         headers, bid = await _auth(client, "merge@x.com")
-        target = await _seed_conversation(
-            client, bid, email="t@x.com", message="Premier fil"
-        )
-        source = await _seed_conversation(
-            client, bid, email="s@x.com", message="Second fil"
-        )
+        target = await _seed_conversation(client, bid, email="t@x.com", message="Premier fil")
+        source = await _seed_conversation(client, bid, email="s@x.com", message="Second fil")
 
         r = await client.post(
             f"/api/v1/conversations/{target}/merge",
@@ -211,9 +191,7 @@ class TestMerge:
         assert body["message_count"] == 2
 
         # cible : 2 messages
-        detail = (
-            await client.get(f"/api/v1/conversations/{target}", headers=headers)
-        ).json()
+        detail = (await client.get(f"/api/v1/conversations/{target}", headers=headers)).json()
         assert len(detail["messages"]) == 2
 
         # source archivée
@@ -223,9 +201,7 @@ class TestMerge:
         assert target in ids
 
     @pytest.mark.asyncio
-    async def test_merge_self_rejected(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_merge_self_rejected(self, client: AsyncClient, db_tables: None) -> None:
         headers, bid = await _auth(client, "merge2@x.com")
         cid = await _seed_conversation(client, bid, email="x@x.com", message="Hi")
         r = await client.post(
@@ -241,9 +217,7 @@ class TestMerge:
 
 class TestMessageSearch:
     @pytest.mark.asyncio
-    async def test_search_finds_message(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_search_finds_message(self, client: AsyncClient, db_tables: None) -> None:
         headers, bid = await _auth(client, "search@x.com")
         await _seed_conversation(
             client,
@@ -251,23 +225,17 @@ class TestMessageSearch:
             email="c@x.com",
             message="Je voudrais un devis pour une prestation.",
         )
-        r = await client.get(
-            "/api/v1/conversations/search/messages?q=devis", headers=headers
-        )
+        r = await client.get("/api/v1/conversations/search/messages?q=devis", headers=headers)
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["total"] >= 1
         assert any("devis" in h["snippet"].lower() for h in body["hits"])
 
     @pytest.mark.asyncio
-    async def test_search_no_match(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_search_no_match(self, client: AsyncClient, db_tables: None) -> None:
         headers, bid = await _auth(client, "search2@x.com")
         await _seed_conversation(client, bid, email="c@x.com", message="Bonjour")
-        r = await client.get(
-            "/api/v1/conversations/search/messages?q=zzzqqq", headers=headers
-        )
+        r = await client.get("/api/v1/conversations/search/messages?q=zzzqqq", headers=headers)
         assert r.status_code == 200
         assert r.json()["total"] == 0
 
@@ -289,9 +257,7 @@ class TestEscalationAndNotifications:
         )
 
         # escaladée + priorité haute
-        detail = (
-            await client.get(f"/api/v1/conversations/{cid}", headers=headers)
-        ).json()
+        detail = (await client.get(f"/api/v1/conversations/{cid}", headers=headers)).json()
         assert detail["sentiment"] == "negative"
         assert detail["priority_level"] == "high"
 
@@ -306,13 +272,9 @@ class TestEscalationAndNotifications:
         assert any(n["kind"] == "escalated" for n in notifs["notifications"])
 
         # compteur puis tout lu
-        cnt = (
-            await client.get("/api/v1/notifications/unread-count", headers=headers)
-        ).json()
+        cnt = (await client.get("/api/v1/notifications/unread-count", headers=headers)).json()
         assert cnt["unread"] >= 1
-        read = await client.post(
-            "/api/v1/notifications/read-all", headers=headers
-        )
+        read = await client.post("/api/v1/notifications/read-all", headers=headers)
         assert read.json()["unread"] == 0
 
 
@@ -325,9 +287,7 @@ class TestAssigneeNotification:
         self, client: AsyncClient, db_tables: None
     ) -> None:
         headers, bid = await _auth(client, "owner@x.com")
-        cid = await _seed_conversation(
-            client, bid, email="c@x.com", message="Bonjour"
-        )
+        cid = await _seed_conversation(client, bid, email="c@x.com", message="Bonjour")
         # crée un coéquipier
         member_email = "agent@x.com"
         rm = await client.post(
@@ -358,9 +318,7 @@ class TestAssigneeNotification:
         assert login.status_code == 200, login.text
         mtoken = login.json()["access_token"]
         mheaders = {"Authorization": f"Bearer {mtoken}"}
-        notifs = (
-            await client.get("/api/v1/notifications", headers=mheaders)
-        ).json()
+        notifs = (await client.get("/api/v1/notifications", headers=mheaders)).json()
         assert any(n["kind"] == "assigned" for n in notifs["notifications"])
 
 
@@ -369,9 +327,7 @@ class TestAssigneeNotification:
 
 class TestAudit:
     @pytest.mark.asyncio
-    async def test_status_change_is_audited(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_status_change_is_audited(self, client: AsyncClient, db_tables: None) -> None:
         headers, bid = await _auth(client, "audit@x.com")
         cid = await _seed_conversation(client, bid, email="c@x.com", message="Hi")
         await client.patch(
@@ -390,9 +346,7 @@ class TestAudit:
 
 class TestApiKeys:
     @pytest.mark.asyncio
-    async def test_create_list_revoke(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_create_list_revoke(self, client: AsyncClient, db_tables: None) -> None:
         headers, _bid = await _auth(client, "keys@x.com")
 
         created = await client.post(
@@ -411,9 +365,7 @@ class TestApiKeys:
         assert "secret" not in listed[0]  # secret jamais re-listé
         assert listed[0]["scopes"] == ["read"]
 
-        revoked = await client.delete(
-            f"/api/v1/api-keys/{key_id}", headers=headers
-        )
+        revoked = await client.delete(f"/api/v1/api-keys/{key_id}", headers=headers)
         assert revoked.status_code == 200
         again = (await client.get("/api/v1/api-keys", headers=headers)).json()
         assert again == []
@@ -424,9 +376,7 @@ class TestApiKeys:
 
 class TestSlaRules:
     @pytest.mark.asyncio
-    async def test_sla_rules_roundtrip(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_sla_rules_roundtrip(self, client: AsyncClient, db_tables: None) -> None:
         headers, _bid = await _auth(client, "sla@x.com")
         r = await client.patch(
             "/api/v1/business/me",

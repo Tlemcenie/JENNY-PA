@@ -107,12 +107,6 @@ from jenny.core import config as _config  # noqa: E402
 _config.Settings.model_config["env_file"] = None
 _config.get_settings.cache_clear()
 
-# choix LLM hors du dépôt
-from jenny.llm import runtime as _llm_runtime  # noqa: E402
-
-_llm_runtime._STORE = _RUN_DIR / "llm_choice.json"
-_llm_runtime._active_key = None
-
 # bcrypt coût mini en test
 import bcrypt  # noqa: E402
 
@@ -515,15 +509,6 @@ def _no_stray_network(request: pytest.FixtureRequest, _network_guard: None) -> I
             + " (fixture blocked_network/blocked_llm_calls si voulu)",
             pytrace=False,
         )
-
-
-@pytest.fixture(autouse=True)
-def _reset_llm_choice() -> Iterator[None]:
-    """Choix LLM remis à zéro."""
-    yield
-    _llm_runtime._active_key = None
-    with contextlib.suppress(OSError):
-        _llm_runtime._STORE.unlink()
 
 
 def _project_modules() -> list:

@@ -689,26 +689,6 @@ class TestCoercion:
         assert coerce_entity("service", "x" * 500) == "x" * 120
         assert coerce_entity("name", "") is None
 
-    @pytest.mark.asyncio
-    async def test_ner_filtree_dans_le_moteur(self) -> None:
-        from ml.models.ner.predict import NERPredictor
-
-        class _FakeNER(NERPredictor):
-            def __init__(self) -> None:
-                pass
-
-            def predict(self, text: str) -> dict[str, str]:
-                return {"duration": "30 min", "bogus": "x", "operation": "cancel"}
-
-        eng, acts = _engine(ner_predictor=_FakeNER())
-        chat = _Chat(eng)
-        r = await chat.say("je réserve une coupe femme demain à 10h")
-        # pas de crash int()
-        assert (r.action_result or {}).get("success") is True
-        sent = acts["book"].calls[-1]
-        assert sent["duration"] == "30"
-        assert "bogus" not in sent and "operation" not in sent
-
 
 # ── état du tour précédent ──
 
@@ -789,12 +769,7 @@ class TestSeuils:
 
     @pytest.mark.asyncio
     async def test_humain_sous_le_seuil_routeur(self) -> None:
-        from ml.models.intent.predict import IntentPredictor
-
-        class _Low(IntentPredictor):
-            def __init__(self) -> None:
-                pass
-
+        class _Low:
             def predict_multi(self, text: str) -> dict:
                 hit = {"intent": "general", "confidence": 0.35}
                 return {
@@ -817,13 +792,7 @@ class TestSeuils:
 class TestDebit:
     @pytest.mark.asyncio
     async def test_boucle_libre_pendant_inference(self) -> None:
-        from ml.models.intent.predict import IntentPredictor
-        from ml.models.ner.predict import NERPredictor
-
-        class _SlowIntent(IntentPredictor):
-            def __init__(self) -> None:
-                pass
-
+        class _SlowIntent:
             def predict_multi(self, text: str) -> dict:
                 _time.sleep(0.15)
                 hit = {"intent": "faq", "confidence": 0.9}
@@ -835,15 +804,7 @@ class TestDebit:
                     "needs_clarification": False,
                 }
 
-        class _SlowNER(NERPredictor):
-            def __init__(self) -> None:
-                pass
-
-            def predict(self, text: str) -> dict[str, str]:
-                _time.sleep(0.15)
-                return {}
-
-        eng, _ = _engine(intent_predictor=_SlowIntent(), ner_predictor=_SlowNER())
+        eng, _ = _engine(intent_predictor=_SlowIntent())
         ticks = 0
         done = asyncio.Event()
 

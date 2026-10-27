@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ml.models.intent.config import INTENT_LABELS
+from ml.models.intent_head.labels import INTENT_LABELS
 from ml.models.intent_head.predict import DEFAULT_PATH, ENCODER_NAME, FORMAT, load_checkpoint
 
 META = DEFAULT_PATH.parent / "meta.json"

@@ -57,7 +57,9 @@ class CheckPlanningAction(BaseAction):
             tz = business_tz(business)
             duration = _DEFAULT_DURATION_MIN
 
-            day = parse_fr_date(str(requested), today=datetime.now(tz).date()) if requested else None
+            day = (
+                parse_fr_date(str(requested), today=datetime.now(tz).date()) if requested else None
+            )
 
             if day is not None:
                 if await is_day_closed(db, bid, day):

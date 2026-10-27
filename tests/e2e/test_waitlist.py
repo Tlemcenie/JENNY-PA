@@ -68,26 +68,34 @@ class TestWaitlistService:
         conv = uuid4()
         async with async_session_factory() as db:
             e1 = await add_to_waitlist(
-                db, business_id=biz.id, service="Coupe", conversation_id=conv,
-                desired_window="demain", customer_name="Léa",
+                db,
+                business_id=biz.id,
+                service="Coupe",
+                conversation_id=conv,
+                desired_window="demain",
+                customer_name="Léa",
             )
             # Même conversation + même prestation → pas de doublon.
             e2 = await add_to_waitlist(
-                db, business_id=biz.id, service="coupe", conversation_id=conv,
+                db,
+                business_id=biz.id,
+                service="coupe",
+                conversation_id=conv,
             )
             assert e1.id == e2.id
             # Une autre conversation → 2e place dans la file.
             e3 = await add_to_waitlist(
-                db, business_id=biz.id, service="Couleur", conversation_id=uuid4(),
+                db,
+                business_id=biz.id,
+                service="Couleur",
+                conversation_id=uuid4(),
             )
             await db.commit()
             assert await waitlist_position(db, e1) == 1
             assert await waitlist_position(db, e3) == 2
 
         async with async_session_factory() as db:
-            n = (
-                await db.execute(select(func.count(WaitlistEntry.id)))
-            ).scalar_one()
+            n = (await db.execute(select(func.count(WaitlistEntry.id)))).scalar_one()
         assert n == 2
 
     @pytest.mark.asyncio
@@ -100,9 +108,14 @@ class TestWaitlistService:
         biz = await _seed_business()
         async with async_session_factory() as db:
             # File : une attente « Couleur » (ne matche pas), puis une « Coupe ».
-            await add_to_waitlist(db, business_id=biz.id, service="Couleur", conversation_id=uuid4())
+            await add_to_waitlist(
+                db, business_id=biz.id, service="Couleur", conversation_id=uuid4()
+            )
             coupe = await add_to_waitlist(
-                db, business_id=biz.id, service="Coupe", conversation_id=uuid4(),
+                db,
+                business_id=biz.id,
+                service="Coupe",
+                conversation_id=uuid4(),
                 customer_name="Marie",
             )
             await db.commit()
@@ -118,9 +131,7 @@ class TestWaitlistService:
             entry = await db.get(WaitlistEntry, coupe.id)
             assert entry.status == "notified" and entry.notified_at is not None
             notif = (
-                await db.execute(
-                    select(Notification).where(Notification.kind == "waitlist_match")
-                )
+                await db.execute(select(Notification).where(Notification.kind == "waitlist_match"))
             ).scalar_one()
             assert "Marie" in (notif.body or "") and "Coupe" in (notif.body or "")
 
@@ -187,7 +198,9 @@ class TestEngineWaitlistOptIn:
         # Tour 1 : tentative de réservation → salon complet.
         r1 = await eng.process(
             EngineRequest(
-                conversation_id=conv, business_id=biz.id, customer_id=cust,
+                conversation_id=conv,
+                business_id=biz.id,
+                customer_id=cust,
                 message_text="Je voudrais réserver",
             )
         )
@@ -197,7 +210,9 @@ class TestEngineWaitlistOptIn:
         # Tour 2 : « oui » → inscription en liste d'attente.
         r2 = await eng.process(
             EngineRequest(
-                conversation_id=conv, business_id=biz.id, customer_id=cust,
+                conversation_id=conv,
+                business_id=biz.id,
+                customer_id=cust,
                 message_text="Oui, avec plaisir",
             )
         )
@@ -222,9 +237,14 @@ async def _seed_customer_rdv(bid, *, name: str = "Marie", hours_ahead: int = 30)
         s.add(cust)
         await s.flush()
         appt = Appointment(
-            business_id=bid, customer_id=cust.id, title="Coupe", channel="chat",
-            start_at=start, end_at=start + timedelta(minutes=30),
-            status="scheduled", created_by="test",
+            business_id=bid,
+            customer_id=cust.id,
+            title="Coupe",
+            channel="chat",
+            start_at=start,
+            end_at=start + timedelta(minutes=30),
+            status="scheduled",
+            created_by="test",
         )
         s.add(appt)
         await s.flush()
@@ -241,7 +261,10 @@ class TestAutoNotifyOnFreeing:
         cust_id, _appt_id = await _seed_customer_rdv(biz.id)
         async with async_session_factory() as db:
             waiter = await add_to_waitlist(
-                db, business_id=biz.id, service="Coupe", conversation_id=uuid4(),
+                db,
+                business_id=biz.id,
+                service="Coupe",
+                conversation_id=uuid4(),
                 customer_name="Sonia",
             )
             await db.commit()
@@ -257,9 +280,7 @@ class TestAutoNotifyOnFreeing:
             assert entry.status == "notified"
             n = (
                 await db.execute(
-                    select(func.count(Notification.id)).where(
-                        Notification.kind == "waitlist_match"
-                    )
+                    select(func.count(Notification.id)).where(Notification.kind == "waitlist_match")
                 )
             ).scalar_one()
         assert n == 1
@@ -273,14 +294,19 @@ class TestAutoNotifyOnFreeing:
         await _seed_customer_rdv(biz.id, name="Marie")
         async with async_session_factory() as db:
             waiter = await add_to_waitlist(
-                db, business_id=biz.id, service="Coupe", conversation_id=uuid4(),
+                db,
+                business_id=biz.id,
+                service="Coupe",
+                conversation_id=uuid4(),
                 customer_name="Sonia",
             )
             await db.commit()
 
         async with async_session_factory() as db:
             out = await handle_owner_message(
-                db, business_id=biz.id, actor="boss@x.com",
+                db,
+                business_id=biz.id,
+                actor="boss@x.com",
                 message="annule le rdv de Marie",
             )
         assert out["data"].get("waitlist_notified") is True

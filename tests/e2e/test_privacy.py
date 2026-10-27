@@ -67,42 +67,82 @@ async def _seed_customer(bid: UUID) -> UUID:
     now = datetime.now(UTC)
     async with async_session_factory() as s, s.begin():
         cust = Customer(
-            business_id=bid, full_name="Marie Curie", email="marie@x.com",
-            phone="0600000000", notes="VIP",
+            business_id=bid,
+            full_name="Marie Curie",
+            email="marie@x.com",
+            phone="0600000000",
+            notes="VIP",
         )
         s.add(cust)
         await s.flush()
         start = now + timedelta(days=1)
-        s.add(Appointment(
-            business_id=bid, customer_id=cust.id, title="Coupe", channel="chat",
-            start_at=start, end_at=start + timedelta(minutes=30),
-            status="scheduled", created_by="Jenny",
-        ))
-        s.add(CustomerFact(
-            business_id=bid, customer_id=cust.id, fact="Allergique à l'ammoniaque.",
-            fact_key="allergie", kind="constraint",
-        ))
-        s.add(CustomerAddress(
-            business_id=bid, customer_id=cust.id, label="Domicile", line1="1 rue de la Paix",
-            city="Paris", postal_code="75001", country="FR",
-        ))
+        s.add(
+            Appointment(
+                business_id=bid,
+                customer_id=cust.id,
+                title="Coupe",
+                channel="chat",
+                start_at=start,
+                end_at=start + timedelta(minutes=30),
+                status="scheduled",
+                created_by="Jenny",
+            )
+        )
+        s.add(
+            CustomerFact(
+                business_id=bid,
+                customer_id=cust.id,
+                fact="Allergique à l'ammoniaque.",
+                fact_key="allergie",
+                kind="constraint",
+            )
+        )
+        s.add(
+            CustomerAddress(
+                business_id=bid,
+                customer_id=cust.id,
+                label="Domicile",
+                line1="1 rue de la Paix",
+                city="Paris",
+                postal_code="75001",
+                country="FR",
+            )
+        )
         conv = Conversation(
-            business_id=bid, customer_id=cust.id, channel="chat", status="open",
-            message_count=1, last_message_at=now,
+            business_id=bid,
+            customer_id=cust.id,
+            channel="chat",
+            status="open",
+            message_count=1,
+            last_message_at=now,
         )
         s.add(conv)
         await s.flush()
-        s.add(Message(
-            business_id=bid, customer_id=cust.id, conversation_id=conv.id,
-            external_message_id=str(uuid4()),
-            channel="chat", direction="inbound", content_text="Bonjour, je veux un RDV",
-            sender_name="Marie", sender_email="marie@x.com", status="received",
-            received_at=now,
-        ))
-        s.add(WaitlistEntry(
-            business_id=bid, customer_id=cust.id, service="Couleur",
-            customer_name="Marie", customer_contact="0600000000", status="waiting",
-        ))
+        s.add(
+            Message(
+                business_id=bid,
+                customer_id=cust.id,
+                conversation_id=conv.id,
+                external_message_id=str(uuid4()),
+                channel="chat",
+                direction="inbound",
+                content_text="Bonjour, je veux un RDV",
+                sender_name="Marie",
+                sender_email="marie@x.com",
+                status="received",
+                received_at=now,
+            )
+        )
+        s.add(
+            WaitlistEntry(
+                business_id=bid,
+                customer_id=cust.id,
+                service="Couleur",
+                customer_name="Marie",
+                customer_contact="0600000000",
+                status="waiting",
+            )
+        )
         return cust.id
 
 
@@ -151,16 +191,28 @@ class TestAnonymize:
             assert cust.full_name == "Client anonymisé"
             assert cust.email is None and cust.phone is None and cust.notes is None
             assert cust.anonymized_at is not None
-            facts = (await s.execute(select(CustomerFact).where(CustomerFact.customer_id == cid))).scalars().all()
+            facts = (
+                (await s.execute(select(CustomerFact).where(CustomerFact.customer_id == cid)))
+                .scalars()
+                .all()
+            )
             assert facts == []
-            addrs = (await s.execute(select(CustomerAddress).where(CustomerAddress.customer_id == cid))).scalars().all()
+            addrs = (
+                (await s.execute(select(CustomerAddress).where(CustomerAddress.customer_id == cid)))
+                .scalars()
+                .all()
+            )
             assert addrs == []
             msg = (await s.execute(select(Message).where(Message.customer_id == cid))).scalar_one()
             assert "supprimé" in msg.content_text and msg.sender_email is None
-            wl = (await s.execute(select(WaitlistEntry).where(WaitlistEntry.customer_id == cid))).scalar_one()
+            wl = (
+                await s.execute(select(WaitlistEntry).where(WaitlistEntry.customer_id == cid))
+            ).scalar_one()
             assert wl.status == "cancelled" and wl.customer_contact is None
             # Le RDV (comptabilité) est conservé.
-            appt = (await s.execute(select(Appointment).where(Appointment.customer_id == cid))).scalar_one()
+            appt = (
+                await s.execute(select(Appointment).where(Appointment.customer_id == cid))
+            ).scalar_one()
             assert appt is not None
 
     @pytest.mark.asyncio

@@ -22,25 +22,17 @@ from jenny.api.main import create_app
 
 
 class TestTrainedModels:
-    """Modèles entraînés from scratch."""
+    """Tête d'intention entraînée."""
 
     def test_intent_checkpoint_exists(self) -> None:
-        """checkpoint intent présent."""
-        assert Path("checkpoints/intent/best_model.pt").exists(), (
-            "Le modèle Intent n'a pas été entraîné ! Lancez: python scripts/train_models.py"
-        )
-
-    def test_ner_checkpoint_exists(self) -> None:
-        """checkpoint NER présent."""
-        assert Path("checkpoints/ner/best_model.pt").exists(), (
-            "Le modèle NER n'a pas été entraîné ! Lancez: python scripts/train_models.py"
-        )
+        """checkpoint présent."""
+        assert Path("checkpoints/intent_head/head.npz").exists()
 
     def test_intent_predictions(self) -> None:
         """intent prédit bien."""
-        from ml.models.intent.predict import IntentPredictor
+        from ml.models.intent_head.predict import EmbeddingIntentPredictor
 
-        predictor = IntentPredictor.from_checkpoint("checkpoints/intent/best_model.pt")
+        predictor = EmbeddingIntentPredictor.from_checkpoint("checkpoints/intent_head/head.npz")
 
         # intent attendu détecté
         test_cases = [
@@ -56,29 +48,9 @@ class TestTrainedModels:
                 f"Message: '{message}' → attendu l'un de {expected_intents}, obtenu {detected}"
             )
 
-        # structure multi-label
         result = predictor.predict_multi("Je voudrais prendre rdv et avoir un devis")
-        assert result["is_multi_intent"] is True or len(result["intents"]) >= 1
         assert result["primary_intent"] is not None
         assert result["primary_confidence"] > 0
-
-    def test_ner_model_loads(self) -> None:
-        """NER se charge."""
-        from ml.models.ner.predict import NERPredictor
-
-        predictor = NERPredictor.from_checkpoint("checkpoints/ner/best_model.pt")
-        entities = predictor.predict("Ma commande CMD-12345 est en retard")
-        # retourne quelque chose
-        assert isinstance(entities, dict)
-
-    def test_ner_tags(self) -> None:
-        """NER sort des tags BIO."""
-        from ml.models.ner.predict import NERPredictor
-
-        predictor = NERPredictor.from_checkpoint("checkpoints/ner/best_model.pt")
-        tags = predictor.predict_with_tags("Je suis Marie Dupont")
-        assert len(tags) == 4  # 4 tokens
-        assert all(isinstance(t, tuple) and len(t) == 2 for t in tags)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -142,13 +114,13 @@ class TestBusinessAgents:
     @pytest.mark.asyncio
     async def test_action_agent_with_registry(self) -> None:
         """action passe par le registre."""
-        from jenny.actions.handlers.book_appointment import BookAppointmentAction
         from jenny.actions.handlers.check_planning import CheckPlanningAction
         from jenny.actions.handlers.create_ticket import CreateTicketAction
         from jenny.actions.handlers.generate_quote import GenerateQuoteAction
         from jenny.actions.handlers.order_check import CheckOrderAction
         from jenny.actions.handlers.process_payment import ProcessPaymentAction
         from jenny.actions.registry import ActionRegistry
+        from tests.fakes import BookAppointmentAction
 
         registry = ActionRegistry()
         registry.register(CheckOrderAction(), intents=["order_status"])
@@ -173,7 +145,6 @@ class TestBusinessAgents:
     @pytest.mark.asyncio
     async def test_all_action_handlers_execute(self) -> None:
         """chaque handler tourne."""
-        from jenny.actions.handlers.book_appointment import BookAppointmentAction
         from jenny.actions.handlers.check_planning import CheckPlanningAction
         from jenny.actions.handlers.create_ticket import CreateTicketAction
         from jenny.actions.handlers.generate_quote import GenerateQuoteAction
@@ -181,12 +152,16 @@ class TestBusinessAgents:
         from jenny.actions.handlers.process_payment import ProcessPaymentAction
         from jenny.db.repositories.order_repo import OrderRepository
         from jenny.db.repositories.support_ticket_repo import SupportTicketRepository
+        from tests.fakes import BookAppointmentAction
 
         bid = str(uuid4())
         # handlers autonomes: succès attendu
         self_contained = [
             (CheckOrderAction(), {"order_number": "CMD-123", "business_id": bid}),
-            (ProcessPaymentAction(), {"order_number": "CMD-456", "amount": "99.99", "business_id": bid}),
+            (
+                ProcessPaymentAction(),
+                {"order_number": "CMD-456", "amount": "99.99", "business_id": bid},
+            ),
             (CreateTicketAction(), {"email": "client@mail.com", "business_id": bid}),
             (BookAppointmentAction(), {"date": "20/03/2026"}),
         ]
@@ -224,7 +199,9 @@ class TestBusinessAgents:
             for handler, params in context_dependent:
                 result = await handler.execute(params)
                 assert isinstance(result, dict), f"{handler.name} n'a pas renvoyé un dict"
-                assert isinstance(result.get("success"), bool), f"{handler.name}: 'success' manquant"
+                assert isinstance(result.get("success"), bool), (
+                    f"{handler.name}: 'success' manquant"
+                )
                 assert result.get("message"), f"{handler.name} n'a pas de message"
 
 
@@ -352,7 +329,6 @@ class TestConversationEngine:
 
     def _create_full_engine(self):
         """engine complet."""
-        from jenny.actions.handlers.book_appointment import BookAppointmentAction
         from jenny.actions.handlers.check_planning import CheckPlanningAction
         from jenny.actions.handlers.create_ticket import CreateTicketAction
         from jenny.actions.handlers.generate_quote import GenerateQuoteAction
@@ -368,6 +344,7 @@ class TestConversationEngine:
         from jenny.agents.router import AgentRouter
         from jenny.engine.conversation_engine import ConversationEngine
         from jenny.engine.state_manager import StateManager
+        from tests.fakes import BookAppointmentAction
 
         # le registre
         registry = ActionRegistry()
@@ -387,24 +364,17 @@ class TestConversationEngine:
         router.register("quote", QuoteAgent(action_registry=registry))
         router.register("planning", PlanningAgent(action_registry=registry))
 
-        # intent predictor
         intent_predictor = None
-        if Path("checkpoints/intent/best_model.pt").exists():
-            from ml.models.intent.predict import IntentPredictor
+        if Path("checkpoints/intent_head/head.npz").exists():
+            from ml.models.intent_head.predict import EmbeddingIntentPredictor
 
-            intent_predictor = IntentPredictor.from_checkpoint("checkpoints/intent/best_model.pt")
-
-        # ner predictor
-        ner_predictor = None
-        if Path("checkpoints/ner/best_model.pt").exists():
-            from ml.models.ner.predict import NERPredictor
-
-            ner_predictor = NERPredictor.from_checkpoint("checkpoints/ner/best_model.pt")
+            intent_predictor = EmbeddingIntentPredictor.from_checkpoint(
+                "checkpoints/intent_head/head.npz"
+            )
 
         return ConversationEngine(
             state_manager=StateManager(),
             intent_predictor=intent_predictor,
-            ner_predictor=ner_predictor,
             agent_router=router,
         )
 

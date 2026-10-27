@@ -101,4 +101,10 @@ class SetCustomerNameAction(BaseAction):
             await db.commit()
             cid = str(cust.id)
         logger.info("action.set_name.created", customer_id=cid, appointment_id=str(appointment_id))
-        return {"success": True, "named": True, "name": clean, "ask_phone": True, "customer_id": cid}
+        return {
+            "success": True,
+            "named": True,
+            "name": clean,
+            "ask_phone": True,
+            "customer_id": cid,
+        }

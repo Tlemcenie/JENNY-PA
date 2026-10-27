@@ -87,9 +87,7 @@ _TONE_GUIDE = {
 }
 
 
-def build_persona_instructions(
-    persona: dict | None, business_name: str | None = None
-) -> str:
+def build_persona_instructions(persona: dict | None, business_name: str | None = None) -> str:
     """persona vers consignes de prompt."""
     if not persona:
         return ""
@@ -128,7 +126,9 @@ def build_persona_instructions(
         vente = sliders.get("vente")
         if isinstance(vente, (int, float)):
             if vente >= 65:
-                lines.append("Oriente vers la réservation ou l'achat dès que c'est pertinent, sans forcer.")
+                lines.append(
+                    "Oriente vers la réservation ou l'achat dès que c'est pertinent, sans forcer."
+                )
             elif vente <= 35:
                 lines.append("Reste discrète commercialement : ne pousse jamais à l'achat.")
     # secteur et description
@@ -214,9 +214,7 @@ def build_context_instructions(state: ConversationState) -> str:
     lang = getattr(state, "detected_language", None)
     if persona.get("multilingue") and lang and lang != "fr":
         name = language_name(lang)
-        lines.append(
-            f"Le client écrit en {name} : réponds en {name}, naturellement."
-        )
+        lines.append(f"Le client écrit en {name} : réponds en {name}, naturellement.")
 
     facts = getattr(state, "customer_facts", None)
     if facts:
@@ -369,8 +367,11 @@ class PromptBuilder:
                     alt = public.get("alternatives_text")
                     base += (
                         "\nCe créneau est déjà pris : excuse-toi brièvement"
-                        + (f" et propose plutôt ces créneaux libres : {alt}." if alt else
-                           " et propose un autre horaire.")
+                        + (
+                            f" et propose plutôt ces créneaux libres : {alt}."
+                            if alt
+                            else " et propose un autre horaire."
+                        )
                         + " NE propose AUCUN créneau hors de cette liste."
                     )
                 elif public.get("waitlisted"):
@@ -388,8 +389,11 @@ class PromptBuilder:
                     base += (
                         "\nLe salon est FERMÉ ce jour-là (congé/férié) : excuse-toi "
                         "brièvement"
-                        + (f" et propose plutôt ces créneaux : {alt}." if alt
-                           else " et propose une autre date.")
+                        + (
+                            f" et propose plutôt ces créneaux : {alt}."
+                            if alt
+                            else " et propose une autre date."
+                        )
                         + " NE propose AUCUN créneau hors de cette liste."
                     )
                 elif public.get("past"):
@@ -397,8 +401,11 @@ class PromptBuilder:
                     base += (
                         "\nLe créneau demandé est DÉJÀ PASSÉ (rien n'a été réservé) : "
                         "signale-le gentiment"
-                        + (f" et propose plutôt ces créneaux à venir : {alt}." if alt
-                           else " et demande un autre moment.")
+                        + (
+                            f" et propose plutôt ces créneaux à venir : {alt}."
+                            if alt
+                            else " et demande un autre moment."
+                        )
                         + " NE confirme AUCUNE réservation et NE propose AUCUN créneau "
                         "hors de cette liste."
                     )
@@ -432,8 +439,11 @@ class PromptBuilder:
                         base += (
                             "\nLe déplacement demandé tombe un jour de FERMETURE : le rendez-vous "
                             f"reste pour l'instant {when}. Dis-le clairement (rien n'a été déplacé)"
-                            + (f" et propose plutôt ces créneaux : {alt}." if alt
-                               else " et demande une autre date.")
+                            + (
+                                f" et propose plutôt ces créneaux : {alt}."
+                                if alt
+                                else " et demande une autre date."
+                            )
                             + " NE confirme AUCUN déplacement."
                         )
                     elif public.get("past"):
@@ -441,8 +451,11 @@ class PromptBuilder:
                         base += (
                             "\nLe créneau demandé est DÉJÀ PASSÉ : le rendez-vous reste pour "
                             f"l'instant {when}. Dis-le gentiment (rien n'a été déplacé)"
-                            + (f" et propose plutôt ces créneaux : {alt}." if alt
-                               else " et demande un autre moment.")
+                            + (
+                                f" et propose plutôt ces créneaux : {alt}."
+                                if alt
+                                else " et demande un autre moment."
+                            )
                             + " NE confirme AUCUN déplacement."
                         )
                     elif public.get("conflict"):
@@ -450,8 +463,11 @@ class PromptBuilder:
                         base += (
                             "\nLe créneau demandé est déjà pris : le rendez-vous reste pour "
                             f"l'instant {when}. Dis-le gentiment (rien n'a été déplacé)"
-                            + (f" et propose plutôt ces créneaux libres : {alt}." if alt
-                               else " et propose un autre horaire.")
+                            + (
+                                f" et propose plutôt ces créneaux libres : {alt}."
+                                if alt
+                                else " et propose un autre horaire."
+                            )
                             + " NE confirme AUCUN déplacement."
                         )
                     elif public.get("success") and op == "cancel":

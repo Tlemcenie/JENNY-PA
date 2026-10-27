@@ -43,7 +43,7 @@ def shared(monkeypatch):
     # conftest met un faux embedder
     monkeypatch.setattr(factory, "get_default_embedder", lambda: emb)
     try:
-        head = factory.load_intent_predictor("head", fallback=False)
+        head = factory.load_intent_predictor()
     except OSError as e:
         pytest.skip(f"encodeur indisponible : {e}")
     if head is None:
@@ -115,7 +115,7 @@ class TestCheckpointAbsent:
         calls: list[int] = []
         monkeypatch.setattr(factory, "rag_encoder", lambda: calls.append(1))
         try:
-            assert factory.load_intent_predictor("head", fallback=False) is None
+            assert factory.load_intent_predictor() is None
         finally:
             get_settings.cache_clear()
         assert calls == []

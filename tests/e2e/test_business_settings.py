@@ -66,8 +66,10 @@ async def test_business_settings_roundtrip(client: AsyncClient, db_tables: None)
         "/api/v1/business/me",
         headers=headers,
         json={
-            "deposit_enabled": True, "deposit_percent": 40,
-            "reminder_lead_minutes": 120, "day_reminder_lead_hours": 48,
+            "deposit_enabled": True,
+            "deposit_percent": 40,
+            "reminder_lead_minutes": 120,
+            "day_reminder_lead_hours": 48,
             "loyalty_threshold": 8,
         },
     )

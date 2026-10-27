@@ -23,9 +23,7 @@ from jenny.db.base import Base, TimestampMixin
 class KnowledgeGap(Base, TimestampMixin):
     __tablename__ = "knowledge_gaps"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     business_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("businesses.id", ondelete="CASCADE"),
@@ -49,20 +47,14 @@ class KnowledgeGap(Base, TimestampMixin):
         String(20), default="open", server_default="open", nullable=False, index=True
     )
     # Nombre de fois où une question équivalente a été posée (priorisation).
-    occurrences: Mapped[int] = mapped_column(
-        Integer, default=1, server_default="1", nullable=False
-    )
+    occurrences: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
 
     answer: Mapped[str | None] = mapped_column(Text, default=None)
     answered_by: Mapped[str | None] = mapped_column(String(255), default=None)
-    answered_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     saved_to_kb: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
     # Référence (knowledge_id) de l'entrée KB créée à partir de la réponse.
     knowledge_entry_id: Mapped[str | None] = mapped_column(String(64), default=None)
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

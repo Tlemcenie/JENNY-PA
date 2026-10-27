@@ -202,7 +202,9 @@ async def admin_set_business_active(
     )
     await db.commit()
     logger.info(
-        "admin.business_active", business_id=business_id, active=body.is_active,
+        "admin.business_active",
+        business_id=business_id,
+        active=body.is_active,
         by=principal.email,
     )
     # relu avec ses compteurs
@@ -229,9 +231,7 @@ async def admin_set_superuser(
     # colonnes seules, pas les liens
     await db.refresh(u, attribute_names=_USER_COLS)
     logger.info("admin.set_superuser", user_id=user_id, value=body.is_superuser, by=principal.email)
-    n = await db.scalar(
-        select(func.count(BusinessMember.id)).where(BusinessMember.user_id == u.id)
-    )
+    n = await db.scalar(select(func.count(BusinessMember.id)).where(BusinessMember.user_id == u.id))
     return AdminUser(
         id=str(u.id),
         email=u.email,
@@ -294,9 +294,7 @@ async def admin_audit(
             )
         )
 
-    total = (
-        await db.execute(select(func.count(AuditLog.id)).where(*filters))
-    ).scalar_one()
+    total = (await db.execute(select(func.count(AuditLog.id)).where(*filters))).scalar_one()
     # nom du salon par jointure
     rows = (
         await db.execute(

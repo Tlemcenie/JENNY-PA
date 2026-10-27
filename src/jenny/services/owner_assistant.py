@@ -52,7 +52,9 @@ _ADD_KB_RE = re.compile(
     re.I,
 )
 _CANCEL_RE = re.compile(r"\b(annul|supprim|d[ée]command|enl[èe]ve\s+le\s+rdv)", re.I)
-_MOVE_RE = re.compile(r"\b(d[ée]plac|d[ée]cal|report|repouss|chang.*(?:heure|jour)|avanc.*rdv)", re.I)
+_MOVE_RE = re.compile(
+    r"\b(d[ée]plac|d[ée]cal|report|repouss|chang.*(?:heure|jour)|avanc.*rdv)", re.I
+)
 _REVENUE_RE = re.compile(
     r"\b(chiffre\s+d['’]affaires|\bca\b|recette|combien\s+(?:je|tu)\s+|gagn|"  # noqa: RUF001
     r"rapporte|encaiss|revenu)",
@@ -145,9 +147,7 @@ async def _handle_report(db: AsyncSession, bid: UUID) -> dict:
         return int(
             (
                 await db.execute(
-                    select(func.count(Appointment.id)).where(
-                        Appointment.business_id == bid, *conds
-                    )
+                    select(func.count(Appointment.id)).where(Appointment.business_id == bid, *conds)
                 )
             ).scalar_one()
             or 0
@@ -294,7 +294,9 @@ async def _whole_team(db: AsyncSession, bid: UUID) -> list[Staff]:
                 .where(Staff.business_id == bid)
                 .order_by(Staff.created_at.asc(), Staff.display_name.asc())
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
 
 
@@ -393,11 +395,14 @@ async def _handle_block(db: AsyncSession, bid: UUID, actor: str, message: str) -
             "action": "block_slot",
             "data": {"conflict": True, "staff_id": str(member.id)},
         }
-    if member is not None and not (
-        await find_free_staff(
-            db, bid, start_utc, end_utc, staff_id=member.id, pool=pool, check_hours=False
-        )
-    ).free:
+    if (
+        member is not None
+        and not (
+            await find_free_staff(
+                db, bid, start_utc, end_utc, staff_id=member.id, pool=pool, check_hours=False
+            )
+        ).free
+    ):
         # RDV sans coiffeur : sa place
         return {
             "response": f"Si je bloque {member.display_name} le {day_label} {label}, un "
@@ -534,16 +539,16 @@ async def _gather_owner_context(db: AsyncSession, bid: UUID) -> str:
         return int(
             (
                 await db.execute(
-                    select(func.count(Appointment.id)).where(
-                        Appointment.business_id == bid, *conds
-                    )
+                    select(func.count(Appointment.id)).where(Appointment.business_id == bid, *conds)
                 )
             ).scalar_one()
             or 0
         )
 
     nc = Appointment.status.notin_(["cancelled", "blocked"])
-    today_n = await _count(nc, Appointment.start_at >= today_start, Appointment.start_at < today_end)
+    today_n = await _count(
+        nc, Appointment.start_at >= today_start, Appointment.start_at < today_end
+    )
     week_n = await _count(nc, Appointment.start_at >= today_start, Appointment.start_at < week_end)
     upcoming = await _count(nc, Appointment.start_at >= now)
     lines.append(
@@ -552,9 +557,7 @@ async def _gather_owner_context(db: AsyncSession, bid: UUID) -> str:
 
     n_clients = int(
         (
-            await db.execute(
-                select(func.count(Customer.id)).where(Customer.business_id == bid)
-            )
+            await db.execute(select(func.count(Customer.id)).where(Customer.business_id == bid))
         ).scalar_one()
         or 0
     )
@@ -916,17 +919,21 @@ async def _handle_client_history(db: AsyncSession, bid: UUID, message: str) -> d
         }
 
     appts = (
-        await db.execute(
-            select(Appointment)
-            .where(
-                Appointment.business_id == bid,
-                Appointment.customer_id == cust.id,
-                Appointment.status != "blocked",
+        (
+            await db.execute(
+                select(Appointment)
+                .where(
+                    Appointment.business_id == bid,
+                    Appointment.customer_id == cust.id,
+                    Appointment.status != "blocked",
+                )
+                .order_by(Appointment.start_at.desc())
+                .limit(20)
             )
-            .order_by(Appointment.start_at.desc())
-            .limit(20)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     loyalty = await compute_loyalty(db, business, cust.id)
     facts = await load_customer_facts(db, bid, cust.id)
 

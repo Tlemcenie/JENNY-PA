@@ -84,9 +84,14 @@ async def _seed_customer_rdv(bid: str, *, hours_ahead: int | None = None) -> str
         await s.flush()
         s.add(
             Appointment(
-                business_id=UUID(bid), customer_id=cust.id, title="Coupe", channel="chat",
-                start_at=start, end_at=start + timedelta(minutes=30),
-                status="scheduled", created_by="test",
+                business_id=UUID(bid),
+                customer_id=cust.id,
+                title="Coupe",
+                channel="chat",
+                start_at=start,
+                end_at=start + timedelta(minutes=30),
+                status="scheduled",
+                created_by="test",
             )
         )
         return str(cust.id)

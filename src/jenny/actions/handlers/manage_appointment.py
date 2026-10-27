@@ -126,13 +126,23 @@ class ManageAppointmentAction(BaseAction):
             if op == "confirm":
                 appt.status = "confirmed"
                 await db.commit()
-                return {"success": True, "operation": "confirm", "when": when, "service": appt.title}
+                return {
+                    "success": True,
+                    "operation": "confirm",
+                    "when": when,
+                    "service": appt.title,
+                }
 
             # reschedule : nouvelle date/heure issues des slots du message.
             new_date = parse_fr_date(params.get("date") or "", today=now.astimezone(tz).date())
             new_time = parse_fr_time(params.get("time") or "")
             if new_date is None and new_time is None:
-                return {"success": False, "operation": "reschedule", "need_when": True, "when": when}
+                return {
+                    "success": False,
+                    "operation": "reschedule",
+                    "need_when": True,
+                    "when": when,
+                }
             duration = appt.end_at - appt.start_at
             day = new_date or cur.date()
             hh = new_time.hour if new_time else cur.hour

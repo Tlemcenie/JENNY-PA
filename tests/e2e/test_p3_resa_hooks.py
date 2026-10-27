@@ -167,8 +167,10 @@ async def _state(biz: Business, entry: WaitlistEntry) -> tuple[str, list[SlotOff
         status = (await s.get(WaitlistEntry, entry.id)).status
         offers = list((await s.execute(select(SlotOffer))).scalars().all())
         notes = (
-            await s.execute(select(Notification).where(Notification.kind == "waitlist_match"))
-        ).scalars().all()
+            (await s.execute(select(Notification).where(Notification.kind == "waitlist_match")))
+            .scalars()
+            .all()
+        )
     return status, offers, len(notes)
 
 

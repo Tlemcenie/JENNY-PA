@@ -95,8 +95,10 @@ class TestLearningLoop:
 
         async with async_session_factory() as s:
             gaps = (
-                await s.execute(select(KnowledgeGap).where(KnowledgeGap.business_id == UUID(bid)))
-            ).scalars().all()
+                (await s.execute(select(KnowledgeGap).where(KnowledgeGap.business_id == UUID(bid))))
+                .scalars()
+                .all()
+            )
             assert len(gaps) == 1
             assert gaps[0].occurrences == 2
             # Une notification a été créée pour l'équipe.
@@ -111,9 +113,7 @@ class TestLearningLoop:
             assert n == 1
 
     @pytest.mark.asyncio
-    async def test_list_recap_answer_dismiss(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_list_recap_answer_dismiss(self, client: AsyncClient, db_tables: None) -> None:
         headers, bid = await _auth(client, "loop@x.com")
         await _seed_gap(bid, "Faites-vous des colorations végétales ?")
         await _seed_gap(bid, "Acceptez-vous les paiements en plusieurs fois ?")
@@ -137,13 +137,18 @@ class TestLearningLoop:
         ans = await client.post(
             f"/api/v1/knowledge-gaps/{gap_id}/answer",
             headers=headers,
-            json={"answer": "Oui, nous proposons des colorations 100% végétales.", "save_to_kb": False},
+            json={
+                "answer": "Oui, nous proposons des colorations 100% végétales.",
+                "save_to_kb": False,
+            },
         )
         assert ans.status_code == 200, ans.text
         assert ans.json()["gap"]["status"] == "answered"
 
         # La lacune répondue n'est plus « ouverte ».
-        still_open = (await client.get("/api/v1/knowledge-gaps?status=open", headers=headers)).json()
+        still_open = (
+            await client.get("/api/v1/knowledge-gaps?status=open", headers=headers)
+        ).json()
         assert still_open["total"] == 1
 
         # Ignorer l'autre.

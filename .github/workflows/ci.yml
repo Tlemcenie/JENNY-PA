@@ -43,12 +43,12 @@ jobs:
           python -m pip install "$RUFF_SPEC"
 
       - name: Ruff lint
-        run: ruff check --output-format=github src/ tests/ ml/ nanogpt/ pipelines/
+        run: ruff check --output-format=github src/ tests/ ml/
 
       # 100 fichiers à formater : informatif
       - name: Ruff format (informatif)
         continue-on-error: true
-        run: ruff format --check src/ tests/ ml/ nanogpt/ pipelines/
+        run: ruff format --check src/ tests/ ml/
 
   tests:
     name: Migrations + tests

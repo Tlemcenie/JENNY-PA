@@ -25,7 +25,6 @@ BUSINESS_ID = str(uuid4())  # id du salon
 
 def _build_engine() -> ConversationEngine:
     """Construit le moteur."""
-    from jenny.actions.handlers.book_appointment import BookAppointmentAction
     from jenny.actions.handlers.check_planning import CheckPlanningAction
     from jenny.actions.handlers.create_ticket import CreateTicketAction
     from jenny.actions.handlers.generate_quote import GenerateQuoteAction
@@ -39,6 +38,7 @@ def _build_engine() -> ConversationEngine:
     from jenny.agents.planning_agent import PlanningAgent
     from jenny.agents.quote_agent import QuoteAgent
     from jenny.agents.router import AgentRouter
+    from tests.fakes import BookAppointmentAction
 
     registry = ActionRegistry()
     registry.register(CheckOrderAction(), intents=["order_status"])
@@ -57,21 +57,16 @@ def _build_engine() -> ConversationEngine:
     router.register("planning", PlanningAgent(action_registry=registry))
 
     intent_predictor = None
-    if Path("checkpoints/intent/best_model.pt").exists():
-        from ml.models.intent.predict import IntentPredictor
+    if Path("checkpoints/intent_head/head.npz").exists():
+        from ml.models.intent_head.predict import EmbeddingIntentPredictor
 
-        intent_predictor = IntentPredictor.from_checkpoint("checkpoints/intent/best_model.pt")
-
-    ner_predictor = None
-    if Path("checkpoints/ner/best_model.pt").exists():
-        from ml.models.ner.predict import NERPredictor
-
-        ner_predictor = NERPredictor.from_checkpoint("checkpoints/ner/best_model.pt")
+        intent_predictor = EmbeddingIntentPredictor.from_checkpoint(
+            "checkpoints/intent_head/head.npz"
+        )
 
     return ConversationEngine(
         state_manager=StateManager(),
         intent_predictor=intent_predictor,
-        ner_predictor=ner_predictor,
         agent_router=router,
     )
 
@@ -512,7 +507,8 @@ class TestScenarioConversationComplete:
             "Ok, je peux payer en plusieurs fois ?",
             channel="instagram",
         )
-        assert r4.intent == "payment"
+        # même agent paiement
+        assert r4.intent in ("payment", "payment_question")
         assert "paiement" in r4.response_text.lower() or len(r4.response_text) > 10
 
         # tour 5 — au revoir
@@ -1164,9 +1160,9 @@ class TestMultiLabelIntents:
     @pytest.mark.asyncio
     async def test_multi_label_predictor_direct(self) -> None:
         """predict_multi → plusieurs intents."""
-        from ml.models.intent.predict import IntentPredictor
+        from ml.models.intent_head.predict import EmbeddingIntentPredictor
 
-        predictor = IntentPredictor.from_checkpoint("checkpoints/intent/best_model.pt")
+        predictor = EmbeddingIntentPredictor.from_checkpoint("checkpoints/intent_head/head.npz")
         result = predictor.predict_multi("Bonjour, je voudrais prendre rdv et avoir un devis")
 
         # un ou plusieurs intents
@@ -1207,9 +1203,9 @@ class TestMultiLabelIntents:
     @pytest.mark.asyncio
     async def test_single_intent_still_works(self) -> None:
         """Message simple → un seul intent."""
-        from ml.models.intent.predict import IntentPredictor
+        from ml.models.intent_head.predict import EmbeddingIntentPredictor
 
-        predictor = IntentPredictor.from_checkpoint("checkpoints/intent/best_model.pt")
+        predictor = EmbeddingIntentPredictor.from_checkpoint("checkpoints/intent_head/head.npz")
         result = predictor.predict_multi("Où en est ma commande ?")
 
         assert result["primary_intent"] is not None
@@ -1251,64 +1247,6 @@ class TestMultiLabelIntents:
 class TestClarification:
     """Mécanique de clarification."""
 
-    def test_clarification_agent_very_low_confidence(self) -> None:
-        """Confiance < 30% → menu."""
-        from jenny.agents.clarification_agent import ClarificationAgent
-
-        agent = ClarificationAgent()
-        response = agent.generate_clarification(
-            message="zzz xyz",
-            detected_intents=[{"intent": "general", "confidence": 0.15}],
-            confidence=0.15,
-        )
-
-        assert "reformuler" in response.lower() or "aider" in response.lower()
-        assert "rendez-vous" in response.lower() or "tarifs" in response.lower()
-
-        print(f"\n{'=' * 60}")
-        print("🤔 Clarification — Confiance très basse (15%)")
-        print(f"📝 Réponse :\n{response}")
-        print(f"{'=' * 60}\n")
-
-    def test_clarification_agent_low_confidence(self) -> None:
-        """Confiance 30-50% → propose."""
-        from jenny.agents.clarification_agent import ClarificationAgent
-
-        agent = ClarificationAgent()
-        response = agent.generate_clarification(
-            message="Salut !",
-            detected_intents=[{"intent": "greeting", "confidence": 0.40}],
-            confidence=0.40,
-        )
-
-        assert "compris" in response.lower() or "souhaitez" in response.lower()
-
-        print(f"\n{'=' * 60}")
-        print("🤔 Clarification — Confiance basse (40%)")
-        print(f"📝 Réponse :\n{response}")
-        print(f"{'=' * 60}\n")
-
-    def test_clarification_agent_ambiguous_multi(self) -> None:
-        """Deux intents forts → confirme."""
-        from jenny.agents.clarification_agent import ClarificationAgent
-
-        agent = ClarificationAgent()
-        response = agent.generate_clarification(
-            message="Je veux un rdv et payer ma facture",
-            detected_intents=[
-                {"intent": "appointment", "confidence": 0.85},
-                {"intent": "payment", "confidence": 0.80},
-            ],
-            confidence=0.85,
-        )
-
-        assert "rendez-vous" in response.lower() or "paiement" in response.lower()
-
-        print(f"\n{'=' * 60}")
-        print("🤔 Clarification — Multi-intent ambigu")
-        print(f"📝 Réponse :\n{response}")
-        print(f"{'=' * 60}\n")
-
     @pytest.mark.asyncio
     async def test_clarification_in_graph(self) -> None:
         """Faible confiance → clarification."""
@@ -1334,7 +1272,7 @@ class TestClarification:
 
     @pytest.mark.asyncio
     async def test_clarification_via_engine(self) -> None:
-        """Engine → ClarificationAgent."""
+        """Engine → clarification."""
         engine = _build_engine()
 
         r = await _send(engine, uuid4(), "Salut !", channel="instagram")
@@ -1371,26 +1309,4 @@ class TestClarification:
         print(f"\n{'=' * 60}")
         print(f"🎯 Intent : {r.intent} ({r.intent_confidence:.0%})")
         print(f"🤖 Agent : {r.agent_used} | clarif={r.clarification_reason or '-'}")
-        print(f"{'=' * 60}\n")
-
-    @pytest.mark.asyncio
-    async def test_clarification_handle_method(self) -> None:
-        """ClarificationAgent via handle()."""
-        from jenny.agents.clarification_agent import ClarificationAgent
-        from jenny.engine.state_manager import ConversationState
-
-        agent = ClarificationAgent()
-        state = ConversationState()
-        state.set_intent("general", 0.25)
-        state.add_user_message("blabla")
-
-        result = await agent.handle(state)
-
-        assert "response" in result
-        assert result["action_result"]["needs_clarification"] is True
-        assert len(result["response"]) > 0
-
-        print(f"\n{'=' * 60}")
-        print("🤔 ClarificationAgent.handle()")
-        print(f"📝 Réponse : {result['response'][:150]}")
         print(f"{'=' * 60}\n")

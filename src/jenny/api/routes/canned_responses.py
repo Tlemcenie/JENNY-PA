@@ -60,12 +60,16 @@ async def list_canned_responses(
     if bid is None:
         return []
     rows = (
-        await db.execute(
-            select(CannedResponse)
-            .where(CannedResponse.business_id == bid)
-            .order_by(CannedResponse.title.asc())
+        (
+            await db.execute(
+                select(CannedResponse)
+                .where(CannedResponse.business_id == bid)
+                .order_by(CannedResponse.title.asc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [_to_item(c) for c in rows]
 
 

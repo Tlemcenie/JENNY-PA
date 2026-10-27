@@ -57,6 +57,7 @@ async def test_whatsapp_threads_customer_id_to_engine(db_tables: None, monkeypat
         s.add(Business(id=bid, name="Salon", slug=f"s-{uuid4().hex[:6]}"))
 
     fake = _FakeEngine()
+
     async def _engine():
         return fake
 
@@ -79,9 +80,7 @@ async def test_whatsapp_threads_customer_id_to_engine(db_tables: None, monkeypat
 
     # Le client est créé depuis le numéro WhatsApp + le nom de profil.
     async with async_session_factory() as s:
-        cust = (
-            await s.execute(select(Customer).where(Customer.business_id == bid))
-        ).scalar_one()
+        cust = (await s.execute(select(Customer).where(Customer.business_id == bid))).scalar_one()
     assert cust.phone == phone
     assert cust.full_name == "Marie"
 

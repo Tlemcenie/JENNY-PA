@@ -112,9 +112,7 @@ async def readiness_check() -> JSONResponse:
     # Le service est "ready" tant que DB et Redis répondent.
     # Les modèles ML sont des "nice-to-have" : leur absence renvoie
     # `warning` mais ne bloque pas la readiness.
-    critical_ok = all(
-        checks[k].get("status") in ("ok", "skip") for k in ("database", "redis")
-    )
+    critical_ok = all(checks[k].get("status") in ("ok", "skip") for k in ("database", "redis"))
     all_ok = critical_ok
 
     # IMPORTANT pour Cloud Run / K8s : une readiness « degraded » doit renvoyer un

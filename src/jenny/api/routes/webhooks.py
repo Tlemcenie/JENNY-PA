@@ -96,9 +96,7 @@ def _fallback_business(settings: Settings, channel: str, ref: str | None) -> UUI
     except ValueError:
         logger.error("webhook.default_business_invalid", channel=channel)
         return None
-    logger.warning(
-        "webhook.default_business_fallback", channel=channel, ref=ref, business_id=raw
-    )
+    logger.warning("webhook.default_business_fallback", channel=channel, ref=ref, business_id=raw)
     return business_id
 
 
@@ -138,9 +136,7 @@ async def _engine_context(business_id, customer_id):
             catalog = format_catalog(prestations)
             # fuseau du salon
             tz = (
-                await session.execute(
-                    select(Business.timezone).where(Business.id == business_id)
-                )
+                await session.execute(select(Business.timezone).where(Business.id == business_id))
             ).scalar_one_or_none()
         return facts, (catalog or None), ([p.name for p in prestations] or None), tz
     except Exception as e:  # pragma: no cover
@@ -251,14 +247,19 @@ async def _ingest_and_reply(
             conv_id, message_in.business_id, channel, out.response_text, delivered=sent
         )
         await _persist_engine_signals_safe(
-            business_id=message_in.business_id, customer_id=customer_id,
-            conversation_id=conv_id, channel=channel, result=out,
+            business_id=message_in.business_id,
+            customer_id=customer_id,
+            conversation_id=conv_id,
+            channel=channel,
+            result=out,
         )
     except Exception as e:
         logger.error("webhook.engine_error", channel=channel, error=str(e))
 
 
-async def _twitter_ingest_and_reply(event_data: dict, business_id_str: str, sender_name: str) -> None:
+async def _twitter_ingest_and_reply(
+    event_data: dict, business_id_str: str, sender_name: str
+) -> None:
     """ingestion + réponse Twitter."""
     business_id = UUID(business_id_str)
     event = TwitterDMEvent.model_validate(event_data)
@@ -391,7 +392,11 @@ def _augment_for_text_channel(text: str, action_result: dict | None) -> str:
     dep = action_result.get("deposit")
     if isinstance(dep, dict) and isinstance(dep.get("checkout_url"), str):
         amt = dep.get("amount_eur")
-        head = f"💳 Acompte de {float(amt):g} € ici :" if amt is not None else "💳 Régler l'acompte ici :"
+        head = (
+            f"💳 Acompte de {float(amt):g} € ici :"
+            if amt is not None
+            else "💳 Régler l'acompte ici :"
+        )
         blocks.append(head + "\n" + dep["checkout_url"])
     if blocks:
         return text.rstrip() + "\n\n" + "\n\n".join(blocks)
@@ -478,12 +483,13 @@ async def _whatsapp_ingest_and_reply(
         out = await engine.process(req)
         reply_text = _augment_for_text_channel(out.response_text, out.action_result)
         sent = await _whatsapp.send_reply(msg.from_, reply_text, creds=wa_creds)
-        await _persist_outbound_reply(
-            conv_id, business_id, "whatsapp", reply_text, delivered=sent
-        )
+        await _persist_outbound_reply(conv_id, business_id, "whatsapp", reply_text, delivered=sent)
         await _persist_engine_signals_safe(
-            business_id=business_id, customer_id=customer_id,
-            conversation_id=conv_id, channel="whatsapp", result=out,
+            business_id=business_id,
+            customer_id=customer_id,
+            conversation_id=conv_id,
+            channel="whatsapp",
+            result=out,
         )
     except Exception as e:
         logger.error("webhook.whatsapp.engine_error", error=str(e))
@@ -537,7 +543,10 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
         return
 
     if await _outside_hours_auto_reply(
-        business_id, conv_id, "instagram", messaging.sender.id,
+        business_id,
+        conv_id,
+        "instagram",
+        messaging.sender.id,
         partial(_instagram.send_reply, creds=ig_creds),
     ):
         return
@@ -568,8 +577,11 @@ async def _instagram_ingest_and_reply(messaging_data: dict, business_id_str: str
             conv_id, business_id, "instagram", out.response_text, delivered=sent
         )
         await _persist_engine_signals_safe(
-            business_id=business_id, customer_id=customer_id,
-            conversation_id=conv_id, channel="instagram", result=out,
+            business_id=business_id,
+            customer_id=customer_id,
+            conversation_id=conv_id,
+            channel="instagram",
+            result=out,
         )
     except Exception as e:
         logger.error("webhook.instagram.engine_error", error=str(e))
@@ -708,9 +720,7 @@ async def instagram_webhook(
     recipient_id = payload_recipient_id(payload)
     ch_repo = ChannelAccountRepository(db)
     business_id = (
-        await ch_repo.get_business_for_channel("instagram", recipient_id)
-        if recipient_id
-        else None
+        await ch_repo.get_business_for_channel("instagram", recipient_id) if recipient_id else None
     )
     if business_id is None:
         business_id = _fallback_business(settings, "instagram", recipient_id)

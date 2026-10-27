@@ -132,9 +132,7 @@ async def test_temoin_scope_requete_garde_la_connexion(route_pool) -> None:
         seen.append(route_pool.pool.checkedout())
 
     @app.post("/x")
-    async def _route(
-        bg: BackgroundTasks, db: Annotated[AsyncSession, Depends(get_db)]
-    ) -> dict:
+    async def _route(bg: BackgroundTasks, db: Annotated[AsyncSession, Depends(get_db)]) -> dict:
         await db.execute(text("SELECT 1"))
         bg.add_task(_task)
         return {}

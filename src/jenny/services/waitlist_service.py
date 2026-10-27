@@ -237,15 +237,19 @@ async def notify_waitlist_for_freed_slot(
         return None
 
     waiting = (
-        await db.execute(
-            select(WaitlistEntry)
-            .where(
-                WaitlistEntry.business_id == business_id,
-                WaitlistEntry.status == "waiting",
+        (
+            await db.execute(
+                select(WaitlistEntry)
+                .where(
+                    WaitlistEntry.business_id == business_id,
+                    WaitlistEntry.status == "waiting",
+                )
+                .order_by(WaitlistEntry.created_at.asc())
             )
-            .order_by(WaitlistEntry.created_at.asc())
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     match = next((e for e in waiting if _services_match(e.service, service)), None)
     if match is None:
@@ -345,9 +349,7 @@ async def notify_waitlist_for_freed_slot(
             meta={
                 "waitlist_entry_id": str(match.id),
                 "customer_id": str(match.customer_id) if match.customer_id else None,
-                "conversation_id": str(match.conversation_id)
-                if match.conversation_id
-                else None,
+                "conversation_id": str(match.conversation_id) if match.conversation_id else None,
                 "service": match.service,
                 "client_notified_via": canal,
             },

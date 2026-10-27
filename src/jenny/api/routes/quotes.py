@@ -22,9 +22,7 @@ router = APIRouter(prefix="/quotes", tags=["quotes"])
 
 
 @router.get("/{quote_id}/pdf")
-async def download_quote_pdf(
-    quote_id: UUID, db: DbSession, principal: CurrentUser
-) -> Response:
+async def download_quote_pdf(quote_id: UUID, db: DbSession, principal: CurrentUser) -> Response:
     """Renvoie le PDF d'un devis (scopé au business courant).
 
     Régénère le document à la volée depuis le devis stocké : rien n'est mis en

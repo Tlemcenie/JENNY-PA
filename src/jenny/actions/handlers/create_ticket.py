@@ -30,11 +30,7 @@ class CreateTicketAction(BaseAction):
             ).to_dict()
 
         business_id = UUID(bid_str)
-        subject = (
-            params.get("description")
-            or params.get("subject")
-            or "Demande support"
-        )
+        subject = params.get("description") or params.get("subject") or "Demande support"
         if isinstance(subject, str) and len(subject) > 500:
             subject = subject[:497] + "..."
 

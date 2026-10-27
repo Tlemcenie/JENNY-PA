@@ -1,4 +1,4 @@
-"""fabrique : verrou, mpnet unique, ner."""
+"""fabrique : verrou, mpnet unique."""
 
 import asyncio
 import threading
@@ -8,17 +8,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from jenny.core.config import Settings, get_settings
+from jenny.core.config import get_settings
 from jenny.engine import factory
 from jenny.rag import embeddings
 from jenny.rag.embeddings import SentenceTransformerEmbedder
 from jenny.rag.retriever import VectorRetriever
 from ml.models.intent_head import predict as head_predict
 from ml.models.intent_head.predict import ENCODER_NAME, EmbeddingIntentPredictor
-from ml.models.ner.predict import NERPredictor
 
 HEAD_OK = Path("checkpoints/intent_head/head.npz").exists()
-NER_OK = Path("checkpoints/ner/best_model.pt").exists()
 
 
 @pytest.fixture
@@ -114,9 +112,9 @@ class TestMpnetUnique:
         monkeypatch.setattr(head_predict, "_ENCODERS", {})
         emb = SentenceTransformerEmbedder(model_name=ENCODER_NAME)
         monkeypatch.setattr(factory, "get_default_embedder", lambda: emb)
-        env(enable_ml_models="true", intent_model_kind="head")
+        env(enable_ml_models="true")
 
-        head = factory.load_intent_predictor("head", fallback=False)
+        head = factory.load_intent_predictor()
         assert isinstance(head, EmbeddingIntentPredictor)
         assert head.encoder is fake
         # aucun 2e chargement
@@ -161,25 +159,3 @@ class TestMpnetUnique:
         t2.join()
         assert built == [ENCODER_NAME]
         assert got[0] is got[1]
-
-
-class TestNerParDefaut:
-    """ner coupé, réactivable."""
-
-    def test_defaut_coupe(self, monkeypatch) -> None:
-        monkeypatch.delenv("JENNY_ENABLE_NER_MODEL", raising=False)
-        s = Settings(_env_file=None)
-        assert s.enable_ner_model is False
-        assert s.intent_head_path == "checkpoints/intent_head/head.npz"
-
-    @pytest.mark.skipif(not (HEAD_OK and NER_OK), reason="checkpoints absents")
-    def test_charge_avec_head(self, env) -> None:
-        env(enable_ml_models="true", intent_model_kind="head", enable_ner_model="true")
-        intent, ner = factory.load_ml_predictors()
-        assert isinstance(intent, EmbeddingIntentPredictor)
-        assert isinstance(ner, NERPredictor)
-
-    def test_coupable(self, env) -> None:
-        env(enable_ml_models="true", intent_model_kind="lstm", enable_ner_model="false")
-        _, ner = factory.load_ml_predictors()
-        assert ner is None

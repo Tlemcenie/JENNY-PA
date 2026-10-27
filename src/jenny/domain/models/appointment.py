@@ -63,20 +63,14 @@ class Appointment(Base, TimestampMixin):
     location: Mapped[str | None] = mapped_column(String(255), default=None)
     # Canal d'origine (whatsapp, instagram, email, form, manual…).
     channel: Mapped[str | None] = mapped_column(String(50), default=None)
-    start_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, index=True
-    )
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # scheduled, confirmed, cancelled, completed
-    status: Mapped[str] = mapped_column(
-        String(20), default="scheduled", nullable=False
-    )
+    status: Mapped[str] = mapped_column(String(20), default="scheduled", nullable=False)
     # Email de l'agent / source ayant créé le RDV (Jenny ou un humain).
     created_by: Mapped[str | None] = mapped_column(String(255), default=None)
     # Date d'envoi du rappel « dans l'heure » (None = pas encore) — anti-doublon.
-    reminder_sent_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # Date d'envoi du rappel « la veille » (RDV dans les 24h) — anti-doublon.
     day_reminder_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None

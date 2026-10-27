@@ -36,10 +36,8 @@ from jenny.api.routes import (
     jenny_metrics,
     knowledge,
     knowledge_gaps,
-    llm_settings,
     messages,
     metrics,
-    nanogpt,
     notifications,
     owner_chat,
     payment_webhooks,
@@ -65,26 +63,9 @@ logger = get_logger(__name__)
 
 
 async def _warmup_models() -> None:
-    """Précharge LLM local et embedder RAG au démarrage (tâche de fond).
-
-    Évite le cold-start sur le PREMIER message reçu (WhatsApp, etc.) : le modèle
-    est déjà chargé en mémoire, la réponse part « au tac au tac ». Deux cas
-    indépendants :
-    - LLM Ollama : uniquement pour le provider « llama » (sans objet Groq/OpenAI) ;
-    - embedder RAG : le sentence-transformer (défaut, in-process) met plusieurs
-      secondes à charger torch + poids → à chauffer QUEL QUE SOIT le provider
-      LLM, notamment en prod Cloud Run (Groq). Best-effort : n'interrompt jamais.
-    - moteur de conversation (tête d'intention mpnet) : construit dans un
-      thread pour ne pas geler la première requête.
-    """
+    """Précharge embedder et moteur."""
     settings = get_settings()
     try:
-        if settings.llm_provider == "llama":
-            from jenny.llm.providers import get_default_llm_provider
-
-            provider = get_default_llm_provider()
-            if provider is not None:
-                await provider.generate("ping", max_tokens=1)
         from jenny.rag.embeddings import get_default_embedder
 
         await get_default_embedder().embed_text("ping")
@@ -92,9 +73,9 @@ async def _warmup_models() -> None:
         from jenny.engine.factory import get_engine
 
         await asyncio.to_thread(get_engine)
-        logger.info("jenny.llm_warmup.done", model=settings.llm_model)
+        logger.info("jenny.warmup.done", model=settings.llm_model)
     except Exception as exc:
-        logger.warning("jenny.llm_warmup_failed", error=str(exc))
+        logger.warning("jenny.warmup_failed", error=str(exc))
 
 
 @asynccontextmanager
@@ -189,8 +170,6 @@ def create_app() -> FastAPI:
     app.include_router(owner_chat.router, prefix="/api/v1", tags=["owner-assistant"])
     app.include_router(jenny_metrics.router, prefix="/api/v1", tags=["jenny-metrics"])
     app.include_router(feedback.router, prefix="/api/v1", tags=["feedback"])
-    app.include_router(nanogpt.router, prefix="/api/v1", tags=["nanogpt"])
-    app.include_router(llm_settings.router, prefix="/api/v1", tags=["llm"])
     app.include_router(notifications.router, prefix="/api/v1", tags=["notifications"])
     app.include_router(audit.router, prefix="/api/v1", tags=["audit"])
     app.include_router(api_keys.router, prefix="/api/v1", tags=["api-keys"])

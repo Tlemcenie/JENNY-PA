@@ -14,7 +14,6 @@ from pathlib import Path
 
 import numpy as np
 
-from ml.models.intent.config import INTENT_LABELS, LABEL_TO_ID
 from ml.models.intent_head.augment import perturb_eval, variants
 from ml.models.intent_head.data import (
     DATA_PATH,
@@ -25,6 +24,7 @@ from ml.models.intent_head.data import (
     load_rows,
 )
 from ml.models.intent_head.features import CharNgrams
+from ml.models.intent_head.labels import INTENT_LABELS, LABEL_TO_ID
 from ml.models.intent_head.predict import (
     ENCODER_NAME,
     FORMAT,

@@ -7,7 +7,7 @@
 #  - venv multi-stage → image runtime mince, utilisateur non-root ;
 #  - écoute sur $PORT (Cloud Run), migrations en option (Job recommandé).
 #
-# mlflow/datasets/groq/rich sont dans l'extra [ml] : pas installés ici.
+# scikit-learn (extra [ml]) : pas installé ici.
 
 FROM python:3.12-slim AS builder
 
@@ -53,7 +53,6 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder --chown=app:app /opt/hf /opt/hf
 COPY src ./src
 COPY ml ./ml
-COPY nanogpt ./nanogpt
 COPY migrations ./migrations
 COPY alembic.ini ./
 COPY checkpoints ./checkpoints

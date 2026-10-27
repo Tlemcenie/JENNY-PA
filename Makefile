@@ -21,7 +21,7 @@ help: ## Afficher l'aide
 install: ## Installer les dépendances Python (mode éditable, sans ML lourd)
 	$(PYTHON) -m pip install -e ".[dev]"
 
-install-ml: ## Ajouter l'extra ML (mlflow, datasets, groq, rich, scikit-learn)
+install-ml: ## Ajouter l'extra ML (scikit-learn, entraînement de la tête)
 	$(PYTHON) -m pip install -e ".[ml]"
 
 dev: ## Setup complet dev (install + ML + pre-commit)
@@ -84,21 +84,21 @@ test-connectors-webhook: ## Simuler un webhook (ex: make test-connectors-webhook
 
 # ── Qualité de code ──
 lint: ## Vérifier le code avec ruff
-	$(PYTHON) -m ruff check src/ tests/ ml/ nanogpt/ pipelines/
+	$(PYTHON) -m ruff check src/ tests/ ml/
 
 format: ## Formater le code avec ruff
-	$(PYTHON) -m ruff format src/ tests/ ml/ nanogpt/ pipelines/
-	$(PYTHON) -m ruff check --fix src/ tests/ ml/ nanogpt/ pipelines/
+	$(PYTHON) -m ruff format src/ tests/ ml/
+	$(PYTHON) -m ruff check --fix src/ tests/ ml/
 
 format-check: ## Vérifier le formatage sans modifier (CI)
-	$(PYTHON) -m ruff format --check src/ tests/ ml/ nanogpt/ pipelines/
+	$(PYTHON) -m ruff format --check src/ tests/ ml/
 
 typecheck: ## Vérifier les types avec mypy
 	PYTHONPATH=src $(PYTHON) -m mypy src/jenny/
 
 ci: ## Même séquence que la CI GitHub (format et mypy informatifs, sans Postgres)
-	$(PYTHON) -m ruff check src/ tests/ ml/ nanogpt/ pipelines/
-	-$(PYTHON) -m ruff format --check src/ tests/ ml/ nanogpt/ pipelines/
+	$(PYTHON) -m ruff check src/ tests/ ml/
+	-$(PYTHON) -m ruff format --check src/ tests/ ml/
 	PYTHONPATH=src:. $(PYTHON) -m pytest tests/ -q --tb=short --cov --cov-report=term:skip-covered
 	-PYTHONPATH=src $(PYTHON) -m mypy src/jenny/
 	cd frontend && npx tsc --noEmit

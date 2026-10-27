@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from jenny.actions.handlers.book_appointment import BookAppointmentAction
 from jenny.actions.handlers.create_ticket import CreateTicketAction
 from jenny.actions.handlers.order_check import CheckOrderAction
 from jenny.actions.registry import ActionRegistry
@@ -119,24 +118,3 @@ class TestCreateTicketAction:
 
         assert result["success"] is True
         assert result["data"]["reference"].startswith("TKT")
-
-
-class TestBookAppointmentAction:
-    """Tests pour la réservation de rendez-vous."""
-
-    @pytest.mark.asyncio
-    async def test_book_appointment(self) -> None:
-        """Réserve un rendez-vous."""
-        action = BookAppointmentAction()
-        result = await action.execute({"date": "20/03/2026"})
-
-        assert result["success"] is True
-        assert "confirmé" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_book_appointment_missing_date(self) -> None:
-        """Manque la date."""
-        action = BookAppointmentAction()
-        result = await action.execute({})
-
-        assert result["success"] is False

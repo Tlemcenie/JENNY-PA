@@ -41,8 +41,12 @@ async def test_day_before_reminder_once(db_tables: None) -> None:
         start = datetime.now(UTC) + timedelta(hours=20)  # dans 24h, hors de l'heure
         s.add(
             Appointment(
-                business_id=bid, title="Coupe", channel="chat", start_at=start,
-                end_at=start + timedelta(minutes=30), status="scheduled",
+                business_id=bid,
+                title="Coupe",
+                channel="chat",
+                start_at=start,
+                end_at=start + timedelta(minutes=30),
+                status="scheduled",
                 created_by="boss@x.com",
             )
         )

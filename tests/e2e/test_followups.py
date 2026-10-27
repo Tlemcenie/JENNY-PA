@@ -40,18 +40,27 @@ async def test_post_visit_review_request(db_tables: None) -> None:
     async with async_session_factory() as s, s.begin():
         s.add(Business(id=bid, name="Salon", slug=f"s-{uuid4().hex[:6]}"))
         start = datetime.now(UTC) - timedelta(hours=2)  # terminé il y a ~90 min
-        s.add(Appointment(
-            business_id=bid, title="Coupe", channel="chat", start_at=start,
-            end_at=start + timedelta(minutes=30), status="completed", created_by="boss@x.com",
-        ))
+        s.add(
+            Appointment(
+                business_id=bid,
+                title="Coupe",
+                channel="chat",
+                start_at=start,
+                end_at=start + timedelta(minutes=30),
+                status="completed",
+                created_by="boss@x.com",
+            )
+        )
 
     res = await sweep_conversations({})
     assert int(res["review_asked"]) == 1
 
     async with async_session_factory() as s:
-        n = (await s.execute(
-            select(func.count(Notification.id)).where(Notification.kind == "review_request")
-        )).scalar_one()
+        n = (
+            await s.execute(
+                select(func.count(Notification.id)).where(Notification.kind == "review_request")
+            )
+        ).scalar_one()
         appt = (await s.execute(select(Appointment))).scalar_one()
     assert n == 1 and appt.review_request_sent_at is not None
 
@@ -69,19 +78,28 @@ async def test_rebook_reminder_when_no_upcoming(db_tables: None) -> None:
         s.add(cust)
         await s.flush()
         old = datetime.now(UTC) - timedelta(days=50)  # dernier RDV il y a 50 jours
-        s.add(Appointment(
-            business_id=bid, customer_id=cust.id, title="Couleur", channel="chat",
-            start_at=old, end_at=old + timedelta(minutes=60), status="completed",
-            created_by="boss@x.com",
-        ))
+        s.add(
+            Appointment(
+                business_id=bid,
+                customer_id=cust.id,
+                title="Couleur",
+                channel="chat",
+                start_at=old,
+                end_at=old + timedelta(minutes=60),
+                status="completed",
+                created_by="boss@x.com",
+            )
+        )
 
     res = await sweep_conversations({})
     assert int(res["rebook_nudged"]) == 1
 
     async with async_session_factory() as s:
-        n = (await s.execute(
-            select(func.count(Notification.id)).where(Notification.kind == "rebook_reminder")
-        )).scalar_one()
+        n = (
+            await s.execute(
+                select(func.count(Notification.id)).where(Notification.kind == "rebook_reminder")
+            )
+        ).scalar_one()
     assert n == 1
 
 
@@ -94,23 +112,39 @@ async def test_no_rebook_if_upcoming_exists(db_tables: None) -> None:
         s.add(cust)
         await s.flush()
         old = datetime.now(UTC) - timedelta(days=50)
-        s.add(Appointment(
-            business_id=bid, customer_id=cust.id, title="Coupe", channel="chat",
-            start_at=old, end_at=old + timedelta(minutes=30), status="completed",
-            created_by="boss@x.com",
-        ))
+        s.add(
+            Appointment(
+                business_id=bid,
+                customer_id=cust.id,
+                title="Coupe",
+                channel="chat",
+                start_at=old,
+                end_at=old + timedelta(minutes=30),
+                status="completed",
+                created_by="boss@x.com",
+            )
+        )
         # Bob a déjà un RDV à venir → pas de relance.
         soon = datetime.now(UTC) + timedelta(days=3)
-        s.add(Appointment(
-            business_id=bid, customer_id=cust.id, title="Coupe", channel="chat",
-            start_at=soon, end_at=soon + timedelta(minutes=30), status="scheduled",
-            created_by="boss@x.com",
-        ))
+        s.add(
+            Appointment(
+                business_id=bid,
+                customer_id=cust.id,
+                title="Coupe",
+                channel="chat",
+                start_at=soon,
+                end_at=soon + timedelta(minutes=30),
+                status="scheduled",
+                created_by="boss@x.com",
+            )
+        )
 
     res = await sweep_conversations({})
     assert int(res["rebook_nudged"]) == 0
     async with async_session_factory() as s:
-        n = (await s.execute(
-            select(func.count(Notification.id)).where(Notification.kind == "rebook_reminder")
-        )).scalar_one()
+        n = (
+            await s.execute(
+                select(func.count(Notification.id)).where(Notification.kind == "rebook_reminder")
+            )
+        ).scalar_one()
     assert n == 0

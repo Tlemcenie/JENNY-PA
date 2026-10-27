@@ -94,12 +94,10 @@ class GenerateQuoteAction(BaseAction):
                     customer = await db.get(Customer, UUID(str(raw_cid)))
                 except (ValueError, TypeError):
                     customer = None
-            email = (params.get("email") or (customer.email if customer else None) or "").strip() or None
-            name = (
-                params.get("name")
-                or (customer.full_name if customer else None)
-                or "client"
-            )
+            email = (
+                params.get("email") or (customer.email if customer else None) or ""
+            ).strip() or None
+            name = params.get("name") or (customer.full_name if customer else None) or "client"
 
             valid_until = dt.datetime.now(dt.UTC) + dt.timedelta(days=_VALIDITY_DAYS)
             reference = f"DEV-{uuid4().hex[:8].upper()}"
@@ -235,7 +233,7 @@ def _quote_email_html(
     return (
         f'<div style="font-family:{SANS};font-size:15px;line-height:1.6;color:{MUTED};margin:0 0 18px;">'
         f"Bonjour {escape(customer_name)},<br><br>"
-        f"Voici votre devis <b style=\"color:{CREAM};\">{escape(reference)}</b>. "
+        f'Voici votre devis <b style="color:{CREAM};">{escape(reference)}</b>. '
         f"Le détail complet est dans le PDF joint."
         f"</div>"
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
@@ -252,7 +250,7 @@ def _quote_email_html(
         f"Valable jusqu'au {valid_until.strftime('%d/%m/%Y')}</div>"
         f'<div style="font-family:{SANS};font-size:14px;line-height:1.6;color:{MUTED};margin:18px 0 0;">'
         f"Pour accepter ce devis, répondez simplement à cet email. À très vite&nbsp;!<br>"
-        f"<b style=\"color:{CREAM};\">{escape(business_name)}</b></div>"
+        f'<b style="color:{CREAM};">{escape(business_name)}</b></div>'
     )
 
 

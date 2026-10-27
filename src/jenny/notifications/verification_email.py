@@ -40,7 +40,7 @@ def build_verification_email(
     expiry_note = (
         f'<p style="margin:18px 0 0;font-family:-apple-system,Arial,sans-serif;'
         f'font-size:13px;color:#A39DB0;text-align:center;">'
-        f"Ce code expire dans <strong style=\"color:#F4F1ED;\">{ttl_minutes} minutes</strong>.</p>"
+        f'Ce code expire dans <strong style="color:#F4F1ED;">{ttl_minutes} minutes</strong>.</p>'
     )
 
     body_html = render_email(
@@ -49,7 +49,7 @@ def build_verification_email(
         heading="Confirmez votre",
         accent="adresse email.",
         paragraphs=[
-            f"{hello[:-1]} 👋 — bienvenue chez <b style=\"color:#F4F1ED;\">{app_name}</b>.",
+            f'{hello[:-1]} 👋 — bienvenue chez <b style="color:#F4F1ED;">{app_name}</b>.',
             "Saisissez ce code pour activer votre compte :",
         ],
         content_html=code_boxes(code) + expiry_note,
@@ -89,7 +89,7 @@ def build_reset_email(
     expiry_note = (
         f'<p style="margin:18px 0 0;font-family:-apple-system,Arial,sans-serif;'
         f'font-size:13px;color:#A39DB0;text-align:center;">'
-        f"Ce code expire dans <strong style=\"color:#F4F1ED;\">{ttl_minutes} minutes</strong>.</p>"
+        f'Ce code expire dans <strong style="color:#F4F1ED;">{ttl_minutes} minutes</strong>.</p>'
     )
 
     body_html = render_email(

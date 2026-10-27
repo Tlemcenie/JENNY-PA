@@ -57,13 +57,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# entraînement, suivi, génération
+# entraînement de la tête
 ml = [
-    "mlflow>=2.19,<3.0",
-    "datasets>=3.2,<4.0",
-    "groq>=0.9,<1.0",
-    "rich>=13.0,<14.0",
-    # entraînement de la tête
     # (déjà tirés par sentence-transformers)
     "scikit-learn>=1.5,<2.0",
     "scipy>=1.11,<2.0",
@@ -124,7 +119,7 @@ warn_unused_configs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["arq.*", "mlflow.*", "pgvector.*"]
+module = ["arq.*", "pgvector.*"]
 ignore_missing_imports = true
 
 # ── Pytest ──

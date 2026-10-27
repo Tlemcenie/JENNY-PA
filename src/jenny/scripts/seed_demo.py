@@ -67,9 +67,7 @@ async def _purge_demo() -> None:
     """Supprime l'utilisateur et le business démo (cascade naturel via FK)."""
     async with async_session_factory() as session:
         biz = (
-            await session.execute(
-                select(Business).where(Business.slug == DEMO_BUSINESS_SLUG)
-            )
+            await session.execute(select(Business).where(Business.slug == DEMO_BUSINESS_SLUG))
         ).scalar_one_or_none()
         if biz is not None:
             await session.execute(delete(Business).where(Business.id == biz.id))

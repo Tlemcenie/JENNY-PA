@@ -133,9 +133,7 @@ async def get_insights(
 
     # ── Clients ──
     customers_total = (
-        await db.execute(
-            select(func.count(Customer.id)).where(Customer.business_id == bid)
-        )
+        await db.execute(select(func.count(Customer.id)).where(Customer.business_id == bid))
     ).scalar_one()
 
     # ── Commandes + chiffre d'affaires (commandes payées) ──

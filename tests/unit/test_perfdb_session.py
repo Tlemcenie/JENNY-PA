@@ -16,7 +16,12 @@ PG = "postgresql+asyncpg://u:p@db.example:5432/jenny"
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("JENNY_SQL_ECHO", "JENNY_DB_POOLER", "JENNY_DB_POOL_SIZE", "JENNY_DB_MAX_OVERFLOW"):
+    for name in (
+        "JENNY_SQL_ECHO",
+        "JENNY_DB_POOLER",
+        "JENNY_DB_POOL_SIZE",
+        "JENNY_DB_MAX_OVERFLOW",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 

@@ -112,7 +112,9 @@ class TestStaffCrud:
         )
         assert r.json()["working_hours"] is None
 
-        r = await client.put(f"/api/v1/staff/{lea['id']}/skills", headers=headers, json={"prestation_ids": []})
+        r = await client.put(
+            f"/api/v1/staff/{lea['id']}/skills", headers=headers, json={"prestation_ids": []}
+        )
         assert r.status_code == 200 and r.json()["prestation_ids"] == []
 
     @pytest.mark.asyncio
@@ -125,7 +127,9 @@ class TestStaffCrud:
         )
         assert bad_hours.status_code == 422
         bad_day = await client.post(
-            "/api/v1/staff", headers=headers, json={"display_name": "X", "working_hours": {"lundi": None}}
+            "/api/v1/staff",
+            headers=headers,
+            json={"display_name": "X", "working_hours": {"lundi": None}},
         )
         assert bad_day.status_code == 422
         bad_color = await client.post(
@@ -142,8 +146,12 @@ class TestStaffCrud:
         async with async_session_factory() as s, s.begin():
             s.add(
                 Appointment(
-                    business_id=UUID(bid), staff_id=UUID(busy["id"]), title="Coupe",
-                    start_at=start, end_at=start + timedelta(minutes=30), status="scheduled",
+                    business_id=UUID(bid),
+                    staff_id=UUID(busy["id"]),
+                    title="Coupe",
+                    start_at=start,
+                    end_at=start + timedelta(minutes=30),
+                    status="scheduled",
                 )
             )
         r1 = await client.delete(f"/api/v1/staff/{free['id']}", headers=headers)
@@ -164,7 +172,9 @@ class TestTenantIsolation:
         lea = await _new_staff(client, h1, "Léa")
         assert (await client.get("/api/v1/staff", headers=h2)).json()["total"] == 0
         assert (await client.get(f"/api/v1/staff/{lea['id']}", headers=h2)).status_code == 404
-        r = await client.patch(f"/api/v1/staff/{lea['id']}", headers=h2, json={"display_name": "Pirate"})
+        r = await client.patch(
+            f"/api/v1/staff/{lea['id']}", headers=h2, json={"display_name": "Pirate"}
+        )
         assert r.status_code == 404
         assert (await client.delete(f"/api/v1/staff/{lea['id']}", headers=h2)).status_code == 404
 
@@ -198,7 +208,9 @@ class TestTenantIsolation:
 
 class TestCalendarStaff:
     @pytest.mark.asyncio
-    async def test_create_update_list_with_staff(self, client: AsyncClient, db_tables: None) -> None:
+    async def test_create_update_list_with_staff(
+        self, client: AsyncClient, db_tables: None
+    ) -> None:
         headers, _ = await _auth(client, "cal@x.com")
         lea = await _new_staff(client, headers, "Léa")
         marc = await _new_staff(client, headers, "Marc")
@@ -213,7 +225,9 @@ class TestCalendarStaff:
         assert auto.json()["staff_name"] == "Léa" and auto.json()["staff_color"] == lea["color"]
 
         r = await client.patch(
-            f"/api/v1/appointments/{manual.json()['id']}", headers=headers, json={"staff_id": marc["id"]}
+            f"/api/v1/appointments/{manual.json()['id']}",
+            headers=headers,
+            json={"staff_id": marc["id"]},
         )
         assert r.status_code == 200 and r.json()["staff_name"] == "Marc"
 
@@ -235,7 +249,7 @@ class TestCalendarStaff:
 
     @pytest.mark.asyncio
     async def test_occupancy(self, client: AsyncClient, db_tables: None) -> None:
-        headers, bid = await _auth(client, "occ@x.com")
+        headers, _bid = await _auth(client, "occ@x.com")
         lea = await _new_staff(client, headers, "Léa")
         await _new_staff(client, headers, "Marc")
         day = _day_iso(1)
@@ -277,7 +291,13 @@ class TestPublicBookingStaff:
         chosen = next(s["start_at"] for s in slots if s["label"] == "10:00")
 
         def _body(email: str, **extra) -> dict:
-            return {"full_name": "Client", "email": email, "start_at": chosen, "duration": 30, **extra}
+            return {
+                "full_name": "Client",
+                "email": email,
+                "start_at": chosen,
+                "duration": 30,
+                **extra,
+            }
 
         b1 = await client.post(f"/api/v1/public/booking/{slug}/book", json=_body("a@c.com"))
         b2 = await client.post(f"/api/v1/public/booking/{slug}/book", json=_body("b@c.com"))

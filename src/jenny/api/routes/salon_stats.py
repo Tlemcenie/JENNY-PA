@@ -113,10 +113,20 @@ async def salon_stats(
     """Statistiques métier du salon courant sur les ``range_days`` derniers jours."""
     bid = principal.business_id
     empty = SalonStats(
-        range_days=range_days, appointments_total=0, upcoming=0, completed=0,
-        cancelled=0, cancellation_rate_pct=0.0, fill_rate_pct=0.0,
-        top_prestations=[], peak_hours=[], busiest_day=None,
-        clients_total=0, loyal_clients=0, new_clients=0, revenue_upcoming_eur=0.0,
+        range_days=range_days,
+        appointments_total=0,
+        upcoming=0,
+        completed=0,
+        cancelled=0,
+        cancellation_rate_pct=0.0,
+        fill_rate_pct=0.0,
+        top_prestations=[],
+        peak_hours=[],
+        busiest_day=None,
+        clients_total=0,
+        loyal_clients=0,
+        new_clients=0,
+        revenue_upcoming_eur=0.0,
         deposits=DepositStats(enabled=False, pending=0, paid=0, collected_eur=0.0),
         waitlist=WaitlistStats(waiting=0, notified=0),
     )
@@ -152,9 +162,20 @@ async def salon_stats(
         )
     ).one()
     (
-        total_past, completed, cancelled, no_show, upcoming,
-        dep_pending, dep_paid, collected_cents,
-        clients_total, loyal, wl_waiting, wl_notified, reviews_count, avg_rating,
+        total_past,
+        completed,
+        cancelled,
+        no_show,
+        upcoming,
+        dep_pending,
+        dep_paid,
+        collected_cents,
+        clients_total,
+        loyal,
+        wl_waiting,
+        wl_notified,
+        reviews_count,
+        avg_rating,
     ) = agg
     total_past, cancelled = int(total_past or 0), int(cancelled or 0)
     cancel_rate = round(100 * cancelled / total_past, 1) if total_past else 0.0
@@ -182,9 +203,7 @@ async def salon_stats(
     starts = (await db.execute(select(a.start_at).where(*window, honored))).scalars().all()
     hour_counter: Counter[int] = Counter(_aware(s).astimezone(tz).hour for s in starts)
     day_counter: Counter[int] = Counter(_aware(s).astimezone(tz).weekday() for s in starts)
-    peak_hours = [
-        HourCount(hour=h, count=c) for h, c in sorted(hour_counter.most_common(4))
-    ]
+    peak_hours = [HourCount(hour=h, count=c) for h, c in sorted(hour_counter.most_common(4))]
     busiest_day = _WD_FR[day_counter.most_common(1)[0][0]] if day_counter else None
 
     # CA estimé à venir (prestations reconnues dans le catalogue).
@@ -238,8 +257,12 @@ def _side_counts(bid) -> list:
     return [
         select(func.count()).select_from(per_client).scalar_subquery(),
         select(func.count()).select_from(per_client).where(per_client.c.n >= 2).scalar_subquery(),
-        select(func.count(w.id)).where(w.business_id == bid, w.status == "waiting").scalar_subquery(),
-        select(func.count(w.id)).where(w.business_id == bid, w.status == "notified").scalar_subquery(),
+        select(func.count(w.id))
+        .where(w.business_id == bid, w.status == "waiting")
+        .scalar_subquery(),
+        select(func.count(w.id))
+        .where(w.business_id == bid, w.status == "notified")
+        .scalar_subquery(),
         select(func.count(Review.id)).where(Review.business_id == bid).scalar_subquery(),
         select(func.avg(Review.rating)).where(Review.business_id == bid).scalar_subquery(),
     ]

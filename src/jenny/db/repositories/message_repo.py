@@ -114,8 +114,7 @@ class MessageRepository(BaseRepository[Message]):
                 ra = datetime.fromisoformat(data["r"])
                 mid = UUID(data["i"])
                 stmt = stmt.where(
-                    (Message.received_at < ra)
-                    | ((Message.received_at == ra) & (Message.id < mid))
+                    (Message.received_at < ra) | ((Message.received_at == ra) & (Message.id < mid))
                 )
             except (ValueError, KeyError, json.JSONDecodeError, OSError):
                 pass

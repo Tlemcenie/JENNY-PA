@@ -2,7 +2,7 @@
 
 Guide pratique pour mettre Jenny en ligne : **API** (FastAPI) + **frontend** (Next.js)
 sur **Cloud Run**, **Postgres + pgvector** sur **Cloud SQL**, **Redis** sur **Memorystore**,
-et un **LLM hébergé** (Ollama n'existe pas sur Cloud Run).
+et un **LLM hébergé** (Groq).
 
 > Conçu pour un premier déploiement « ça marche, on affinera ». Les points à durcir
 > ensuite sont signalés par ⚠️.
@@ -215,7 +215,7 @@ gcloud run services update jenny-api --region=$REGION \
   CUDA) et les seules dépendances de prod. `RUN_MIGRATIONS=0` (les migrations passent par le
   Job §6). L'image de dev `docker/api.Dockerfile` écoute, elle, sur 8000.
 - `--memory=4Gi` : PyTorch + mpnet (partagé entre RAG et intention, chargé une seule fois)
-  + LSTM de secours. `--readiness` : sonde `/ready` (renvoie 503 si Postgres/Redis KO).
+  et la tête d'intention. `--readiness` : sonde `/ready` (renvoie 503 si Postgres/Redis KO).
 - LLM : on garde le modèle par défaut du code (`openai/gpt-oss-120b` chez Groq) ;
   `llama-3.3-70b-versatile` a été **retiré** par Groq (404 → réponses templates).
 - Sans Redis : `--max-instances=1` et `WEB_CONCURRENCY=1` (voir §3). Les valeurs ci-dessus
@@ -310,12 +310,10 @@ domaine public : `stripe listen --forward-to <API_URL>/api/v1/payments/stripe`.
 
 ## 12. Ce qui reste à faire / limites connues
 
-- **LLM** : sur GCP on passe par un fournisseur hébergé (Groq/OpenAI/Mistral) via
-  `JENNY_LLM_PROVIDER` + clé. Pour garder Ollama, il faut une VM GPU séparée (hors Cloud Run).
+- **LLM** : Groq par défaut, OpenAI en option (`JENNY_LLM_PROVIDER` + clé).
 - **Email** : réception IMAP *par salon* + auto-réponse Jenny par email = chantier suivant
   (le polling IMAP global + le webhook inbound marchent déjà ; la réponse manuelle aussi).
-- **Image API lourde** (torch CPU + mpnet ~1,1 Go embarqué) : voir §5/§7 ; le checkpoint
-  NanoGPT (~200 Mo, option /lab) est exclu de l'image via `.dockerignore` — la prod utilise Groq.
+- **Image API lourde** (torch CPU + mpnet ~1,1 Go embarqué) : voir §5/§7.
 - **Changer de modèle d'embedding** : modifier `JENNY_EMBEDDINGS_MODEL` ne suffit pas —
   l'image est hors ligne (rebuild avec `--build-arg EMBED_MODEL=…`), la colonne `vector(768)`
   doit correspondre, et `scripts/reindex_kb.py --rechunk` est obligatoire (§6).

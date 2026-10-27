@@ -19,9 +19,7 @@ from jenny.db.base import Base, TimestampMixin
 class WaitlistEntry(Base, TimestampMixin):
     __tablename__ = "waitlist_entries"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     business_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("businesses.id", ondelete="CASCADE"),
@@ -43,6 +41,4 @@ class WaitlistEntry(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(
         String(20), default="waiting", server_default="waiting", nullable=False, index=True
     )
-    notified_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

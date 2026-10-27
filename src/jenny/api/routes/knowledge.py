@@ -263,9 +263,7 @@ async def add_files(
                 if not text_content:
                     errors.append({"file": name, "error": "Texte vide"})
                     continue
-                entry = await kb.add_text(
-                    content=text_content, title=name, category=category
-                )
+                entry = await kb.add_text(content=text_content, title=name, category=category)
             else:
                 errors.append({"file": name, "error": "Format non supporté (PDF, .txt, .md)"})
                 continue

@@ -139,9 +139,7 @@ class TestPrestations:
         ).status_code == 404
 
     @pytest.mark.asyncio
-    async def test_seed_coiffeur_idempotent(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_seed_coiffeur_idempotent(self, client: AsyncClient, db_tables: None) -> None:
         headers, _bid = await _auth(client, "presta-seed@x.com")
 
         # 1er appel : seed
@@ -189,14 +187,10 @@ async def _seed_pending(
 
 class TestPendingQuestions:
     @pytest.mark.asyncio
-    async def test_list_answer_dismiss(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_list_answer_dismiss(self, client: AsyncClient, db_tables: None) -> None:
         headers, bid = await _auth(client, "pending-loop@x.com")
         conv = uuid4()
-        q1 = await _seed_pending(
-            bid, "Faites-vous des chignons de mariée ?", conversation_id=conv
-        )
+        q1 = await _seed_pending(bid, "Faites-vous des chignons de mariée ?", conversation_id=conv)
         q2 = await _seed_pending(bid, "Avez-vous un parking ?", conversation_id=conv)
 
         # liste les ouvertes
@@ -207,9 +201,7 @@ class TestPendingQuestions:
 
         # filtre par conversation
         by_conv = (
-            await client.get(
-                f"/api/v1/pending-questions?conversation_id={conv}", headers=headers
-            )
+            await client.get(f"/api/v1/pending-questions?conversation_id={conv}", headers=headers)
         ).json()
         assert by_conv["total"] == 2
         assert by_conv["questions"][0]["conversation_id"] == str(conv)
@@ -234,26 +226,22 @@ class TestPendingQuestions:
 
         # visible avec status=answered
         answered = (
-            await client.get(
-                "/api/v1/pending-questions?status=answered", headers=headers
-            )
+            await client.get("/api/v1/pending-questions?status=answered", headers=headers)
         ).json()
         assert answered["total"] == 1 and answered["questions"][0]["id"] == q1
 
         # dismiss la 2e
-        d = await client.post(
-            f"/api/v1/pending-questions/{q2}/dismiss", headers=headers
-        )
+        d = await client.post(f"/api/v1/pending-questions/{q2}/dismiss", headers=headers)
         assert d.status_code == 200, d.text
         assert d.json()["status"] == "dismissed"
 
         # plus rien d'ouvert
-        assert (
-            await client.get("/api/v1/pending-questions?status=open", headers=headers)
-        ).json()["total"] == 0
-        assert (
-            await client.get("/api/v1/pending-questions?status=all", headers=headers)
-        ).json()["total"] == 2
+        assert (await client.get("/api/v1/pending-questions?status=open", headers=headers)).json()[
+            "total"
+        ] == 0
+        assert (await client.get("/api/v1/pending-questions?status=all", headers=headers)).json()[
+            "total"
+        ] == 2
 
     @pytest.mark.asyncio
     async def test_answer_save_to_kb_is_graceful_without_pgvector(
@@ -271,9 +259,7 @@ class TestPendingQuestions:
         assert r.json()["status"] == "answered"
 
     @pytest.mark.asyncio
-    async def test_answer_other_business_is_404(
-        self, client: AsyncClient, db_tables: None
-    ) -> None:
+    async def test_answer_other_business_is_404(self, client: AsyncClient, db_tables: None) -> None:
         _headers, bid = await _auth(client, "pending-owner@x.com")
         other_headers, _ = await _auth(client, "pending-intrus@x.com")
         qid = await _seed_pending(bid, "Question privée ?")
@@ -285,7 +271,5 @@ class TestPendingQuestions:
             )
         ).status_code == 404
         assert (
-            await client.post(
-                f"/api/v1/pending-questions/{qid}/dismiss", headers=other_headers
-            )
+            await client.post(f"/api/v1/pending-questions/{qid}/dismiss", headers=other_headers)
         ).status_code == 404

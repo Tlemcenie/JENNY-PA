@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, ClassVar
 from uuid import UUID
 
@@ -24,19 +23,16 @@ from jenny.services.text_clean import clean_message_text, detect_language_safe
 logger = get_logger(__name__)
 
 
-def _intent_from_checkpoint(text: str) -> tuple[str | None, float]:
-    """charge l'intent si checkpoint."""
-    ckpt = Path("checkpoints/intent/best_model.pt")
-    if not ckpt.exists():
-        return None, 0.0
+async def _intent_of(text: str) -> tuple[str | None, float]:
+    """intention via la tête du moteur."""
     try:
-        from ml.models.intent.predict import IntentPredictor
+        from jenny.engine.factory import aget_engine
 
-        predictor = IntentPredictor.from_checkpoint(str(ckpt))
-        result = predictor.predict_multi(text)
-        primary = result.get("primary_intent")
-        conf = float(result.get("primary_confidence") or 0.0)
-        return primary, conf
+        predictor = (await aget_engine()).intent_predictor
+        if predictor is None:
+            return None, 0.0
+        result = await asyncio.to_thread(predictor.predict_multi, text)
+        return result.get("primary_intent"), float(result.get("primary_confidence") or 0.0)
     except Exception as e:
         logger.warning("task.process_message.intent_failed", error=str(e))
         return None, 0.0
@@ -105,7 +101,7 @@ async def process_message(ctx: dict[str, Any], message_id: str) -> dict[str, str
         text_for_ml = (msg.cleaned_text or msg.content_text or "").strip()
         intent_label, conf = (None, 0.0)
         if text_for_ml:
-            intent_label, conf = _intent_from_checkpoint(text_for_ml)
+            intent_label, conf = await _intent_of(text_for_ml)
 
         if intent_label:
             msg.intent_label = intent_label
@@ -198,13 +194,17 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
     async with async_session_factory() as session, session.begin():
         # 1. dé-snooze les échues
         due = (
-            await session.execute(
-                select(Conversation).where(
-                    Conversation.snoozed_until.is_not(None),
-                    Conversation.snoozed_until <= now,
+            (
+                await session.execute(
+                    select(Conversation).where(
+                        Conversation.snoozed_until.is_not(None),
+                        Conversation.snoozed_until <= now,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for conv in due:
             conv.snoozed_until = None
             session.add(
@@ -351,15 +351,19 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
         # 5. avis post-rdv
         review_window_start = now - timedelta(hours=48)
         done_appts = (
-            await session.execute(
-                select(Appointment).where(
-                    Appointment.review_request_sent_at.is_(None),
-                    Appointment.status.in_(["completed", "confirmed", "scheduled"]),
-                    Appointment.end_at <= now,
-                    Appointment.end_at >= review_window_start,
+            (
+                await session.execute(
+                    select(Appointment).where(
+                        Appointment.review_request_sent_at.is_(None),
+                        Appointment.status.in_(["completed", "confirmed", "scheduled"]),
+                        Appointment.end_at <= now,
+                        Appointment.end_at >= review_window_start,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for a in done_appts:
             a.review_request_sent_at = now
             session.add(
@@ -370,8 +374,10 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
                     title="Demander un avis",
                     body=f"« {a.title} » est terminé : pensez à demander un avis au client.",
                     conversation_id=a.conversation_id,
-                    meta={"appointment_id": str(a.id), "customer_id": str(a.customer_id)
-                          if a.customer_id else None},
+                    meta={
+                        "appointment_id": str(a.id),
+                        "customer_id": str(a.customer_id) if a.customer_id else None,
+                    },
                 )
             )
             review_asked += 1
@@ -380,26 +386,32 @@ async def sweep_conversations(ctx: dict[str, Any]) -> dict[str, str]:
         rebook_old = now - timedelta(days=63)
         rebook_due = now - timedelta(days=42)
         stale_appts = (
-            await session.execute(
-                select(Appointment).where(
-                    Appointment.rebook_reminder_sent_at.is_(None),
-                    Appointment.status.in_(["completed", "confirmed"]),
-                    Appointment.customer_id.is_not(None),
-                    Appointment.end_at <= rebook_due,
-                    Appointment.end_at >= rebook_old,
+            (
+                await session.execute(
+                    select(Appointment).where(
+                        Appointment.rebook_reminder_sent_at.is_(None),
+                        Appointment.status.in_(["completed", "confirmed"]),
+                        Appointment.customer_id.is_not(None),
+                        Appointment.end_at <= rebook_due,
+                        Appointment.end_at >= rebook_old,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for a in stale_appts:
             # déjà un rdv → skip
             upcoming = (
                 await session.execute(
-                    select(Appointment.id).where(
+                    select(Appointment.id)
+                    .where(
                         Appointment.business_id == a.business_id,
                         Appointment.customer_id == a.customer_id,
                         Appointment.status.not_in(["cancelled", "blocked"]),
                         Appointment.start_at >= now,
-                    ).limit(1)
+                    )
+                    .limit(1)
                 )
             ).first()
             a.rebook_reminder_sent_at = now  # marqué anti-rebalayage

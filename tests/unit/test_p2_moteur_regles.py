@@ -482,7 +482,7 @@ class TestNomEtConfirmation:
 
 
 class _HeadLike:
-    """pas un IntentPredictor"""
+    """sans héritage"""
 
     def __init__(self) -> None:
         self.threads: list[str] = []
@@ -492,31 +492,21 @@ class _HeadLike:
         return {"primary_intent": "faq", "primary_confidence": 0.91, "intents": []}
 
 
-class _NerLike:
-    def __init__(self) -> None:
-        self.threads: list[str] = []
-
-    def predict(self, text: str) -> dict[str, str]:
-        self.threads.append(threading.current_thread().name)
-        return {"duration": "30 min"}
-
-
 class TestDuckTyping:
     @pytest.mark.asyncio
     async def test_modele_sans_heritage(self) -> None:
-        head, ner = _HeadLike(), _NerLike()
-        eng, _ = _engine(intent_predictor=head, ner_predictor=ner)
+        head = _HeadLike()
+        eng, _ = _engine(intent_predictor=head)
         r = await _Chat(eng).say("vous avez un parking ?")
         assert r.intent == "faq"
         assert r.intent_confidence == pytest.approx(0.91)
         # hors du thread principal
         main = threading.main_thread().name
         assert head.threads and all(t != main for t in head.threads)
-        assert ner.threads and all(t != main for t in ner.threads)
 
     @pytest.mark.asyncio
     async def test_objet_sans_methode_ignore(self) -> None:
-        eng, _ = _engine(intent_predictor=object(), ner_predictor=object())
+        eng, _ = _engine(intent_predictor=object())
         r = await _Chat(eng).say("je voudrais un rdv")
         assert r.intent == "appointment"
 

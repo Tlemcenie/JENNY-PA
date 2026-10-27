@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import time as _time
 from datetime import UTC, date, datetime, timedelta
@@ -84,8 +85,12 @@ async def _seed(
         )
         s.add(biz)
         prestas = {
-            "Coupe": Prestation(business_id=biz.id, name="Coupe", price_cents=3000, duration_minutes=30),
-            "Couleur": Prestation(business_id=biz.id, name="Couleur", price_cents=6000, duration_minutes=60),
+            "Coupe": Prestation(
+                business_id=biz.id, name="Coupe", price_cents=3000, duration_minutes=30
+            ),
+            "Couleur": Prestation(
+                business_id=biz.id, name="Couleur", price_cents=6000, duration_minutes=60
+            ),
         }
         for p in prestas.values():
             s.add(p)
@@ -139,12 +144,19 @@ async def _all_appts(biz: Business) -> list[Appointment]:
                     .where(Appointment.business_id == biz.id)
                     .order_by(Appointment.created_at.asc())
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
 
 
 async def _book(biz: Business, service: str, day: date, time_txt: str, **extra) -> dict:
-    params = {"business_id": str(biz.id), "service": service, "date": _date_txt(day), "time": time_txt}
+    params = {
+        "business_id": str(biz.id),
+        "service": service,
+        "date": _date_txt(day),
+        "time": time_txt,
+    }
     params.update(extra)
     return await BookAppointmentDBAction().execute(params)
 
@@ -237,7 +249,7 @@ class TestMultiChair:
             slots = await free_slots_for_day(s, biz.id, day, 30)
             nxt = await next_free_slots(s, biz.id, 30, from_day=day)
         assert pairs[1][0] - pairs[0][0] == timedelta(minutes=15)
-        assert all(b - a >= timedelta(minutes=30) for a, b in zip(slots, slots[1:]))
+        assert all(b - a >= timedelta(minutes=30) for a, b in itertools.pairwise(slots))
         assert nxt == slots[:4]
 
     async def test_15_min_grid_fills_gaps(self, db_tables) -> None:
@@ -330,7 +342,7 @@ class TestStaffTaken:
         assert late["success"] is False and late.get("conflict") is True
 
     async def test_requested_stylist(self, db_tables) -> None:
-        biz, members, _ = await _seed(("Léa", "Marc"))
+        biz, _members, _ = await _seed(("Léa", "Marc"))
         day = _day()
         res = await _book(biz, "coupe", day, "10h", staff="marc")
         assert res["success"] and res["staff_name"] == "Marc"
@@ -449,4 +461,8 @@ class TestPromptStaff:
 def test_spread_slots_keeps_gap() -> None:
     base = datetime(2030, 1, 1, 9, tzinfo=UTC)
     slots = [base + timedelta(minutes=15 * i) for i in range(8)]
-    assert spread_slots(slots, 45) == [base, base + timedelta(minutes=45), base + timedelta(minutes=90)]
+    assert spread_slots(slots, 45) == [
+        base,
+        base + timedelta(minutes=45),
+        base + timedelta(minutes=90),
+    ]

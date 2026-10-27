@@ -62,66 +62,26 @@ def rag_encoder() -> object | None:
     return embedder._load_model()
 
 
-def load_intent_predictor(kind: str | None = None, *, fallback: bool = True) -> object | None:
-    """charge l'intention : head ou lstm."""
+def load_intent_predictor() -> object | None:
+    """charge la tête d'intention."""
     settings = get_settings()
-    kind = kind or settings.intent_model_kind
-
-    if kind == "head":
-        try:
-            from ml.models.intent_head.predict import EmbeddingIntentPredictor
-
-            # pas de mpnet pour rien
-            if not Path(settings.intent_head_path).exists():
-                raise FileNotFoundError(f"Checkpoint non trouvé : {settings.intent_head_path}")
-            # un seul mpnet en ram
-            head = EmbeddingIntentPredictor.from_checkpoint(
-                settings.intent_head_path, encoder=rag_encoder()
-            )
-            logger.info("engine.ml.intent_loaded", kind="head", path=settings.intent_head_path)
-            return head
-        except Exception as e:
-            logger.warning("engine.ml.intent_head_unavailable", error=str(e))
-            if not fallback:
-                return None
-        # repli sur le lstm
-
+    if not settings.enable_ml_models:
+        return None
     try:
-        from ml.models.intent.predict import IntentPredictor
+        from ml.models.intent_head.predict import EmbeddingIntentPredictor
 
-        lstm = IntentPredictor.from_checkpoint(settings.intent_model_path)
-        logger.info("engine.ml.intent_loaded", kind="lstm", path=settings.intent_model_path)
-        return lstm
+        # pas de mpnet pour rien
+        if not Path(settings.intent_head_path).exists():
+            raise FileNotFoundError(f"Checkpoint non trouvé : {settings.intent_head_path}")
+        # un seul mpnet en ram
+        head = EmbeddingIntentPredictor.from_checkpoint(
+            settings.intent_head_path, encoder=rag_encoder()
+        )
+        logger.info("engine.ml.intent_loaded", path=settings.intent_head_path)
+        return head
     except Exception as e:
         logger.warning("engine.ml.intent_unavailable", error=str(e))
         return None
-
-
-def load_ner_predictor() -> object | None:
-    """charge le ner bigru."""
-    settings = get_settings()
-    try:
-        from jenny.engine.ner_guard import GuardedNERPredictor
-
-        # prestations vérifiées
-        ner = GuardedNERPredictor.from_checkpoint(settings.ner_model_path)
-        logger.info("engine.ml.ner_loaded", path=settings.ner_model_path)
-        return ner
-    except Exception as e:
-        logger.warning("engine.ml.ner_unavailable", error=str(e))
-        return None
-
-
-def load_ml_predictors() -> tuple[object | None, object | None]:
-    """charge les modèles ml."""
-    settings = get_settings()
-    if not settings.enable_ml_models:
-        return None, None
-
-    intent_predictor = load_intent_predictor()
-    # ner optionnel, coupé par défaut
-    ner_predictor = load_ner_predictor() if settings.enable_ner_model else None
-    return intent_predictor, ner_predictor
 
 
 def share_encoder(retriever: VectorRetriever, intent_predictor: object | None) -> bool:
@@ -207,13 +167,12 @@ def build_engine(
     provider = llm_provider if llm_provider is not None else get_default_llm_provider()
     response_generator = ResponseGenerator(provider) if provider is not None else None
 
-    intent_predictor, ner_predictor = load_ml_predictors()
+    intent_predictor = load_intent_predictor()
     share_encoder(retriever, intent_predictor)
 
     engine = ConversationEngine(
         state_manager=sm,
         intent_predictor=intent_predictor,
-        ner_predictor=ner_predictor,
         agent_router=router,
         response_generator=response_generator,
         retriever=retriever,
@@ -223,8 +182,6 @@ def build_engine(
         "engine.factory.ready",
         llm=provider.model_name if provider is not None else "templates",
         ml_intent=intent_predictor is not None,
-        ml_intent_kind=type(intent_predictor).__name__ if intent_predictor is not None else None,
-        ml_ner=ner_predictor is not None,
         agents=["faq", "action", "planning", "payment", "quote", "fallback"],
         actions=[a["name"] for a in registry.list_actions()],
     )

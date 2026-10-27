@@ -20,9 +20,7 @@ from jenny.db.base import Base, TimestampMixin
 class CustomerFact(Base, TimestampMixin):
     __tablename__ = "customer_facts"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     business_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("businesses.id", ondelete="CASCADE"),
@@ -48,12 +46,8 @@ class CustomerFact(Base, TimestampMixin):
     source: Mapped[str] = mapped_column(
         String(20), default="conversation", server_default="conversation", nullable=False
     )
-    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), default=None
-    )
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     confidence: Mapped[float] = mapped_column(
         Float, default=1.0, server_default="1.0", nullable=False
     )
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

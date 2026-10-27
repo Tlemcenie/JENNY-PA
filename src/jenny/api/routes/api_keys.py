@@ -67,12 +67,14 @@ async def list_api_keys(db: DbSession, principal: CurrentUser) -> list[ApiKeyInf
     if bid is None:
         return []
     rows = (
-        await db.execute(
-            select(ApiKey)
-            .where(ApiKey.business_id == bid)
-            .order_by(ApiKey.created_at.desc())
+        (
+            await db.execute(
+                select(ApiKey).where(ApiKey.business_id == bid).order_by(ApiKey.created_at.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [
         ApiKeyInfo(
             id=str(k.id),
@@ -97,9 +99,7 @@ async def create_api_key(
         raise HTTPException(400, "Aucun business associé")
     raw, prefix, key_hash = _generate_key()
     expires_at = (
-        datetime.now(UTC) + timedelta(days=body.expires_in_days)
-        if body.expires_in_days
-        else None
+        datetime.now(UTC) + timedelta(days=body.expires_in_days) if body.expires_in_days else None
     )
     key = ApiKey(
         business_id=bid,

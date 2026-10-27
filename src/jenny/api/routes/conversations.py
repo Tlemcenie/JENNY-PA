@@ -170,9 +170,7 @@ async def list_conversations(
     else:
         # par défaut = actives
         filters.append(Conversation.status != "archived")
-        filters.append(
-            or_(Conversation.snoozed_until.is_(None), Conversation.snoozed_until <= now)
-        )
+        filters.append(or_(Conversation.snoozed_until.is_(None), Conversation.snoozed_until <= now))
     if channel:
         filters.append(Conversation.channel == channel)
     if priority and priority.strip():
@@ -232,18 +230,14 @@ async def list_conversations(
     if len(rows) < limit and (rows or offset == 0):
         total = offset + len(rows)  # dernière page
     else:
-        total = (
-            await db.execute(select(func.count(Conversation.id)).where(*filters))
-        ).scalar_one()
+        total = (await db.execute(select(func.count(Conversation.id)).where(*filters))).scalar_one()
 
     conversations = []
     for conv, customer_name, last_text, last_dir in rows:
         awaiting = last_dir == "inbound"
         wmin = _waiting_minutes(conv.last_message_at, now) if awaiting else None
         # SLA selon priorité/canal
-        sla_minutes = resolve_sla_minutes(
-            biz, priority=conv.priority_level, channel=conv.channel
-        )
+        sla_minutes = resolve_sla_minutes(biz, priority=conv.priority_level, channel=conv.channel)
         conversations.append(
             ConversationSummary(
                 id=str(conv.id),
@@ -453,9 +447,7 @@ async def search_messages(
             .outerjoin(Customer, Customer.id == Conversation.customer_id)
             .where(Message.business_id == bid, Message.content_text.ilike(pattern))
         )
-        records = (
-            await db.execute(base.order_by(Message.created_at.desc()).limit(limit))
-        ).all()
+        records = (await db.execute(base.order_by(Message.created_at.desc()).limit(limit))).all()
         total = (
             await db.execute(
                 select(func.count(Message.id)).where(
@@ -505,12 +497,16 @@ async def bulk_action(
     actor = principal.email or "Agent"
 
     convs = (
-        await db.execute(
-            select(Conversation)
-            .where(Conversation.id.in_(body.ids), Conversation.business_id == bid)
-            .options(NO_REL)
+        (
+            await db.execute(
+                select(Conversation)
+                .where(Conversation.id.in_(body.ids), Conversation.business_id == bid)
+                .options(NO_REL)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not convs:
         return BulkActionResult(updated=0)
 
@@ -585,13 +581,17 @@ async def get_conversation(
     conv, customer_name = row
 
     msgs = (
-        await db.execute(
-            select(Message)
-            .where(Message.conversation_id == conv.id)
-            .order_by(Message.created_at.asc())
-            .options(NO_REL)
+        (
+            await db.execute(
+                select(Message)
+                .where(Message.conversation_id == conv.id)
+                .order_by(Message.created_at.asc())
+                .options(NO_REL)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     # avis en une requête
     from jenny.domain.models.message_feedback import MessageFeedback
@@ -854,9 +854,7 @@ async def assign_conversation(
     # notifie l'agent ciblé (pas soi-même)
     notif = None
     if new_assignee and new_assignee != actor:
-        cust = await db.scalar(
-            select(Customer.full_name).where(Customer.id == conv.customer_id)
-        )
+        cust = await db.scalar(select(Customer.full_name).where(Customer.id == conv.customer_id))
         notif = build_notification(
             db,
             business_id=conv.business_id,
@@ -882,9 +880,7 @@ async def assign_conversation(
             conversation_id=conv.id,
             notification_id=notif.id,
         )
-    logger.info(
-        "conversation.assigned", conversation_id=str(conv.id), assignee=conv.assigned_to
-    )
+    logger.info("conversation.assigned", conversation_id=str(conv.id), assignee=conv.assigned_to)
     return AssignmentResult(assigned_to=conv.assigned_to)
 
 
@@ -923,9 +919,7 @@ async def update_conversation_status(
     publish_conversation_event(
         conv.business_id, conversation_id=conv.id, kind="status", channel=conv.channel
     )
-    logger.info(
-        "conversation.status_changed", conversation_id=str(conv.id), status=body.status
-    )
+    logger.info("conversation.status_changed", conversation_id=str(conv.id), status=body.status)
     return StatusResult(status=conv.status)
 
 
@@ -1138,9 +1132,7 @@ async def merge_conversations(
 
     # recalcule les compteurs cible
     target.message_count = (
-        await db.scalar(
-            select(func.count(Message.id)).where(Message.conversation_id == target.id)
-        )
+        await db.scalar(select(func.count(Message.id)).where(Message.conversation_id == target.id))
     ) or 0
     last = (
         await db.execute(

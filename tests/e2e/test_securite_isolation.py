@@ -103,9 +103,9 @@ async def _count_convs(bid: UUID) -> int:
         return int(
             (
                 await s.execute(
-                    select(func.count()).select_from(Conversation).where(
-                        Conversation.business_id == bid
-                    )
+                    select(func.count())
+                    .select_from(Conversation)
+                    .where(Conversation.business_id == bid)
                 )
             ).scalar_one()
         )
@@ -138,7 +138,9 @@ async def test_knowledge_idor_closed(client: AsyncClient, db_tables: None) -> No
 async def test_messages_idor_closed(client: AsyncClient, db_tables: None) -> None:
     a, auth_a, _ = await _salon("Alpha")
     _b, auth_b, _ = await _salon("Beta")
-    assert (await client.get(f"/api/v1/messages/?business_id={a}", headers=auth_b)).status_code == 403
+    assert (
+        await client.get(f"/api/v1/messages/?business_id={a}", headers=auth_b)
+    ).status_code == 403
     r = await client.get(f"/api/v1/messages/{uuid4()}?business_id={a}", headers=auth_b)
     assert r.status_code == 403
     assert (await client.get(f"/api/v1/messages/?business_id={a}")).status_code == 401
@@ -168,7 +170,9 @@ async def test_ingest_ignores_foreign_business_id(client: AsyncClient, db_tables
         "text_body": "Bonjour",
         "sent_at": datetime.now(UTC).isoformat(),
     }
-    assert (await client.post(f"/api/v1/ingest/email?business_id={a}", json=email)).status_code == 401
+    assert (
+        await client.post(f"/api/v1/ingest/email?business_id={a}", json=email)
+    ).status_code == 401
 
 
 @pytest.mark.asyncio
@@ -278,18 +282,6 @@ async def test_sse_without_business_forbidden(client: AsyncClient, db_tables: No
     assert r.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_llm_switch_reserved_to_superuser(client: AsyncClient, db_tables: None) -> None:
-    _a, auth_a, email = await _salon("Alpha")
-    r = await client.post("/api/v1/settings/llm", headers=auth_a, json={"key": "groq"})
-    assert r.status_code == 403
-    async with async_session_factory() as s, s.begin():
-        u = (await s.execute(select(User).where(User.email == email))).scalar_one()
-        u.is_superuser = True
-    ok = await client.post("/api/v1/settings/llm", headers=auth_a, json={"key": "inconnu"})
-    assert ok.status_code == 400  # passe l'auth
-
-
 # ── équipe ──
 
 
@@ -319,9 +311,10 @@ async def test_members_role_rules(client: AsyncClient, db_tables: None) -> None:
     async with async_session_factory() as s:
         n = (
             await s.execute(
-                select(func.count()).select_from(BusinessMember).join(
-                    User, User.id == BusinessMember.user_id
-                ).where(User.email == email_b)
+                select(func.count())
+                .select_from(BusinessMember)
+                .join(User, User.id == BusinessMember.user_id)
+                .where(User.email == email_b)
             )
         ).scalar_one()
     assert n == 1
@@ -403,7 +396,10 @@ async def test_paypal_webhook_requires_signature(
 ) -> None:
     from jenny.api.routes import payment_webhooks as pw
 
-    event = {"event_type": "CHECKOUT.ORDER.APPROVED", "resource": {"id": "O-1", "status": "APPROVED"}}
+    event = {
+        "event_type": "CHECKOUT.ORDER.APPROVED",
+        "resource": {"id": "O-1", "status": "APPROVED"},
+    }
     # non configuré : 503
     assert (await client.post("/api/v1/payments/paypal", json=event)).status_code == 503
 
@@ -415,7 +411,11 @@ async def test_paypal_webhook_requires_signature(
     b, _auth_b, _ = await _salon("Beta")
     async with async_session_factory() as db, db.begin():
         for bid in (a, b):
-            db.add(PaymentRecord(business_id=bid, provider="paypal", external_id="O-1", status="CREATED"))
+            db.add(
+                PaymentRecord(
+                    business_id=bid, provider="paypal", external_id="O-1", status="CREATED"
+                )
+            )
 
     async def refuse(headers, raw):
         return False
@@ -496,7 +496,10 @@ async def test_prod_unroutable_whatsapp_is_ignored(
                             "field": "messages",
                             "value": {
                                 "messaging_product": "whatsapp",
-                                "metadata": {"display_phone_number": "1", "phone_number_id": "INCONNU"},
+                                "metadata": {
+                                    "display_phone_number": "1",
+                                    "phone_number_id": "INCONNU",
+                                },
                                 "contacts": [],
                                 "messages": [],
                             },

@@ -37,7 +37,9 @@ def test_does_not_strip_a_booking_question() -> None:
 
 
 def test_strips_conflict_false_reception() -> None:
-    out = strip_false_booking_confirmation("Je vous reçois à 10h ce jeudi.", booking_confirmed=False)
+    out = strip_false_booking_confirmation(
+        "Je vous reçois à 10h ce jeudi.", booking_confirmed=False
+    )
     assert "10h" not in out
 
 

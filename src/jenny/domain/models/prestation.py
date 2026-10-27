@@ -18,9 +18,7 @@ from jenny.db.base import Base, TimestampMixin
 class Prestation(Base, TimestampMixin):
     __tablename__ = "prestations"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     business_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("businesses.id", ondelete="CASCADE"),
@@ -37,16 +35,12 @@ class Prestation(Base, TimestampMixin):
         Integer, default=30, server_default="30", nullable=False
     )
     # Prix en centimes d'euro (entier, évite les imprécisions de flottant).
-    price_cents: Mapped[int] = mapped_column(
-        Integer, default=0, server_default="0", nullable=False
-    )
+    price_cents: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     description: Mapped[str | None] = mapped_column(Text, default=None)
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true", nullable=False
     )
-    sort_order: Mapped[int] = mapped_column(
-        Integer, default=0, server_default="0", nullable=False
-    )
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
     @property
     def price_eur(self) -> float:

@@ -224,6 +224,7 @@ class TestStop:
         biz = await _seed()
         eng = build_engine(state_manager=StateManager(redis_url="redis://localhost:1/0"))
         eng.response_generator = None
+
         async def _engine():
             return eng
 

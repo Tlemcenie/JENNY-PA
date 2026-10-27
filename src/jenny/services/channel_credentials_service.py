@@ -146,9 +146,7 @@ def _fernet():
         return Fernet(key.encode())
     except Exception as exc:  # clé invalide
         logger.error("channel_creds.fernet_init_failed", error=str(exc))
-        raise CredentialsStorageError(
-            "JENNY_MASTER_KEY invalide : clé Fernet attendue."
-        ) from exc
+        raise CredentialsStorageError("JENNY_MASTER_KEY invalide : clé Fernet attendue.") from exc
 
 
 def _plaintext_allowed() -> bool:
@@ -269,9 +267,7 @@ def _build_typed(channel: str, data: dict) -> AnyCreds | None:
 
 
 # résolution
-async def resolve_raw(
-    session: AsyncSession, business_id: UUID | None, channel: str
-) -> dict | None:
+async def resolve_raw(session: AsyncSession, business_id: UUID | None, channel: str) -> dict | None:
     """Base d'abord, sinon env."""
     if business_id is not None:
         repo = ChannelAccountRepository(session)
@@ -293,9 +289,7 @@ async def resolve_raw(
     return _creds_from_env(channel)
 
 
-async def resolve(
-    session: AsyncSession, business_id: UUID | None, channel: str
-) -> AnyCreds | None:
+async def resolve(session: AsyncSession, business_id: UUID | None, channel: str) -> AnyCreds | None:
     """Identifiants typés ou None."""
     raw = await resolve_raw(session, business_id, channel)
     if raw is None:
@@ -303,9 +297,7 @@ async def resolve(
     return _build_typed(channel, raw)
 
 
-async def is_connected(
-    session: AsyncSession, business_id: UUID | None, channel: str
-) -> bool:
+async def is_connected(session: AsyncSession, business_id: UUID | None, channel: str) -> bool:
     """Canal connecté ?"""
     return await resolve_raw(session, business_id, channel) is not None
 
@@ -361,7 +353,13 @@ def normalize_connect_payload(channel: str, raw: dict) -> tuple[str, dict, list[
 # champs exposables au front
 def public_field_specs(channel: str) -> list[dict]:
     return [
-        {"key": f.key, "label": f.label, "secret": f.secret, "required": f.required, "placeholder": f.placeholder}
+        {
+            "key": f.key,
+            "label": f.label,
+            "secret": f.secret,
+            "required": f.required,
+            "placeholder": f.placeholder,
+        }
         for f in CHANNEL_FIELDS.get(channel, [])
     ]
 

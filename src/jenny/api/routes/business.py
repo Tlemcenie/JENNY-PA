@@ -250,9 +250,7 @@ async def add_member(
     if body.role == "owner" and caller_role != "owner":
         raise HTTPException(403, "Seul un propriétaire peut ajouter un propriétaire")
 
-    user = (
-        await db.execute(select(User).where(User.email == body.email))
-    ).scalar_one_or_none()
+    user = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
     if user is not None:
         existing = (
             await db.execute(

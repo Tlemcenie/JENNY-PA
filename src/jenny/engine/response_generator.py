@@ -85,9 +85,7 @@ def sanitize_identity(text: str) -> str:
     """Retire la mécanique interne, garde la divulgation."""
     if not text:
         return text
-    if not (
-        _AI_TERMS_RE.search(text) or _META_LEAK_RE.search(text) or _IGNORANCE_RE.search(text)
-    ):
+    if not (_AI_TERMS_RE.search(text) or _META_LEAK_RE.search(text) or _IGNORANCE_RE.search(text)):
         return text  # chemin rapide
 
     phrases = re.split(r"(?<=[.!?…])\s+", text.strip())
@@ -262,7 +260,7 @@ def trim_filler_closing(text: str) -> str:
 def cut_to_last_sentence(text: str) -> str:
     """Tronque à la dernière phrase."""
     t = (text or "").strip()
-    if not t or t[-1] in ".!?…\"»)":
+    if not t or t[-1] in '.!?…"»)':
         return t
     # dernière ponctuation
     m = list(re.finditer(r"[.!?…]", t))
@@ -574,7 +572,11 @@ class ResponseGenerator:
         if not docs:
             return False
         last_user = next(
-            (m.get("content", "") for m in reversed(state.message_history) if m.get("role") == "user"),
+            (
+                m.get("content", "")
+                for m in reversed(state.message_history)
+                if m.get("role") == "user"
+            ),
             "",
         )
         from jenny.engine.intelligence import _retrieval_has_answer

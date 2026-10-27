@@ -30,6 +30,7 @@ async def _biz() -> str:
         await s.flush()
         return str(biz.id)
 
+
 # mot de passe valide
 _E2E_PASSWORD = "Strong#1234"
 
@@ -66,9 +67,7 @@ async def db_tables():
 # ═══════════════════════════════════════════════════════════════════
 
 
-async def _register_and_verify(
-    client: AsyncClient, email: str, full_name: str = "E2E User"
-) -> str:
+async def _register_and_verify(client: AsyncClient, email: str, full_name: str = "E2E User") -> str:
     """Inscrit, vérifie, renvoie le JWT."""
     r_reg = await client.post(
         "/api/v1/auth/register",
@@ -353,7 +352,7 @@ class TestAppointmentPipeline:
 
     @pytest.mark.asyncio
     async def test_book_appointment_action(self) -> None:
-        from jenny.actions.handlers.book_appointment import BookAppointmentAction
+        from tests.fakes import BookAppointmentAction
 
         action = BookAppointmentAction()
         result = await action.execute(
@@ -415,7 +414,11 @@ class TestQuotePipeline:
 
         bid = uuid4()
         async with async_session_factory() as db:
-            db.add(Business(id=bid, name="Salon Test", slug=f"salon-{bid.hex[:8]}", email="salon@test.fr"))
+            db.add(
+                Business(
+                    id=bid, name="Salon Test", slug=f"salon-{bid.hex[:8]}", email="salon@test.fr"
+                )
+            )
             db.add(
                 Prestation(
                     business_id=bid,
@@ -439,8 +442,10 @@ class TestQuotePipeline:
         # devis persisté + TVA cohérente
         async with async_session_factory() as db:
             quote = (
-                await db.execute(select(Quote).where(Quote.reference == result["reference"]))
-            ).scalars().first()
+                (await db.execute(select(Quote).where(Quote.reference == result["reference"])))
+                .scalars()
+                .first()
+            )
             assert quote is not None
             assert quote.total_cents == 3900
             assert quote.total_ht_cents + quote.total_tva_cents == quote.total_cents
@@ -575,7 +580,8 @@ class TestIngestionPipeline:
         bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
         r = await client.post(
-            f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+            f"/api/v1/ingest/form?business_id={bid}",
+            headers=auth,
             json={
                 "form_id": "contact",
                 "submitted_at": "2026-06-13T10:00:00Z",
@@ -615,7 +621,9 @@ class TestIngestionPipeline:
                 "sent_at": "2026-06-13T10:00:00Z",
             }
 
-        r1 = await client.post(f"/api/v1/ingest/email?business_id={bid}", headers=auth, json=email("<m1@x>", None))
+        r1 = await client.post(
+            f"/api/v1/ingest/email?business_id={bid}", headers=auth, json=email("<m1@x>", None)
+        )
         assert r1.status_code == 201, r1.text
         # même thread
         r2 = await client.post(
@@ -648,7 +656,9 @@ class TestWhatsAppWebhookTolerance:
     """WhatsApp acquitte tout webhook Meta."""
 
     @pytest.mark.asyncio
-    async def test_status_callback_without_metadata(self, client: AsyncClient, db_tables: None) -> None:
+    async def test_status_callback_without_metadata(
+        self, client: AsyncClient, db_tables: None
+    ) -> None:
         r = await client.post(
             "/api/v1/webhooks/whatsapp",
             json=_wa_payload(
@@ -658,7 +668,9 @@ class TestWhatsAppWebhookTolerance:
         assert r.status_code == 200, r.text
 
     @pytest.mark.asyncio
-    async def test_status_callback_with_metadata(self, client: AsyncClient, db_tables: None) -> None:
+    async def test_status_callback_with_metadata(
+        self, client: AsyncClient, db_tables: None
+    ) -> None:
         r = await client.post(
             "/api/v1/webhooks/whatsapp",
             json=_wa_payload(
@@ -672,7 +684,9 @@ class TestWhatsAppWebhookTolerance:
         assert r.status_code == 200, r.text
 
     @pytest.mark.asyncio
-    async def test_message_with_nameless_contact(self, client: AsyncClient, db_tables: None) -> None:
+    async def test_message_with_nameless_contact(
+        self, client: AsyncClient, db_tables: None
+    ) -> None:
         r = await client.post(
             "/api/v1/webhooks/whatsapp",
             json=_wa_payload(
@@ -838,9 +852,7 @@ class TestTwitterSnapchatWebhookTolerance:
 
 
 @pytest.mark.asyncio
-async def test_human_reply_persists_and_takes_over(
-    client: AsyncClient, db_tables: None
-) -> None:
+async def test_human_reply_persists_and_takes_over(client: AsyncClient, db_tables: None) -> None:
     """Réponse humaine persistée + reprise."""
     token = await _register_and_verify(client, "reply-agent@example.com")
     auth = {"Authorization": f"Bearer {token}"}
@@ -848,7 +860,8 @@ async def test_human_reply_persists_and_takes_over(
 
     # message entrant crée une conv
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
         json={
             "form_id": "c",
             "submitted_at": "2026-06-13T10:00:00Z",
@@ -874,9 +887,7 @@ async def test_human_reply_persists_and_takes_over(
     # détail reflète la reprise
     detail = (await client.get(f"/api/v1/conversations/{conv_id}", headers=auth)).json()
     assert detail["assigned_to"]
-    assert any(
-        m["content"].startswith("Bonjour, je vous réponds") for m in detail["messages"]
-    )
+    assert any(m["content"].startswith("Bonjour, je vous réponds") for m in detail["messages"])
 
     # l'agent rend la main
     r_resume = await client.post(f"/api/v1/conversations/{conv_id}/resume", headers=auth)
@@ -894,7 +905,8 @@ async def test_awaiting_reply_flag(client: AsyncClient, db_tables: None) -> None
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
         json={
             "form_id": "c",
             "submitted_at": "2026-06-13T10:00:00Z",
@@ -922,7 +934,8 @@ async def test_conversation_status_lifecycle(client: AsyncClient, db_tables: Non
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
         json={
             "form_id": "c",
             "submitted_at": "2026-06-13T10:00:00Z",
@@ -938,16 +951,18 @@ async def test_conversation_status_lifecycle(client: AsyncClient, db_tables: Non
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "closed"
-    assert (await client.get(f"/api/v1/conversations/{cid}", headers=auth)).json()["status"] == "closed"
+    assert (await client.get(f"/api/v1/conversations/{cid}", headers=auth)).json()[
+        "status"
+    ] == "closed"
 
     # filtre par statut
-    open_convs = (
-        await client.get("/api/v1/conversations?status=open", headers=auth)
-    ).json()["conversations"]
+    open_convs = (await client.get("/api/v1/conversations?status=open", headers=auth)).json()[
+        "conversations"
+    ]
     assert all(c["id"] != cid for c in open_convs)
-    closed_convs = (
-        await client.get("/api/v1/conversations?status=closed", headers=auth)
-    ).json()["conversations"]
+    closed_convs = (await client.get("/api/v1/conversations?status=closed", headers=auth)).json()[
+        "conversations"
+    ]
     assert any(c["id"] == cid for c in closed_convs)
 
     # archiver : masquée de « Tous »
@@ -955,7 +970,9 @@ async def test_conversation_status_lifecycle(client: AsyncClient, db_tables: Non
     await client.patch(
         f"/api/v1/conversations/{cid}/status", headers=auth, json={"status": "archived"}
     )
-    assert (await client.get(f"/api/v1/conversations/{cid}", headers=auth)).json()["status"] == "archived"
+    assert (await client.get(f"/api/v1/conversations/{cid}", headers=auth)).json()[
+        "status"
+    ] == "archived"
     all_convs = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"]
     assert all(c["id"] != cid for c in all_convs)  # masquée de « Tous »
     archived_convs = (
@@ -990,7 +1007,8 @@ async def test_customer_360_view_and_annotation(client: AsyncClient, db_tables: 
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
         json={
             "form_id": "contact",
             "submitted_at": "2026-06-13T10:00:00Z",
@@ -1047,7 +1065,8 @@ async def test_csv_exports(client: AsyncClient, db_tables: None) -> None:
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
         json={
             "form_id": "c",
             "submitted_at": "2026-06-13T10:00:00Z",
@@ -1081,7 +1100,8 @@ async def test_customers_list_and_search(client: AsyncClient, db_tables: None) -
     ]
     for i, (name, email, ts) in enumerate(submissions):
         await client.post(
-            f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+            f"/api/v1/ingest/form?business_id={bid}",
+            headers=auth,
             json={
                 "form_id": f"c{i}",
                 "submitted_at": ts,
@@ -1123,14 +1143,22 @@ async def test_conversation_stats_awaiting(client: AsyncClient, db_tables: None)
     assert (await client.get("/api/v1/conversations/stats", headers=auth)).json()["awaiting"] == 0
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
-        json={"form_id": "c", "submitted_at": "2026-06-13T10:00:00Z", "email": "c@x.com", "message": "Salut"},
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
+        json={
+            "form_id": "c",
+            "submitted_at": "2026-06-13T10:00:00Z",
+            "email": "c@x.com",
+            "message": "Salut",
+        },
     )
     assert (await client.get("/api/v1/conversations/stats", headers=auth)).json()["awaiting"] == 1
 
     # après réponse : plus d'attente
     cid = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"][0]["id"]
-    await client.post(f"/api/v1/conversations/{cid}/reply", headers=auth, json={"text": "Bonjour !"})
+    await client.post(
+        f"/api/v1/conversations/{cid}/reply", headers=auth, json={"text": "Bonjour !"}
+    )
     assert (await client.get("/api/v1/conversations/stats", headers=auth)).json()["awaiting"] == 0
 
 
@@ -1142,7 +1170,8 @@ async def test_sentiment_snooze_summary(client: AsyncClient, db_tables: None) ->
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
         json={
             "form_id": "c",
             "submitted_at": "2026-06-13T10:00:00Z",
@@ -1190,7 +1219,12 @@ async def test_business_config_and_members(client: AsyncClient, db_tables: None)
     add = await client.post(
         "/api/v1/business/members",
         headers=auth,
-        json={"email": "teammate@example.com", "full_name": "Co Équipier", "password": "Pass!123", "role": "agent"},
+        json={
+            "email": "teammate@example.com",
+            "full_name": "Co Équipier",
+            "password": "Pass!123",
+            "role": "agent",
+        },
     )
     assert add.status_code == 201
     members = (await client.get("/api/v1/business/members", headers=auth)).json()
@@ -1228,11 +1262,19 @@ async def test_insights_by_agent_and_days(client: AsyncClient, db_tables: None) 
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
-        json={"form_id": "c", "submitted_at": "2026-06-13T10:00:00Z", "email": "c@x.com", "message": "Salut"},
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
+        json={
+            "form_id": "c",
+            "submitted_at": "2026-06-13T10:00:00Z",
+            "email": "c@x.com",
+            "message": "Salut",
+        },
     )
     cid = (await client.get("/api/v1/conversations", headers=auth)).json()["conversations"][0]["id"]
-    await client.post(f"/api/v1/conversations/{cid}/reply", headers=auth, json={"text": "Bonjour !"})
+    await client.post(
+        f"/api/v1/conversations/{cid}/reply", headers=auth, json={"text": "Bonjour !"}
+    )
 
     data = (await client.get("/api/v1/insights?days=30", headers=auth)).json()
     assert len(data["messages_last_7_days"]) == 30
@@ -1248,7 +1290,8 @@ async def test_suggest_reply_for_conversation(client: AsyncClient, db_tables: No
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
         json={
             "form_id": "c",
             "submitted_at": "2026-06-13T10:00:00Z",
@@ -1278,7 +1321,8 @@ async def test_conversation_overdue_sla(client: AsyncClient, db_tables: None) ->
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
         json={
             "form_id": "c",
             "submitted_at": "2026-06-13T10:00:00Z",
@@ -1314,7 +1358,8 @@ async def test_conversation_tags_and_filter(client: AsyncClient, db_tables: None
     bid = (await client.get("/api/v1/auth/me", headers=auth)).json()["business_id"]
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
         json={
             "form_id": "c",
             "submitted_at": "2026-06-13T10:00:00Z",
@@ -1356,7 +1401,8 @@ async def test_assign_conversation_and_my_filter(client: AsyncClient, db_tables:
     assert any(m["email"] == "assign@example.com" for m in members)
 
     await client.post(
-        f"/api/v1/ingest/form?business_id={bid}", headers=auth,
+        f"/api/v1/ingest/form?business_id={bid}",
+        headers=auth,
         json={
             "form_id": "c",
             "submitted_at": "2026-06-13T10:00:00Z",
@@ -1426,9 +1472,7 @@ async def test_canned_responses_crud(client: AsyncClient, db_tables: None) -> No
     ).status_code == 404
 
     # suppression
-    assert (
-        await client.delete(f"/api/v1/canned-responses/{cid}", headers=auth)
-    ).status_code == 204
+    assert (await client.delete(f"/api/v1/canned-responses/{cid}", headers=auth)).status_code == 204
     assert (await client.get("/api/v1/canned-responses", headers=auth)).json() == []
 
 

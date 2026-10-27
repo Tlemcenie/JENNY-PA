@@ -28,9 +28,7 @@ DEFAULT_PASSWORD = "Admin!2026"
 
 async def create_admin(email: str, password: str | None) -> None:
     async with async_session_factory() as session, session.begin():
-        user = (
-            await session.execute(select(User).where(User.email == email))
-        ).scalar_one_or_none()
+        user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
         if user is None:
             user = User(
                 email=email,

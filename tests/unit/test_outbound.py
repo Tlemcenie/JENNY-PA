@@ -1,4 +1,5 @@
 """Le routeur sortant : Jenny parle au client, pas seulement au tableau de bord."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
@@ -38,10 +39,10 @@ class _FausseDB:
 @pytest.mark.asyncio
 async def test_repond_sur_le_canal_dorigine() -> None:
     db = _FausseDB(conv=_FausseConv("whatsapp", "wa:33612345678"))
-    with patch("jenny.connectors.reply_dispatch.send_channel_reply", new=AsyncMock(return_value=True)):
-        canal = await notify_customer(
-            db, business_id=BID, text="coucou", conversation_id=uuid4()
-        )
+    with patch(
+        "jenny.connectors.reply_dispatch.send_channel_reply", new=AsyncMock(return_value=True)
+    ):
+        canal = await notify_customer(db, business_id=BID, text="coucou", conversation_id=uuid4())
     assert canal == "whatsapp"
 
 
@@ -60,7 +61,9 @@ async def test_repli_email_quand_sms_echoue() -> None:
     sms_ko = AsyncMock(return_value=type("R", (), {"success": False})())
     with (
         patch("jenny.notifications.sms_sender.SmsSender.send_sms", new=sms_ko),
-        patch("jenny.notifications.email_sender.EmailSender.send", new=AsyncMock(return_value=True)),
+        patch(
+            "jenny.notifications.email_sender.EmailSender.send", new=AsyncMock(return_value=True)
+        ),
     ):
         canal = await notify_customer(db, business_id=BID, text="coucou", customer_id=uuid4())
     assert canal == "email"
@@ -87,4 +90,6 @@ async def test_ne_leve_jamais() -> None:
         async def get(self, *_):
             raise RuntimeError("base morte")
 
-    assert await notify_customer(_DBCassee(), business_id=BID, text="x", customer_id=uuid4()) is None
+    assert (
+        await notify_customer(_DBCassee(), business_id=BID, text="x", customer_id=uuid4()) is None
+    )

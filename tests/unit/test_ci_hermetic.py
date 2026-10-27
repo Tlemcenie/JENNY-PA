@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import inspect, text
 
 from jenny.core.config import Settings, get_settings
-from jenny.llm.providers import GroqProvider, LlamaProvider, get_default_llm_provider
+from jenny.llm.providers import GroqProvider, OpenAIProvider, get_default_llm_provider
 from jenny.rag import embeddings
 from jenny.rag.embeddings import SentenceTransformerEmbedder
 from tests.conftest import (
@@ -84,15 +84,15 @@ def test_db_is_per_run_file() -> None:
 
 
 async def test_llm_network_is_cut(blocked_llm_calls) -> None:
-    """Groq et Ollama jamais joints."""
+    """Groq et OpenAI jamais joints."""
     start = time.monotonic()
     groq = await GroqProvider(api_key="gsk_test").generate("Bonjour")
-    ollama = await LlamaProvider(model="qwen2.5:7b-instruct").generate("Bonjour")
+    oai = await OpenAIProvider(api_key="sk-test").generate("Bonjour")
     assert groq.finish_reason == "error"
-    assert ollama.finish_reason == "error"
+    assert oai.finish_reason == "error"
     hosts = " ".join(blocked_llm_calls.urls)
     assert "api.groq.com" in hosts
-    assert ":11434" in hosts
+    assert "api.openai.com" in hosts
     assert time.monotonic() - start < 5
 
 

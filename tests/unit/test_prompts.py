@@ -67,9 +67,7 @@ class TestPromptBuilder:
 
     def test_persona_sliders_neutral_emit_nothing(self) -> None:
         # Autour du neutre (~50), aucun curseur ne doit brider le ton.
-        out = build_persona_instructions(
-            {"sliders": {"formel": 50, "concision": 50, "vente": 50}}
-        )
+        out = build_persona_instructions({"sliders": {"formel": 50, "concision": 50, "vente": 50}})
         assert out == ""
 
     def test_system_prompt_with_intent(self) -> None:

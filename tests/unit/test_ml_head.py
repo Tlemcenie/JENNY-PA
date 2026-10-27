@@ -1,16 +1,13 @@
 """non-régression de la tête mpnet."""
 
 import hashlib
-from pathlib import Path
 
 import pytest
 
-from ml.models.intent.config import INTENT_LABELS
-from ml.models.intent.predict import IntentPredictor
 from ml.models.intent_head.data import DATA_PATH, frozen_split, labels_of, load_rows
+from ml.models.intent_head.labels import INTENT_LABELS
 from ml.models.intent_head.predict import DEFAULT_PATH, EmbeddingIntentPredictor
 
-LSTM_PATH = Path("checkpoints/intent/best_model.pt")
 KEYS = {
     "intents",
     "primary_intent",
@@ -19,7 +16,7 @@ KEYS = {
     "all_scores",
     "needs_clarification",
 }
-# échantillon figé, niveau du lstm
+# échantillon figé
 N_SAMPLE = 200
 FLOOR_SAMPLE = 87.0
 
@@ -35,11 +32,9 @@ def head() -> EmbeddingIntentPredictor:
 
 
 class TestForme:
-    """même contrat que le lstm."""
+    """contrat du moteur."""
 
-    def test_vu_comme_intent_predictor(self, head) -> None:
-        # le moteur teste isinstance
-        assert isinstance(head, IntentPredictor)
+    def test_etiquettes(self, head) -> None:
         assert head.labels == INTENT_LABELS
 
     def test_dict_predict_multi(self, head) -> None:
@@ -55,13 +50,9 @@ class TestForme:
         assert confs == sorted(confs, reverse=True)
         assert isinstance(res["needs_clarification"], bool)
 
-    def test_memes_cles_que_lstm(self, head) -> None:
-        if not LSTM_PATH.exists():
-            pytest.skip("checkpoint lstm absent")
-        lstm = IntentPredictor.from_checkpoint(LSTM_PATH)
-        texte = "combien pour une coupe"
-        assert set(lstm.predict_multi(texte)) == set(head.predict_multi(texte))
-        assert set(lstm.predict(texte)) == set(head.predict(texte))
+    def test_predict_simple(self, head) -> None:
+        res = head.predict("combien pour une coupe")
+        assert set(res) == {"intent", "confidence", "all_scores"}
 
     def test_texte_vide(self, head) -> None:
         res = head.predict_multi("")

@@ -40,11 +40,19 @@ async def db_tables() -> None:
 
 async def _seed(*, with_catalog: bool = True) -> Business:
     async with async_session_factory() as s, s.begin():
-        biz = Business(id=uuid4(), name="Salon", slug=f"s-{uuid4().hex[:6]}", business_hours=_OPEN_ALL)
+        biz = Business(
+            id=uuid4(), name="Salon", slug=f"s-{uuid4().hex[:6]}", business_hours=_OPEN_ALL
+        )
         s.add(biz)
         if with_catalog:
-            s.add(Prestation(business_id=biz.id, name="Coupe", price_cents=4000, duration_minutes=30))
-            s.add(Prestation(business_id=biz.id, name="Couleur", price_cents=6000, duration_minutes=60))
+            s.add(
+                Prestation(business_id=biz.id, name="Coupe", price_cents=4000, duration_minutes=30)
+            )
+            s.add(
+                Prestation(
+                    business_id=biz.id, name="Couleur", price_cents=6000, duration_minutes=60
+                )
+            )
     return biz
 
 
@@ -69,8 +77,12 @@ class TestMultiPrestation:
     async def test_two_services_combined(self, db_tables: None) -> None:
         biz = await _seed()
         res = await BookAppointmentDBAction().execute(
-            {"business_id": str(biz.id), "service": "coupe et couleur",
-             "date": "demain", "time": "10h"}
+            {
+                "business_id": str(biz.id),
+                "service": "coupe et couleur",
+                "date": "demain",
+                "time": "10h",
+            }
         )
         assert res["success"], res
         assert res["service"] == "Coupe + Couleur"
@@ -88,16 +100,28 @@ class TestAntiDouble:
             await s.flush()
             # Place le RDV existant à 10h demain (heure de Paris, comme « demain »).
             tz_start = _tomorrow_paris_at(10)
-            s.add(Appointment(
-                business_id=biz.id, customer_id=cust.id, title="Coupe", channel="chat",
-                start_at=tz_start, end_at=tz_start + timedelta(minutes=30),
-                status="scheduled", created_by="Jenny",
-            ))
+            s.add(
+                Appointment(
+                    business_id=biz.id,
+                    customer_id=cust.id,
+                    title="Coupe",
+                    channel="chat",
+                    start_at=tz_start,
+                    end_at=tz_start + timedelta(minutes=30),
+                    status="scheduled",
+                    created_by="Jenny",
+                )
+            )
             cid = cust.id
 
         res = await BookAppointmentDBAction().execute(
-            {"business_id": str(biz.id), "customer_id": str(cid), "service": "coupe",
-             "date": "demain", "time": "14h"}
+            {
+                "business_id": str(biz.id),
+                "customer_id": str(cid),
+                "service": "coupe",
+                "date": "demain",
+                "time": "14h",
+            }
         )
         assert res.get("already_booked") is True
         assert res["success"] is False
@@ -110,16 +134,28 @@ class TestAntiDouble:
             s.add(cust)
             await s.flush()
             start = _tomorrow_paris_at(10)
-            s.add(Appointment(
-                business_id=biz.id, customer_id=cust.id, title="Coupe", channel="chat",
-                start_at=start, end_at=start + timedelta(minutes=30),
-                status="scheduled", created_by="Jenny",
-            ))
+            s.add(
+                Appointment(
+                    business_id=biz.id,
+                    customer_id=cust.id,
+                    title="Coupe",
+                    channel="chat",
+                    start_at=start,
+                    end_at=start + timedelta(minutes=30),
+                    status="scheduled",
+                    created_by="Jenny",
+                )
+            )
             cid = cust.id
 
         res = await BookAppointmentDBAction().execute(
-            {"business_id": str(biz.id), "customer_id": str(cid), "service": "couleur",
-             "date": "demain", "time": "14h"}
+            {
+                "business_id": str(biz.id),
+                "customer_id": str(cid),
+                "service": "couleur",
+                "date": "demain",
+                "time": "14h",
+            }
         )
         assert res["success"] is True
         assert res.get("also_has")  # signalé au client
@@ -149,18 +185,26 @@ class TestNameCaptureFlow:
         st.set_slot("time", "10h")
         sm.save(st)
 
-        r1 = await eng.process(EngineRequest(
-            conversation_id=conv, business_id=biz.id, customer_id=cid,
-            message_text="je voudrais réserver",
-        ))
+        r1 = await eng.process(
+            EngineRequest(
+                conversation_id=conv,
+                business_id=biz.id,
+                customer_id=cid,
+                message_text="je voudrais réserver",
+            )
+        )
         assert (r1.action_result or {}).get("success") is True
         assert (r1.action_result or {}).get("ask_name") is True
         assert sm.get(conv).awaiting_name is True
 
-        r2 = await eng.process(EngineRequest(
-            conversation_id=conv, business_id=biz.id, customer_id=cid,
-            message_text="Marie",
-        ))
+        r2 = await eng.process(
+            EngineRequest(
+                conversation_id=conv,
+                business_id=biz.id,
+                customer_id=cid,
+                message_text="Marie",
+            )
+        )
         assert r2.intent == "set_customer_name"
         assert (r2.action_result or {}).get("named") is True
 
@@ -190,11 +234,16 @@ class TestRobustBooking:
         sm = StateManager()
         eng = build_engine(state_manager=sm)
         eng.response_generator = None
-        r = await eng.process(EngineRequest(
-            conversation_id=uuid4(), business_id=biz.id, customer_id=cid,
-            message_text="je veux réserver une coupe demain à 14h", channel="chat",
-            catalog_services=["Coupe", "Couleur"],
-        ))
+        r = await eng.process(
+            EngineRequest(
+                conversation_id=uuid4(),
+                business_id=biz.id,
+                customer_id=cid,
+                message_text="je veux réserver une coupe demain à 14h",
+                channel="chat",
+                catalog_services=["Coupe", "Couleur"],
+            )
+        )
         assert (r.action_result or {}).get("success") is True
         async with async_session_factory() as s:
             appt = (
@@ -206,10 +255,15 @@ class TestRobustBooking:
     async def test_unknown_customer_books_anonymous(self, db_tables: None) -> None:
         # customer_id inexistant → réservation sans rattachement plutôt que crash FK.
         biz = await _seed()
-        res = await BookAppointmentDBAction().execute({
-            "business_id": str(biz.id), "customer_id": str(uuid4()),
-            "service": "Coupe", "date": "demain", "time": "10h",
-        })
+        res = await BookAppointmentDBAction().execute(
+            {
+                "business_id": str(biz.id),
+                "customer_id": str(uuid4()),
+                "service": "Coupe",
+                "date": "demain",
+                "time": "10h",
+            }
+        )
         assert res["success"] is True
         async with async_session_factory() as s:
             appt = (
@@ -229,11 +283,18 @@ class TestReturningCustomerContext:
             s.add(cust)
             await s.flush()
             past = datetime.now(UTC) - timedelta(days=30)
-            s.add(Appointment(
-                business_id=biz.id, customer_id=cust.id, title="Balayage", channel="chat",
-                start_at=past, end_at=past + timedelta(minutes=90),
-                status="completed", created_by="Jenny",
-            ))
+            s.add(
+                Appointment(
+                    business_id=biz.id,
+                    customer_id=cust.id,
+                    title="Balayage",
+                    channel="chat",
+                    start_at=past,
+                    end_at=past + timedelta(minutes=90),
+                    status="completed",
+                    created_by="Jenny",
+                )
+            )
             cid = cust.id
 
         async with async_session_factory() as s:

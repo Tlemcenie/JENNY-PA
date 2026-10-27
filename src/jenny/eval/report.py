@@ -31,8 +31,7 @@ def format_markdown(data: dict) -> str:
     lines += ["", "## Détail par scénario", ""]
     for r in data["scenarios"]:
         lines.append(
-            f"### {r['domain']} — {r['business_name']}  "
-            f"({r['checks_passed']}/{r['checks_total']})"
+            f"### {r['domain']} — {r['business_name']}  ({r['checks_passed']}/{r['checks_total']})"
         )
         for t in r["turns"]:
             mark = "✅" if t["passed"] else "❌"
@@ -43,8 +42,7 @@ def format_markdown(data: dict) -> str:
                 lines.append(
                     "  - ⚠️ "
                     + "; ".join(
-                        f"{c['name']}"
-                        + (f" — {c['detail']}" if c["detail"] else "")
+                        f"{c['name']}" + (f" — {c['detail']}" if c["detail"] else "")
                         for c in failed
                     )
                 )

@@ -178,7 +178,11 @@ async def test_widget_booking_attaches_customer(client: AsyncClient) -> None:
         await s.commit()
     async with async_session_factory() as s:
         texts = (
-            (await s.execute(select(Message.content_text).where(Message.conversation_id == conv_id)))
+            (
+                await s.execute(
+                    select(Message.content_text).where(Message.conversation_id == conv_id)
+                )
+            )
             .scalars()
             .all()
         )
@@ -228,7 +232,9 @@ async def test_shared_core_refuses_anonymous_customer_id() -> None:
         customer_id = cid
         language = None
 
-    req = Request({"type": "http", "method": "POST", "path": "/api/v1/public/chat/x", "headers": []})
+    req = Request(
+        {"type": "http", "method": "POST", "path": "/api/v1/public/chat/x", "headers": []}
+    )
     async with async_session_factory() as db:
         with pytest.raises(HTTPException) as exc:
             await conv_mod._run_engine_chat(db, _Body(), req)

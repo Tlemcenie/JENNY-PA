@@ -1,4 +1,5 @@
 """Non-régression des correctifs chat (nom, horaires, catalogue)."""
+
 from __future__ import annotations
 
 from jenny.actions.handlers.set_customer_name import _clean_name

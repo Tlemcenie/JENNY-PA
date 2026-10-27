@@ -343,71 +343,13 @@ class OpenAIEmbedder(BaseEmbedder):
             return [[0.0] * self._dimension for _ in texts]
 
 
-class OllamaEmbedder(BaseEmbedder):
-    """Embeddings via Ollama (local, sans clé)."""
-
-    # dims connues
-    _KNOWN_DIMS: ClassVar[dict[str, int]] = {
-        "nomic-embed-text": 768,
-        "mxbai-embed-large": 1024,
-        "all-minilm": 384,
-        "bge-m3": 1024,
-    }
-    _KNOWN_WINDOWS: ClassVar[dict[str, int]] = {
-        "nomic-embed-text": 2048,
-        "mxbai-embed-large": 512,
-        "all-minilm": 256,
-        "bge-m3": 8192,
-    }
-
-    def __init__(
-        self,
-        model: str = "nomic-embed-text",
-        base_url: str = "http://localhost:11434",
-        dimension: int | None = None,
-        keep_alive: str = "30m",
-    ) -> None:
-        self.model = model
-        self.base_url = base_url.rstrip("/")
-        # garde le modèle chargé
-        self.keep_alive = keep_alive
-        base = model.split(":")[0]
-        self._dimension = dimension or self._KNOWN_DIMS.get(base, 768)
-        self.max_tokens = self._KNOWN_WINDOWS.get(base, 512)
-
-    @property
-    def dimension(self) -> int:
-        return self._dimension
-
-    async def embed_text(self, text: str) -> list[float]:
-        """Embedding via /api/embeddings."""
-        import httpx
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.base_url}/api/embeddings",
-                json={"model": self.model, "prompt": text, "keep_alive": self.keep_alive},
-                timeout=60.0,
-            )
-            response.raise_for_status()
-            embedding = response.json()["embedding"]
-        # vraie dim au 1er appel
-        self._dimension = len(embedding)
-        return embedding
-
-
-# ── Factory ──
-
-
-def get_embedder(backend: str = "ollama", **kwargs) -> BaseEmbedder:
-    """Crée un embedder (ollama, sentence-transformer, openai)."""
-    if backend == "ollama":
-        return OllamaEmbedder(**kwargs)
+def get_embedder(backend: str = "sentence-transformer", **kwargs) -> BaseEmbedder:
+    """Crée un embedder (sentence-transformer, openai)."""
     if backend == "openai":
         return OpenAIEmbedder(**kwargs)
     if backend == "sentence-transformer":
         return SentenceTransformerEmbedder(**kwargs)
-    raise ValueError(f"Backend inconnu : {backend}. Options : ollama, sentence-transformer, openai")
+    raise ValueError(f"Backend inconnu : {backend}. Options : sentence-transformer, openai")
 
 
 # un embedder par réglage
@@ -421,7 +363,7 @@ def get_default_embedder() -> BaseEmbedder:
 
     settings = get_settings()
     backend = settings.embeddings_backend
-    key = (backend, settings.embeddings_model, settings.llama_base_url, settings.llama_keep_alive)
+    key = (backend, settings.embeddings_model)
     cached = _DEFAULT_EMBEDDERS.get(key)
     if cached is not None:
         return cached
@@ -430,16 +372,10 @@ def get_default_embedder() -> BaseEmbedder:
         if cached is not None:
             return cached
         embedder: BaseEmbedder
-        if backend == "sentence-transformer":
-            embedder = SentenceTransformerEmbedder(model_name=settings.embeddings_model)
-        elif backend == "openai":
+        if backend == "openai":
             embedder = OpenAIEmbedder()
         else:
-            embedder = OllamaEmbedder(
-                model=settings.embeddings_model,
-                base_url=settings.llama_base_url,
-                keep_alive=settings.llama_keep_alive,
-            )
+            embedder = SentenceTransformerEmbedder(model_name=settings.embeddings_model)
         _DEFAULT_EMBEDDERS[key] = embedder
         return embedder
 

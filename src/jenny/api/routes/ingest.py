@@ -95,9 +95,7 @@ async def ingest_form(
     background_tasks: BackgroundTasks,
     db: DbSession,
     principal: OptionalTenant,
-    business_id: Annotated[
-        UUID | None, Query(description="Ignoré : salon du compte")
-    ] = None,
+    business_id: Annotated[UUID | None, Query(description="Ignoré : salon du compte")] = None,
 ) -> MessageResponse:
     """Réceptionne une soumission de formulaire.
 
@@ -128,9 +126,7 @@ async def ingest_email(
     background_tasks: BackgroundTasks,
     db: DbSession,
     principal: OptionalTenant,
-    business_id: Annotated[
-        UUID | None, Query(description="Ignoré : salon du compte")
-    ] = None,
+    business_id: Annotated[UUID | None, Query(description="Ignoré : salon du compte")] = None,
 ) -> MessageResponse:
     """Réceptionne un email entrant.
 

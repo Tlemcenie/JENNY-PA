@@ -64,8 +64,12 @@ def build_quote_pdf(
         author=business_name,
     )
     styles = getSampleStyleSheet()
-    h_small = ParagraphStyle("hs", parent=styles["Normal"], fontSize=9, textColor=_MUTED, leading=13)
-    h_name = ParagraphStyle("hn", parent=styles["Normal"], fontSize=15, textColor=_INK, leading=18, spaceAfter=2)
+    h_small = ParagraphStyle(
+        "hs", parent=styles["Normal"], fontSize=9, textColor=_MUTED, leading=13
+    )
+    h_name = ParagraphStyle(
+        "hn", parent=styles["Normal"], fontSize=15, textColor=_INK, leading=18, spaceAfter=2
+    )
     body = ParagraphStyle("bd", parent=styles["Normal"], fontSize=9.5, textColor=_INK, leading=14)
     flow: list = []
 
@@ -91,12 +95,16 @@ def build_quote_pdf(
         [[[logo_cell] if logo_cell else [], salon_block, devis_block]],
         colWidths=[24 * mm, 80 * mm, 66 * mm],
     )
-    header.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ALIGN", (2, 0), (2, 0), "RIGHT"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-    ]))
+    header.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (2, 0), (2, 0), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
     flow += [header, Spacer(1, 16)]
 
     # ── Client ──
@@ -107,7 +115,7 @@ def build_quote_pdf(
     ]
 
     # ── Tableau des prestations (HT / TVA / TTC) ──
-    head = ["Prestation", "Durée", "Montant HT", f"TVA {round(vat_rate*100)}%", "Total TTC"]
+    head = ["Prestation", "Durée", "Montant HT", f"TVA {round(vat_rate * 100)}%", "Total TTC"]
     rows = [head]
     total_ttc = 0
     for it in items:
@@ -116,29 +124,35 @@ def build_quote_pdf(
         tva = ttc - ht
         total_ttc += ttc
         dur = it.get("duration_minutes")
-        rows.append([
-            Paragraph(str(it.get("name", "")), body),
-            f"{dur} min" if dur else "—",
-            _eur(ht),
-            _eur(tva),
-            _eur(ttc),
-        ])
+        rows.append(
+            [
+                Paragraph(str(it.get("name", "")), body),
+                f"{dur} min" if dur else "—",
+                _eur(ht),
+                _eur(tva),
+                _eur(ttc),
+            ]
+        )
     table = Table(rows, colWidths=[64 * mm, 22 * mm, 28 * mm, 26 * mm, 30 * mm])
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), _NIGHT),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTSIZE", (0, 0), (-1, 0), 8.5),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("TOPPADDING", (0, 0), (-1, 0), 7),
-        ("BOTTOMPADDING", (0, 0), (-1, 0), 7),
-        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-        ("ALIGN", (0, 0), (0, -1), "LEFT"),
-        ("FONTSIZE", (0, 1), (-1, -1), 9.5),
-        ("TOPPADDING", (0, 1), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 1), (-1, -1), 8),
-        ("LINEBELOW", (0, 1), (-1, -1), 0.5, _LINE),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-    ]))
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), _NIGHT),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTSIZE", (0, 0), (-1, 0), 8.5),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("TOPPADDING", (0, 0), (-1, 0), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 7),
+                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                ("FONTSIZE", (0, 1), (-1, -1), 9.5),
+                ("TOPPADDING", (0, 1), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 8),
+                ("LINEBELOW", (0, 1), (-1, -1), 0.5, _LINE),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]
+        )
+    )
     flow += [table, Spacer(1, 4)]
 
     # ── Totaux ──
@@ -147,26 +161,30 @@ def build_quote_pdf(
     totals = Table(
         [
             ["Total HT", _eur(total_ht)],
-            [f"TVA {round(vat_rate*100)} %", _eur(total_tva)],
+            [f"TVA {round(vat_rate * 100)} %", _eur(total_tva)],
             ["Total TTC", _eur(total_ttc)],
         ],
         colWidths=[40 * mm, 35 * mm],
         hAlign="RIGHT",
     )
-    totals.setStyle(TableStyle([
-        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
-        ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("TEXTCOLOR", (0, 0), (-1, 1), _MUTED),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        # Ligne Total TTC mise en valeur
-        ("BACKGROUND", (0, 2), (-1, 2), _TINT),
-        ("TEXTCOLOR", (0, 2), (-1, 2), _CORAL),
-        ("FONTNAME", (0, 2), (-1, 2), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 2), (-1, 2), 12),
-        ("TOPPADDING", (0, 2), (-1, 2), 8),
-        ("BOTTOMPADDING", (0, 2), (-1, 2), 8),
-    ]))
+    totals.setStyle(
+        TableStyle(
+            [
+                ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("TEXTCOLOR", (0, 0), (-1, 1), _MUTED),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                # Ligne Total TTC mise en valeur
+                ("BACKGROUND", (0, 2), (-1, 2), _TINT),
+                ("TEXTCOLOR", (0, 2), (-1, 2), _CORAL),
+                ("FONTNAME", (0, 2), (-1, 2), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 2), (-1, 2), 12),
+                ("TOPPADDING", (0, 2), (-1, 2), 8),
+                ("BOTTOMPADDING", (0, 2), (-1, 2), 8),
+            ]
+        )
+    )
     flow += [totals, Spacer(1, 26)]
 
     # ── Mentions légales / footer ──

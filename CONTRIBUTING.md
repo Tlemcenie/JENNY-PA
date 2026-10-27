@@ -11,13 +11,12 @@
 
 3. **Variables** : copier `.env.example` vers `.env` et adapter.
 
-4. **Checkpoints ML** : les tests e2e attendent `checkpoints/intent/best_model.pt` et `checkpoints/ner/best_model.pt`. S’ils manquent :
+4. **Checkpoint ML** : les tests e2e utilisent `checkpoints/intent_head/head.npz` (versionné). Pour le réentraîner :
 
    ```bash
-   python scripts/train_models.py
+   pip install -e ".[ml]"
+   python -m ml.models.intent_head.train
    ```
-
-   (ou utiliser les fichiers déjà présents dans le dépôt si versionnés.)
 
 ## Qualité de code
 

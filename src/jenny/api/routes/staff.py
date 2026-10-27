@@ -225,7 +225,9 @@ async def _apply_skills(
     member.all_services = False
 
 
-async def _set_skills(db: AsyncSession, bid: UUID, member: Staff, prestation_ids: list[UUID]) -> None:
+async def _set_skills(
+    db: AsyncSession, bid: UUID, member: Staff, prestation_ids: list[UUID]
+) -> None:
     """Remplace les compétences (prestations du salon)."""
     wanted = list(dict.fromkeys(prestation_ids))
     if wanted:
@@ -236,7 +238,9 @@ async def _set_skills(db: AsyncSession, bid: UUID, member: Staff, prestation_ids
                         Prestation.business_id == bid, Prestation.id.in_(wanted)
                     )
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
         if len(found) != len(wanted):
             raise HTTPException(400, "Prestation inconnue pour ce salon")
@@ -258,7 +262,9 @@ async def list_staff(db: DbSession, principal: CurrentUser) -> StaffListResponse
                 .where(Staff.business_id == bid)
                 .order_by(Staff.is_active.desc(), Staff.created_at.asc(), Staff.display_name.asc())
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     ids = [m.id for m in rows]
     skills = await _skills_of(db, ids)
@@ -345,7 +351,9 @@ async def staff_occupancy(
                 .where(Staff.business_id == bid, Staff.is_active.is_(True))
                 .order_by(Staff.created_at.asc(), Staff.display_name.asc())
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     if not members:
         return StaffLoadResponse(days=days, staff=[])
@@ -354,8 +362,9 @@ async def staff_occupancy(
     win_end = win_start + timedelta(days=days + 1)
     rows = (
         await db.execute(
-            select(Appointment.start_at, Appointment.end_at, Appointment.staff_id, Appointment.status)
-            .where(
+            select(
+                Appointment.start_at, Appointment.end_at, Appointment.staff_id, Appointment.status
+            ).where(
                 Appointment.business_id == bid,
                 Appointment.status != "cancelled",
                 Appointment.start_at < win_end,

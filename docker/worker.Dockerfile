@@ -2,7 +2,7 @@
 # ── Image Worker Jenny (ARQ cron : rappels, avis, relances) — PRODUCTION ──
 # Miroir de docker/api.prod.Dockerfile : torch CPU, deps de prod, multi-stage,
 # non-root. Le worker importe le moteur ML (intent predictor) → torch + ml +
-# checkpoints (intent/ner ; nanogpt exclu via .dockerignore) sont nécessaires.
+# checkpoint de la tête d'intention nécessaire.
 
 FROM python:3.12-slim AS builder
 

@@ -13,9 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
 
-ChannelType = Literal[
-    "instagram", "whatsapp", "messenger", "twitter", "snapchat", "email", "form"
-]
+ChannelType = Literal["instagram", "whatsapp", "messenger", "twitter", "snapchat", "email", "form"]
 DirectionType = Literal["inbound", "outbound"]
 
 

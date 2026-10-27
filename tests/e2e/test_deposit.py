@@ -51,11 +51,17 @@ async def client() -> AsyncClient:
         yield c
 
 
-async def _seed_business(*, deposit: bool, percent: int = 30, hours: dict | None = None) -> Business:
+async def _seed_business(
+    *, deposit: bool, percent: int = 30, hours: dict | None = None
+) -> Business:
     async with async_session_factory() as s, s.begin():
         biz = Business(
-            id=uuid4(), name="Salon", slug=f"s-{uuid4().hex[:6]}",
-            business_hours=hours, deposit_enabled=deposit, deposit_percent=percent,
+            id=uuid4(),
+            name="Salon",
+            slug=f"s-{uuid4().hex[:6]}",
+            business_hours=hours,
+            deposit_enabled=deposit,
+            deposit_percent=percent,
             deposit_min_cents=1000,
         )
         s.add(biz)
@@ -92,9 +98,13 @@ class TestCreateDeposit:
         start = datetime.now(UTC) + timedelta(days=1)
         async with async_session_factory() as db:
             appt = Appointment(
-                business_id=biz.id, title="Coupe", channel="chat",
-                start_at=start, end_at=start + timedelta(minutes=30),
-                status="scheduled", created_by="Jenny",
+                business_id=biz.id,
+                title="Coupe",
+                channel="chat",
+                start_at=start,
+                end_at=start + timedelta(minutes=30),
+                status="scheduled",
+                created_by="Jenny",
             )
             db.add(appt)
             await db.flush()
@@ -167,9 +177,13 @@ class TestMarkPaid:
         start = datetime.now(UTC) + timedelta(days=1)
         async with async_session_factory() as db:
             appt = Appointment(
-                business_id=biz.id, title="Couleur", channel="chat",
-                start_at=start, end_at=start + timedelta(minutes=60),
-                status="scheduled", created_by="Jenny",
+                business_id=biz.id,
+                title="Couleur",
+                channel="chat",
+                start_at=start,
+                end_at=start + timedelta(minutes=60),
+                status="scheduled",
+                created_by="Jenny",
             )
             db.add(appt)
             await db.flush()
@@ -210,15 +224,17 @@ class TestMarkPaid:
             biz = await db.get(Business, UUID(bid))
             biz.deposit_enabled = True
             appt = Appointment(
-                business_id=UUID(bid), title="Coupe", channel="chat",
-                start_at=start, end_at=start + timedelta(minutes=30),
-                status="scheduled", created_by="Jenny",
+                business_id=UUID(bid),
+                title="Coupe",
+                channel="chat",
+                start_at=start,
+                end_at=start + timedelta(minutes=30),
+                status="scheduled",
+                created_by="Jenny",
             )
             db.add(appt)
             await db.flush()
-            await create_deposit_for_appointment(
-                db, business=biz, appointment=appt, price_eur=40.0
-            )
+            await create_deposit_for_appointment(db, business=biz, appointment=appt, price_eur=40.0)
             await db.commit()
             appt_id = str(appt.id)
 

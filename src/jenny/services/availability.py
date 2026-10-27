@@ -152,7 +152,9 @@ async def load_staff_pool(db: AsyncSession, business_id: UUID) -> StaffPool:
                 .where(Staff.business_id == business_id, Staff.is_active.is_(True))
                 .order_by(Staff.created_at.asc(), Staff.display_name.asc(), Staff.id.asc())
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     skills: dict[UUID, set[UUID]] = {}
     if members:
@@ -665,5 +667,7 @@ def format_slots_fr(slots: list[datetime], tz: ZoneInfo, *, with_day: bool = Fal
     for s in slots:
         loc = s.astimezone(tz)
         t = loc.strftime("%Hh%M")
-        labels.append(f"{_days[loc.weekday()]} {loc.day:02d}/{loc.month:02d} à {t}" if with_day else t)
+        labels.append(
+            f"{_days[loc.weekday()]} {loc.day:02d}/{loc.month:02d} à {t}" if with_day else t
+        )
     return ", ".join(labels)

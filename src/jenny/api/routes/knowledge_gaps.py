@@ -75,16 +75,20 @@ async def list_gaps(
     if status != "all":
         filters.append(KnowledgeGap.status == status)
     rows = (
-        await db.execute(
-            select(KnowledgeGap)
-            .where(*filters)
-            .order_by(
-                KnowledgeGap.occurrences.desc(),
-                func.coalesce(KnowledgeGap.last_seen_at, KnowledgeGap.created_at).desc(),
+        (
+            await db.execute(
+                select(KnowledgeGap)
+                .where(*filters)
+                .order_by(
+                    KnowledgeGap.occurrences.desc(),
+                    func.coalesce(KnowledgeGap.last_seen_at, KnowledgeGap.created_at).desc(),
+                )
+                .limit(limit)
             )
-            .limit(limit)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return GapListResponse(gaps=[_to_item(g) for g in rows], total=len(rows))
 
 
@@ -139,20 +143,23 @@ async def gap_recap(db: DbSession, principal: CurrentUser) -> GapRecapResponse:
     if bid is None:
         return GapRecapResponse(total_open=0, questions=[], recap_text="")
     rows = (
-        await db.execute(
-            select(KnowledgeGap)
-            .where(KnowledgeGap.business_id == bid, KnowledgeGap.status == "open")
-            .order_by(KnowledgeGap.occurrences.desc(), KnowledgeGap.created_at.desc())
-            .limit(100)
+        (
+            await db.execute(
+                select(KnowledgeGap)
+                .where(KnowledgeGap.business_id == bid, KnowledgeGap.status == "open")
+                .order_by(KnowledgeGap.occurrences.desc(), KnowledgeGap.created_at.desc())
+                .limit(100)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     questions = [g.question for g in rows]
     if not questions:
         recap = "Aucune question en attente — Jenny a su répondre à tout. 🎉"
     else:
         lignes = "\n".join(
-            f"{i}. {g.question}"
-            + (f"  (posée {g.occurrences} fois)" if g.occurrences > 1 else "")
+            f"{i}. {g.question}" + (f"  (posée {g.occurrences} fois)" if g.occurrences > 1 else "")
             for i, g in enumerate(rows, 1)
         )
         recap = (

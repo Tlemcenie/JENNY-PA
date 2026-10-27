@@ -99,15 +99,24 @@ class Business(Base, TimestampMixin):
 
     # rappels + fidélité
     reminder_lead_minutes: Mapped[int] = mapped_column(
-        Integer, default=60, server_default="60", nullable=False,
+        Integer,
+        default=60,
+        server_default="60",
+        nullable=False,
         comment="Délai du rappel « imminent » avant le RDV (minutes)",
     )
     day_reminder_lead_hours: Mapped[int] = mapped_column(
-        Integer, default=24, server_default="24", nullable=False,
+        Integer,
+        default=24,
+        server_default="24",
+        nullable=False,
         comment="Délai du rappel « la veille » avant le RDV (heures)",
     )
     loyalty_threshold: Mapped[int] = mapped_column(
-        Integer, default=10, server_default="10", nullable=False,
+        Integer,
+        default=10,
+        server_default="10",
+        nullable=False,
         comment="Nombre de RDV honorés pour débloquer une récompense fidélité (0 = désactivé)",
     )
 

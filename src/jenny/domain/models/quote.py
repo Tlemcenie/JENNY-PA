@@ -19,9 +19,7 @@ class Quote(Base, TimestampMixin):
 
     __tablename__ = "quotes"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     business_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("businesses.id", ondelete="CASCADE"),
@@ -47,9 +45,7 @@ class Quote(Base, TimestampMixin):
     # draft → sent → accepted | expired
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
     sent_to_email: Mapped[str | None] = mapped_column(String(255), default=None)
-    valid_until: Mapped[dt.datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    valid_until: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     business = relationship("Business", lazy="selectin")
     customer = relationship("Customer", lazy="selectin")

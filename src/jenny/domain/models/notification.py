@@ -41,9 +41,7 @@ class Notification(Base):
     )
     meta: Mapped[dict | None] = mapped_column(JSON, default=None)
     # Date de lecture (None = non lue).
-    read_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),

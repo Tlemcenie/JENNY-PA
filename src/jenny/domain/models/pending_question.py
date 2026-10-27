@@ -22,9 +22,7 @@ from jenny.db.base import Base, TimestampMixin
 class PendingQuestion(Base, TimestampMixin):
     __tablename__ = "pending_questions"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     business_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("businesses.id", ondelete="CASCADE"),
@@ -48,6 +46,4 @@ class PendingQuestion(Base, TimestampMixin):
     )
     answer: Mapped[str | None] = mapped_column(Text, default=None)
     answered_by: Mapped[str | None] = mapped_column(String(255), default=None)
-    answered_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

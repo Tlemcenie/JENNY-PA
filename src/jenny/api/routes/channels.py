@@ -181,8 +181,10 @@ async def list_channels(
     accounts: dict[str, ChannelAccount] = {}
     if bid is not None:
         rows = (
-            await db.execute(select(ChannelAccount).where(ChannelAccount.business_id == bid))
-        ).scalars().all()
+            (await db.execute(select(ChannelAccount).where(ChannelAccount.business_id == bid)))
+            .scalars()
+            .all()
+        )
         for acc in rows:
             accounts[acc.channel] = acc
 
@@ -242,7 +244,9 @@ async def webhook_info(
     verify = getattr(creds, "verify_token", None) if creds else None
     if not verify:
         verify = (
-            settings.whatsapp_verify_token if channel == "whatsapp" else settings.instagram_verify_token
+            settings.whatsapp_verify_token
+            if channel == "whatsapp"
+            else settings.instagram_verify_token
         )
     return WebhookInfo(
         channel=channel,
@@ -326,10 +330,16 @@ async def test_channel(
 
     if channel == "whatsapp":
         ok = await WhatsAppConnector().health_check(creds)  # type: ignore[arg-type]
-        detail = "Connexion à l'API WhatsApp Cloud OK." if ok else "Échec du ping API WhatsApp (token/ID ?)."
+        detail = (
+            "Connexion à l'API WhatsApp Cloud OK."
+            if ok
+            else "Échec du ping API WhatsApp (token/ID ?)."
+        )
     elif channel == "instagram":
         ok = await InstagramConnector().health_check(creds)  # type: ignore[arg-type]
-        detail = "Connexion à l'API Instagram OK." if ok else "Échec du ping API Instagram (token/ID ?)."
+        detail = (
+            "Connexion à l'API Instagram OK." if ok else "Échec du ping API Instagram (token/ID ?)."
+        )
     elif channel == "email":
         ok = bool(getattr(creds, "smtp_password", "") and getattr(creds, "smtp_host", ""))
         detail = (

@@ -34,9 +34,7 @@ class User(Base, TimestampMixin):
     email_verified: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, server_default=expression.false()
     )
-    email_verification_code_hash: Mapped[str | None] = mapped_column(
-        String(255), default=None
-    )
+    email_verification_code_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     email_verification_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
@@ -48,9 +46,7 @@ class User(Base, TimestampMixin):
     )
 
     # ── Réinitialisation de mot de passe (code à 6 chiffres) ──
-    password_reset_code_hash: Mapped[str | None] = mapped_column(
-        String(255), default=None
-    )
+    password_reset_code_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     password_reset_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )

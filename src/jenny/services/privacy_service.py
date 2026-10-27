@@ -66,7 +66,9 @@ async def _fetch(db: AsyncSession, model, business_id: UUID, customer_id: UUID) 
                     model.business_id == business_id, model.customer_id == customer_id
                 )
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
 
 
@@ -94,24 +96,42 @@ async def export_customer_data(
         "profile": _row(
             customer,
             (
-                "id", "full_name", "email", "phone", "instagram_handle", "messenger_id",
-                "tags", "notes", "first_seen_at", "last_seen_at", "anonymized_at",
+                "id",
+                "full_name",
+                "email",
+                "phone",
+                "instagram_handle",
+                "messenger_id",
+                "tags",
+                "notes",
+                "first_seen_at",
+                "last_seen_at",
+                "anonymized_at",
                 "created_at",
             ),
         ),
         "appointments": [
-            _row(a, ("id", "title", "status", "start_at", "end_at", "channel",
-                     "deposit_cents", "deposit_status"))
+            _row(
+                a,
+                (
+                    "id",
+                    "title",
+                    "status",
+                    "start_at",
+                    "end_at",
+                    "channel",
+                    "deposit_cents",
+                    "deposit_status",
+                ),
+            )
             for a in appointments
         ],
         "conversations": [
-            _row(c, ("id", "channel", "status", "message_count", "created_at",
-                     "last_message_at"))
+            _row(c, ("id", "channel", "status", "message_count", "created_at", "last_message_at"))
             for c in conversations
         ],
         "messages": [
-            _row(m, ("id", "direction", "channel", "content_text", "language",
-                     "received_at"))
+            _row(m, ("id", "direction", "channel", "content_text", "language", "received_at"))
             for m in messages
         ],
         "facts": [
@@ -122,8 +142,7 @@ async def export_customer_data(
             for t in transactions
         ],
         "orders": [
-            _row(o, ("id", "reference", "status", "currency", "total_amount_minor"))
-            for o in orders
+            _row(o, ("id", "reference", "status", "currency", "total_amount_minor")) for o in orders
         ],
         "support_tickets": [
             _row(t, ("id", "reference", "subject", "status", "priority")) for t in tickets
@@ -182,7 +201,11 @@ async def anonymize_customer(
 
     # 2) Sous-données strictement personnelles → suppression.
     deleted = {"addresses": 0, "documents": 0, "facts": 0}
-    for model, key in ((CustomerAddress, "addresses"), (CustomerDocument, "documents"), (CustomerFact, "facts")):
+    for model, key in (
+        (CustomerAddress, "addresses"),
+        (CustomerDocument, "documents"),
+        (CustomerFact, "facts"),
+    ):
         rows = await _fetch(db, model, business_id, customer_id)
         for r in rows:
             await db.delete(r)

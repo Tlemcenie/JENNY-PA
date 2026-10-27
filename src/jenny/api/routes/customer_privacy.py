@@ -26,9 +26,7 @@ router = APIRouter(prefix="/customers", tags=["RGPD"])
 
 
 @router.get("/{customer_id}/export")
-async def export_customer(
-    customer_id: UUID, db: DbSession, principal: CurrentUser
-) -> Response:
+async def export_customer(customer_id: UUID, db: DbSession, principal: CurrentUser) -> Response:
     """Exporte toutes les données d'un client en JSON téléchargeable (RGPD)."""
     bid = principal.business_id
     if bid is None:
@@ -52,9 +50,7 @@ async def export_customer(
     return Response(
         content=payload,
         media_type="application/json",
-        headers={
-            "Content-Disposition": f'attachment; filename="client-{customer_id}.json"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="client-{customer_id}.json"'},
     )
 
 

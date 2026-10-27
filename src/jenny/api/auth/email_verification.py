@@ -20,7 +20,7 @@ RESEND_COOLDOWN_SECONDS = 60
 
 def generate_code() -> str:
     """Retourne un code numérique à 6 chiffres (avec zéros de tête)."""
-    return f"{secrets.randbelow(10 ** CODE_LENGTH):0{CODE_LENGTH}d}"
+    return f"{secrets.randbelow(10**CODE_LENGTH):0{CODE_LENGTH}d}"
 
 
 def hash_code(code: str) -> str:

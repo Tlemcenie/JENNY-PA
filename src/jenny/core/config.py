@@ -62,34 +62,21 @@ class Settings(BaseSettings):
     # LLM
     openai_api_key: str = ""
     groq_api_key: str = ""
-    mistral_api_key: str = ""
-    llama_base_url: str = "http://localhost:11434"  # Ollama / vLLM local
-    llm_provider: str = "groq"  # groq, openai, mistral, llama…
+    llm_provider: str = "groq"  # groq ou openai
     llm_model: str = "openai/gpt-oss-120b"  # modèle par défaut Groq
     llm_temperature: float = 0.4  # bas = stable/posé
-    # garde le modèle chargé
-    llama_keep_alive: str = "30m"
 
-    # ML supervisé (intent/NER)
+    # intention : tête mpnet
     enable_ml_models: bool = True
-    intent_model_path: str = "checkpoints/intent/best_model.pt"
-    ner_model_path: str = "checkpoints/ner/best_model.pt"
-    # tête mpnet ou lstm
-    intent_model_kind: Literal["lstm", "head"] = "head"
     intent_head_path: str = "checkpoints/intent_head/head.npz"
-    # ner coupé : écrase la presta
-    enable_ner_model: bool = False
 
     # embeddings RAG
     # multilingue, 100 % en-process
-    embeddings_backend: str = "sentence-transformer"  # ollama, sentence-transformer, openai
+    embeddings_backend: str = "sentence-transformer"  # ou openai
     embeddings_model: str = "paraphrase-multilingual-mpnet-base-v2"
     # re-ranking lexical
     rag_rerank: bool = True
     rag_rerank_candidates: int = 12  # candidats avant re-ranking
-
-    # MLflow
-    mlflow_tracking_uri: str = "http://localhost:5000"
 
     # WhatsApp (Meta)
     whatsapp_phone_number_id: str = ""

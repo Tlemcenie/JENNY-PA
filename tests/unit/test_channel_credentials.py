@@ -58,7 +58,13 @@ def test_normalize_unsupported_channel():
 def test_normalize_email_port_coercion():
     ext, creds, errors = svc.normalize_connect_payload(
         "email",
-        {"smtp_host": "smtp.x.fr", "smtp_username": "a@x.fr", "smtp_password": "p", "smtp_port": "465", "smtp_from_email": "a@x.fr"},
+        {
+            "smtp_host": "smtp.x.fr",
+            "smtp_username": "a@x.fr",
+            "smtp_password": "p",
+            "smtp_port": "465",
+            "smtp_from_email": "a@x.fr",
+        },
     )
     assert errors == []
     assert creds["smtp_port"] == 465  # converti en int
@@ -74,7 +80,10 @@ def test_public_field_specs_never_leak_values():
 
 
 def test_external_account_id_for_email_prefers_from_email():
-    assert svc.external_account_id_for("email", {"smtp_from_email": "x@y.fr", "imap_user": "z"}) == "x@y.fr"
+    assert (
+        svc.external_account_id_for("email", {"smtp_from_email": "x@y.fr", "imap_user": "z"})
+        == "x@y.fr"
+    )
     assert svc.external_account_id_for("email", {"imap_user": "z@y.fr"}) == "z@y.fr"
 
 
@@ -85,11 +94,14 @@ def test_build_typed_whatsapp_defaults():
     assert creds.api_version == "v21.0"
 
 
-@pytest.mark.parametrize("channel,data,expected", [
-    ("whatsapp", {"access_token": "x"}, True),
-    ("whatsapp", {"access_token": ""}, False),
-    ("email", {"smtp_password": "x"}, True),
-    ("email", {}, False),
-])
+@pytest.mark.parametrize(
+    "channel,data,expected",
+    [
+        ("whatsapp", {"access_token": "x"}, True),
+        ("whatsapp", {"access_token": ""}, False),
+        ("email", {"smtp_password": "x"}, True),
+        ("email", {}, False),
+    ],
+)
 def test_has_token(channel, data, expected):
     assert svc._has_token(channel, data) is expected

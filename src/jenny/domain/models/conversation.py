@@ -97,9 +97,7 @@ class Conversation(Base, TimestampMixin):
     # liste de chaînes, portable Postgres/SQLite.
     tags: Mapped[list[str] | None] = mapped_column(JSON, default=None)
     # Reportée (snooze) : masquée de la vue active jusqu'à cette date.
-    snoozed_until: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # Sentiment du dernier message client (positive/neutral/negative).
     sentiment: Mapped[str | None] = mapped_column(String(20), default=None)
 

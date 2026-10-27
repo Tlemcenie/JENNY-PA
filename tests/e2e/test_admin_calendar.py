@@ -101,7 +101,9 @@ class TestAdmin:
         await _make_superuser("boss2@x.com")
         me = (await client.get("/api/v1/auth/me", headers=headers)).json()
         r = await client.patch(
-            f"/api/v1/admin/users/{me['id']}/superuser", headers=headers, json={"is_superuser": False}
+            f"/api/v1/admin/users/{me['id']}/superuser",
+            headers=headers,
+            json={"is_superuser": False},
         )
         assert r.status_code == 400  # interdit de retirer ses propres droits
 

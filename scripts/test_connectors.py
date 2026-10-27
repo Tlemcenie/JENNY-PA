@@ -2,10 +2,8 @@
 """teste les connecteurs."""
 
 import asyncio
-import json
 import sys
 from pathlib import Path
-from typing import Any
 
 # ajoute les chemins
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -37,7 +35,7 @@ def error(msg: str) -> None:
 
 
 def info(msg: str) -> None:
-    print(f"{Colors.BLUE}ℹ️{Colors.RESET} {msg}")
+    print(f"{Colors.BLUE}i{Colors.RESET} {msg}")
 
 
 def warning(msg: str) -> None:
@@ -109,7 +107,7 @@ async def check_whatsapp_health() -> None:
     info("Pour tester le webhook, lancer :")
     print("  curl -X POST http://localhost:8000/webhooks/whatsapp \\")
     print("    -H 'Content-Type: application/json' \\")
-    print("    -d '{\"entry\": [{\"changes\": [{\"value\": {\"messages\": []}}]}]}'")
+    print('    -d \'{"entry": [{"changes": [{"value": {"messages": []}}]}]}\'')
 
 
 async def check_instagram_health() -> None:
@@ -123,8 +121,7 @@ async def check_instagram_health() -> None:
     info("Pour tester le webhook, lancer :")
     print("  curl -X POST http://localhost:8000/webhooks/instagram \\")
     print("    -H 'Content-Type: application/json' \\")
-    print("    -d '{\"entry\": [{\"messaging\": []}]}'")
-
+    print('    -d \'{"entry": [{"messaging": []}]}\'')
 
 
 async def test_webhook_simulation(channel: str) -> None:
@@ -165,7 +162,7 @@ async def test_webhook_simulation(channel: str) -> None:
 
         try:
             payload = WhatsAppWebhookPayload.model_validate(payload_data)
-            success(f"Payload valide ✓")
+            success("Payload valide ✓")
             info(f"Nombre de messages: {len(payload.entry[0].changes[0].value.messages)}")
         except Exception as e:
             error(f"Erreur validation: {e}")
@@ -191,7 +188,7 @@ async def test_webhook_simulation(channel: str) -> None:
 
         try:
             payload = IGWebhookPayload.model_validate(payload_data)
-            success(f"Payload valide ✓")
+            success("Payload valide ✓")
         except Exception as e:
             error(f"Erreur validation: {e}")
 
@@ -248,7 +245,7 @@ async def main() -> None:
         await test_webhook_simulation(args.webhook)
 
     section("✅ Test Terminé")
-    
+
     info("Pour lancer l'API : make api")
     info("Pour lancer les tests : make test")
     info("Pour voir les logs : tail -f logs/jenny.log")

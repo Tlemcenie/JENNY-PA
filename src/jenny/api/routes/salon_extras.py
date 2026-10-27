@@ -50,12 +50,16 @@ async def list_closures(db: DbSession, principal: CurrentUser) -> list[ClosureIt
     if bid is None:
         return []
     rows = (
-        await db.execute(
-            select(BusinessClosure)
-            .where(BusinessClosure.business_id == bid)
-            .order_by(BusinessClosure.start_date.asc())
+        (
+            await db.execute(
+                select(BusinessClosure)
+                .where(BusinessClosure.business_id == bid)
+                .order_by(BusinessClosure.start_date.asc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [
         ClosureItem(id=str(c.id), start_date=c.start_date, end_date=c.end_date, reason=c.reason)
         for c in rows
@@ -63,9 +67,7 @@ async def list_closures(db: DbSession, principal: CurrentUser) -> list[ClosureIt
 
 
 @router.post("/closures", response_model=ClosureItem, status_code=201)
-async def create_closure(
-    body: ClosureCreate, db: DbSession, principal: CurrentUser
-) -> ClosureItem:
+async def create_closure(body: ClosureCreate, db: DbSession, principal: CurrentUser) -> ClosureItem:
     bid = principal.business_id
     if bid is None:
         raise HTTPException(400, "Aucun business associé")
@@ -80,15 +82,15 @@ async def create_closure(
     await db.refresh(closure)
     logger.info("salon.closure_created", business_id=str(bid))
     return ClosureItem(
-        id=str(closure.id), start_date=closure.start_date,
-        end_date=closure.end_date, reason=closure.reason,
+        id=str(closure.id),
+        start_date=closure.start_date,
+        end_date=closure.end_date,
+        reason=closure.reason,
     )
 
 
 @router.delete("/closures/{closure_id}")
-async def delete_closure(
-    closure_id: UUID, db: DbSession, principal: CurrentUser
-) -> dict:
+async def delete_closure(closure_id: UUID, db: DbSession, principal: CurrentUser) -> dict:
     closure = await db.get(BusinessClosure, closure_id)
     if closure is None or closure.business_id != principal.business_id:
         raise HTTPException(404, "Fermeture introuvable")
@@ -122,16 +124,22 @@ async def list_reviews(db: DbSession, principal: CurrentUser) -> list[ReviewItem
     if bid is None:
         return []
     rows = (
-        await db.execute(
-            select(Review)
-            .where(Review.business_id == bid)
-            .order_by(Review.created_at.desc())
-            .limit(200)
+        (
+            await db.execute(
+                select(Review)
+                .where(Review.business_id == bid)
+                .order_by(Review.created_at.desc())
+                .limit(200)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [
         ReviewItem(
-            id=str(r.id), rating=r.rating, comment=r.comment,
+            id=str(r.id),
+            rating=r.rating,
+            comment=r.comment,
             customer_id=str(r.customer_id) if r.customer_id else None,
             appointment_id=str(r.appointment_id) if r.appointment_id else None,
             created_at=r.created_at.isoformat() if r.created_at else "",
@@ -141,22 +149,25 @@ async def list_reviews(db: DbSession, principal: CurrentUser) -> list[ReviewItem
 
 
 @router.post("/reviews", response_model=ReviewItem, status_code=201)
-async def create_review(
-    body: ReviewCreate, db: DbSession, principal: CurrentUser
-) -> ReviewItem:
+async def create_review(body: ReviewCreate, db: DbSession, principal: CurrentUser) -> ReviewItem:
     bid = principal.business_id
     if bid is None:
         raise HTTPException(400, "Aucun business associé")
     review = Review(
-        business_id=bid, rating=body.rating, comment=body.comment,
-        customer_id=body.customer_id, appointment_id=body.appointment_id,
+        business_id=bid,
+        rating=body.rating,
+        comment=body.comment,
+        customer_id=body.customer_id,
+        appointment_id=body.appointment_id,
     )
     db.add(review)
     await db.commit()
     await db.refresh(review)
     logger.info("salon.review_created", business_id=str(bid), rating=body.rating)
     return ReviewItem(
-        id=str(review.id), rating=review.rating, comment=review.comment,
+        id=str(review.id),
+        rating=review.rating,
+        comment=review.comment,
         customer_id=str(review.customer_id) if review.customer_id else None,
         appointment_id=str(review.appointment_id) if review.appointment_id else None,
         created_at=review.created_at.isoformat() if review.created_at else "",

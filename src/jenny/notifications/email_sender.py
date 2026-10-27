@@ -202,9 +202,7 @@ def _template_html(email_type: str, subject: str, body: str, variables: dict[str
 
     eyebrow, heading, accent = _HTML_META.get(email_type, ("information", "Information", ""))
     safe = html_lib.escape(body).replace("\n", "<br>")
-    block = (
-        f'<div style="font-family:{SANS};font-size:15px;line-height:1.7;color:{MUTED};">{safe}</div>'
-    )
+    block = f'<div style="font-family:{SANS};font-size:15px;line-height:1.7;color:{MUTED};">{safe}</div>'
     return render_email(
         preheader=subject,
         eyebrow=eyebrow,
@@ -221,14 +219,17 @@ class EmailSender:
     def __init__(self, creds=None) -> None:
         self.settings = get_settings()
         # creds du business sinon config
-        self.smtp_host = (getattr(creds, "smtp_host", "") or self.settings.smtp_host)
-        self.smtp_port = (getattr(creds, "smtp_port", 0) or self.settings.smtp_port)
-        self.smtp_username = (getattr(creds, "smtp_username", "") or self.settings.smtp_username)
-        self.smtp_password = (getattr(creds, "smtp_password", "") or self.settings.smtp_password)
-        self.smtp_from_email = (getattr(creds, "smtp_from_email", "") or self.settings.smtp_from_email)
-        self.smtp_from_name = (getattr(creds, "smtp_from_name", "") or self.settings.smtp_from_name)
+        self.smtp_host = getattr(creds, "smtp_host", "") or self.settings.smtp_host
+        self.smtp_port = getattr(creds, "smtp_port", 0) or self.settings.smtp_port
+        self.smtp_username = getattr(creds, "smtp_username", "") or self.settings.smtp_username
+        self.smtp_password = getattr(creds, "smtp_password", "") or self.settings.smtp_password
+        self.smtp_from_email = (
+            getattr(creds, "smtp_from_email", "") or self.settings.smtp_from_email
+        )
+        self.smtp_from_name = getattr(creds, "smtp_from_name", "") or self.settings.smtp_from_name
         self.smtp_use_tls = (
-            creds.smtp_use_tls if creds is not None and hasattr(creds, "smtp_use_tls")
+            creds.smtp_use_tls
+            if creds is not None and hasattr(creds, "smtp_use_tls")
             else self.settings.smtp_use_tls
         )
 
@@ -265,10 +266,14 @@ class EmailSender:
                 content = att.get("content")
                 if not content:
                     continue
-                _maintype, _, subtype = (att.get("mimetype") or "application/octet-stream").partition("/")
+                _maintype, _, subtype = (
+                    att.get("mimetype") or "application/octet-stream"
+                ).partition("/")
                 part = MIMEApplication(content, _subtype=subtype or "octet-stream")
                 part.add_header(
-                    "Content-Disposition", "attachment", filename=att.get("filename", "piece-jointe")
+                    "Content-Disposition",
+                    "attachment",
+                    filename=att.get("filename", "piece-jointe"),
                 )
                 root.attach(part)
             except (OSError, TypeError, ValueError) as e:
@@ -322,20 +327,13 @@ class EmailSender:
             ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             safe_to = email.to.replace("@", "_at_").replace("/", "_")
             path = directory / f"{ts}-{safe_to}.html"
-            content = email.body_html or (
-                f"<pre>{html_lib.escape(email.body_text)}</pre>"
-            )
+            content = email.body_html or (f"<pre>{html_lib.escape(email.body_text)}</pre>")
             # mascotte en data-uri pour l'aperçu
             if email.body_html and f"cid:{MASCOT_CID}" in content and _MASCOT_PATH.exists():
                 b64 = base64.b64encode(_MASCOT_PATH.read_bytes()).decode()
-                content = content.replace(
-                    f"cid:{MASCOT_CID}", f"data:image/png;base64,{b64}"
-                )
+                content = content.replace(f"cid:{MASCOT_CID}", f"data:image/png;base64,{b64}")
             # métadonnées en commentaire
-            meta = (
-                f"<!--\nTo: {email.to}\nSubject: {email.subject}\n\n"
-                f"{email.body_text}\n-->\n"
-            )
+            meta = f"<!--\nTo: {email.to}\nSubject: {email.subject}\n\n{email.body_text}\n-->\n"
             path.write_text(meta + content, encoding="utf-8")
             logger.info(
                 "email.file_written",

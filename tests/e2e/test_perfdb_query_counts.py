@@ -102,8 +102,10 @@ async def _seed_inbox(bid: UUID, n_conv: int = 6, n_msg: int = 12) -> list[UUID]
             for j in range(n_msg):
                 # dernier message = entrant si i pair
                 last = j == n_msg - 1
-                direction = ("inbound" if i % 2 == 0 else "outbound") if last else (
-                    "inbound" if j % 2 == 0 else "outbound"
+                direction = (
+                    ("inbound" if i % 2 == 0 else "outbound")
+                    if last
+                    else ("inbound" if j % 2 == 0 else "outbound")
                 )
                 s.add(
                     Message(
@@ -197,7 +199,9 @@ async def test_customer_context_no_cascade(client: AsyncClient, db_tables: None)
     _headers, bid = await _auth(client, "ctx@perf.com")
     await _seed_inbox(bid, n_conv=2, n_msg=20)
     async with async_session_factory() as s:
-        cid = (await s.execute(select(Customer.id).where(Customer.full_name == "Client 1"))).scalar()
+        cid = (
+            await s.execute(select(Customer.id).where(Customer.full_name == "Client 1"))
+        ).scalar()
 
     async with async_session_factory() as s:
         with count_sql() as stmts:

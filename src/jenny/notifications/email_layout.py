@@ -42,7 +42,7 @@ def code_boxes(code: str) -> str:
         f'<td style="padding:0 4px;">'
         f'<div style="width:42px;height:54px;line-height:54px;text-align:center;'
         f"font-family:{MONO};font-size:26px;font-weight:700;color:{CORAL};"
-        f"background:{CORAL_TINT};border:1px solid {CORAL_DARK};border-radius:12px;\">"
+        f'background:{CORAL_TINT};border:1px solid {CORAL_DARK};border-radius:12px;">'
         f"{escape(d)}</div></td>"
         for d in code
     )

@@ -11,7 +11,9 @@ from jenny.db.base import Base
 
 class BusinessMember(Base):
     __tablename__ = "business_members"
-    __table_args__ = (UniqueConstraint("user_id", "business_id", name="uq_business_members_user_business"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "business_id", name="uq_business_members_user_business"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

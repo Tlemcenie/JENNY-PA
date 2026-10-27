@@ -60,9 +60,7 @@ async def list_pending_questions(
     db: DbSession,
     principal: CurrentUser,
     conversation_id: Annotated[UUID | None, Query()] = None,
-    status: Annotated[
-        Literal["open", "answered", "dismissed", "all"], Query()
-    ] = "open",
+    status: Annotated[Literal["open", "answered", "dismissed", "all"], Query()] = "open",
 ) -> PQListResponse:
     """Liste les questions en attente du business (les plus récentes d'abord)."""
     bid = principal.business_id
@@ -74,12 +72,14 @@ async def list_pending_questions(
     if status != "all":
         filters.append(PendingQuestion.status == status)
     rows = (
-        await db.execute(
-            select(PendingQuestion)
-            .where(*filters)
-            .order_by(PendingQuestion.created_at.desc())
+        (
+            await db.execute(
+                select(PendingQuestion).where(*filters).order_by(PendingQuestion.created_at.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     items = [_to_out(q) for q in rows]
     return PQListResponse(questions=items, total=len(items))
 

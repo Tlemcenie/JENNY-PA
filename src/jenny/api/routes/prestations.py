@@ -66,20 +66,22 @@ def _to_out(p: Prestation) -> PrestationOut:
 
 
 @router.get("", response_model=PrestationListResponse)
-async def list_prestations(
-    db: DbSession, principal: CurrentUser
-) -> PrestationListResponse:
+async def list_prestations(db: DbSession, principal: CurrentUser) -> PrestationListResponse:
     """Liste toutes les prestations du business (actives ET inactives)."""
     bid = principal.business_id
     if bid is None:
         return PrestationListResponse(prestations=[], total=0)
     rows = (
-        await db.execute(
-            select(Prestation)
-            .where(Prestation.business_id == bid)
-            .order_by(Prestation.sort_order.asc(), Prestation.name.asc())
+        (
+            await db.execute(
+                select(Prestation)
+                .where(Prestation.business_id == bid)
+                .order_by(Prestation.sort_order.asc(), Prestation.name.asc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     items = [_to_out(p) for p in rows]
     return PrestationListResponse(prestations=items, total=len(items))
 
@@ -172,9 +174,7 @@ async def update_prestation(
 
 
 @router.delete("/{prestation_id}")
-async def delete_prestation(
-    prestation_id: UUID, db: DbSession, principal: CurrentUser
-) -> dict:
+async def delete_prestation(prestation_id: UUID, db: DbSession, principal: CurrentUser) -> dict:
     """Supprime une prestation du catalogue."""
     presta = await db.get(Prestation, prestation_id)
     if presta is None or presta.business_id != principal.business_id:
@@ -228,14 +228,10 @@ async def _seed_knowledge(db: DbSession, bid: UUID) -> int:
             # fiches horaires sautées
             logger.warning("prestation.seed_no_hours", business_id=str(bid))
         # prix : catalogue en direct
-        entries = build_entries(
-            business, prestas, demo=False, include_prices=False, staff=staff
-        )
+        entries = build_entries(business, prestas, demo=False, include_prices=False, staff=staff)
         kb = KnowledgeBase(business_id=bid, session=db)
         # vieilles fiches prix retirées
-        stats = await sync_real_entries(
-            kb, entries, families=real_families(include_prices=True)
-        )
+        stats = await sync_real_entries(kb, entries, families=real_families(include_prices=True))
     except Exception as exc:
         # store vectoriel indispo : on ignore
         await db.rollback()
@@ -264,18 +260,14 @@ async def seed_coiffeur(db: DbSession, principal: CurrentUser) -> SeedCoiffeurRe
     await _lock_seed(db, bid)
     existing = int(
         (
-            await db.execute(
-                select(func.count(Prestation.id)).where(Prestation.business_id == bid)
-            )
+            await db.execute(select(func.count(Prestation.id)).where(Prestation.business_id == bid))
         ).scalar_one()
         or 0
     )
 
     created = 0
     if existing == 0:
-        for order, (name, category, duration, price_cents) in enumerate(
-            _DEFAULT_COIFFEUR
-        ):
+        for order, (name, category, duration, price_cents) in enumerate(_DEFAULT_COIFFEUR):
             db.add(
                 Prestation(
                     business_id=bid,
