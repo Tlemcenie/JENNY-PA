@@ -119,12 +119,12 @@ async def switch_llm(body: LlmSwitchRequest, principal: SuperUser) -> LlmState:
     # Application à chaud : on remplace le générateur du moteur partagé (pas de
     # reconstruction complète → on ne recharge pas les modèles ML intent/NER).
     try:
-        from jenny.engine.factory import get_engine
+        from jenny.engine.factory import aget_engine
         from jenny.engine.response_generator import ResponseGenerator
         from jenny.llm.providers import get_default_llm_provider
 
         provider = get_default_llm_provider()
-        engine = get_engine()
+        engine = await aget_engine()
         engine.response_generator = (
             ResponseGenerator(provider) if provider is not None else None
         )

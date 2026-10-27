@@ -21,7 +21,7 @@ from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.message import Message
 from jenny.engine.conversation_engine import EngineRequest
-from jenny.engine.factory import get_engine
+from jenny.engine.factory import aget_engine
 from jenny.services.audit_service import record_audit
 from jenny.services.notification_service import build_notification
 from jenny.services.persona_loader import load_business_persona
@@ -763,7 +763,8 @@ async def suggest_reply(
         raise HTTPException(400, "Aucun message client à traiter")
 
     persona, business_name = await load_business_persona(db, conv.business_id)
-    out = await get_engine().process(
+    engine = await aget_engine()
+    out = await engine.process(
         EngineRequest(
             conversation_id=conv.id,
             business_id=conv.business_id,
@@ -776,7 +777,7 @@ async def suggest_reply(
     base = out.response_text
     variants = [base]
     # 2 reformulations via le LLM
-    rg = getattr(get_engine(), "response_generator", None)
+    rg = getattr(engine, "response_generator", None)
     provider = getattr(rg, "llm", None)
     if provider is not None:
         try:
@@ -1079,7 +1080,7 @@ async def summarize_conversation(
         for m in msgs
         if m.content_text
     )
-    rg = getattr(get_engine(), "response_generator", None)
+    rg = getattr(await aget_engine(), "response_generator", None)
     provider = getattr(rg, "llm", None)  # réutilise le provider LLM
     summary = ""
     if provider is not None:

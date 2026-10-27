@@ -49,7 +49,7 @@ from jenny.domain.models.conversation import Conversation
 from jenny.domain.models.customer import Customer
 from jenny.domain.models.message import Message
 from jenny.engine.conversation_engine import EngineRequest, EngineResponse
-from jenny.engine.factory import get_engine
+from jenny.engine.factory import aget_engine
 
 logger = get_logger(__name__)
 
@@ -176,7 +176,8 @@ async def _guard_conversation(
     db, body: ConversationRequest, principal: CurrentPrincipal | None, *, widget: bool = False
 ) -> UUID | None:
     """Bloque la reprise d'une conv d'autrui, renvoie le client gardé."""
-    state = await get_engine().state_manager.aget(body.conversation_id)
+    engine = await aget_engine()
+    state = await engine.state_manager.aget(body.conversation_id)
     if state is not None and state.business_id not in (None, body.business_id):
         raise HTTPException(403, _FORBIDDEN_CONV)
     if principal is None and body.customer_id is not None:
@@ -438,7 +439,7 @@ async def _run_engine_chat(
     access = await _check_chat_access(db, body, request)
     # anonyme : client lu en base
     customer_id = body.customer_id or access.customer_id
-    engine = get_engine()
+    engine = await aget_engine()
 
     from jenny.services.learning_service import load_customer_context, persist_engine_signals
     from jenny.services.persona_loader import load_business_persona
@@ -595,7 +596,7 @@ async def conversation_status(conversation_id: UUID, principal: OptionalUser) ->
     « not_found ». Sans token, réponse réduite (phase, tours) : jamais de slots
     (prestation/date/nom du client).
     """
-    engine = get_engine()
+    engine = await aget_engine()
     state = await engine.state_manager.aget(conversation_id)
     not_found = {"status": "not_found", "conversation_id": str(conversation_id)}
 
