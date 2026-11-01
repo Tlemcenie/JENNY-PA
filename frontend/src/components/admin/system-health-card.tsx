@@ -134,7 +134,7 @@ export function SystemHealthCard() {
       : "skip";
 
   const mlDetail = checks?.ml_models
-    ? `Intent ${checks.ml_models.intent_model ?? "?"} · NER ${checks.ml_models.ner_model ?? "?"}`
+    ? `Modèle d'intention : ${checks.ml_models.intent_model ?? "?"}`
     : undefined;
 
   return (

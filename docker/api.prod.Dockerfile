@@ -55,7 +55,8 @@ COPY src ./src
 COPY ml ./ml
 COPY migrations ./migrations
 COPY alembic.ini ./
-COPY checkpoints ./checkpoints
+# seul le modèle servi (le reste de checkpoints/ peut contenir des poids morts)
+COPY checkpoints/intent_head ./checkpoints/intent_head
 # reindex_kb.py, seed_kb_coiffeur.py (Job)
 COPY scripts ./scripts
 COPY docker/entrypoint.prod.sh /entrypoint.sh

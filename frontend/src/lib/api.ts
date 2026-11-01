@@ -2029,7 +2029,6 @@ export interface ReadinessCheck {
   reason?: string;
   // ml_models : état des modèles
   intent_model?: string;
-  ner_model?: string;
 }
 
 export interface Readiness {

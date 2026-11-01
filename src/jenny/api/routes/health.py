@@ -72,13 +72,17 @@ async def _check_redis() -> dict:
 
 
 def _check_ml_models() -> dict:
-    """Vérifie la présence des checkpoints ML."""
-    intent_path = Path("checkpoints/intent/best_model.pt")
-    ner_path = Path("checkpoints/ner/best_model.pt")
+    """Vérifie le modèle d'intention servi."""
+    # Avant : on cherchait le LSTM et le NER, supprimés au grand ménage →
+    # /ready restait en « warning » pour toujours et masquait une vraie panne.
+    # On lit le même réglage que le moteur, pas un chemin en dur.
+    settings = get_settings()
+    if not settings.enable_ml_models:
+        return {"status": "skip", "intent_model": "disabled"}
+    ok = Path(settings.intent_head_path).exists()
     return {
-        "status": "ok" if intent_path.exists() and ner_path.exists() else "warning",
-        "intent_model": "loaded" if intent_path.exists() else "missing",
-        "ner_model": "loaded" if ner_path.exists() else "missing",
+        "status": "ok" if ok else "warning",
+        "intent_model": "loaded" if ok else "missing",
     }
 
 
