@@ -72,7 +72,7 @@ dev = [
     "aiosqlite>=0.20,<1.0",
     # même version que pre-commit
     "ruff==0.15.16",
-    "mypy>=1.13,<2.0",
+    "mypy>=1.13,<3.0",
     "pre-commit>=4.0,<5.0",
 ]
 
